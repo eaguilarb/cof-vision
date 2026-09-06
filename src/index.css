@@ -1,0 +1,44 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    'Inter',
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    Roboto,
+    sans-serif;
+
+  --bg: #0b0f14;
+  --bg-elevated: #121821;
+  --bg-panel: #161d28;
+  --border: #232c3a;
+  --text: #e7edf5;
+  --text-muted: #8b97a8;
+  --accent: #2dd4bf;
+  --accent-strong: #14b8a6;
+  --danger: #ef4444;
+  --danger-strong: #b91c1c;
+  --warn: #f59e0b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button,
+select,
+input {
+  font-family: inherit;
+}
