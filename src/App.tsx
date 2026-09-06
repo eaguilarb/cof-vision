@@ -7,8 +7,9 @@ import { DtcPanel } from './components/DtcPanel'
 import { FreezeFramePanel } from './components/FreezeFramePanel'
 import { VehicleInfoPanel } from './components/VehicleInfoPanel'
 import { ReportPanel } from './components/ReportPanel'
+import { ThrottleBodyPanel } from './components/ThrottleBodyPanel'
 
-type Tab = 'connection' | 'dashboard' | 'dtc' | 'freeze' | 'vehicle' | 'report'
+type Tab = 'connection' | 'dashboard' | 'dtc' | 'freeze' | 'vehicle' | 'service' | 'report'
 
 const TABS: { id: Tab; label: string; requiresConnection: boolean }[] = [
   { id: 'connection', label: 'Conexión', requiresConnection: false },
@@ -16,6 +17,7 @@ const TABS: { id: Tab; label: string; requiresConnection: boolean }[] = [
   { id: 'dtc', label: 'Códigos (DTC)', requiresConnection: true },
   { id: 'freeze', label: 'Freeze frame', requiresConnection: true },
   { id: 'vehicle', label: 'Vehículo', requiresConnection: true },
+  { id: 'service', label: 'Servicios', requiresConnection: true },
   { id: 'report', label: 'Reporte', requiresConnection: true },
 ]
 
@@ -61,6 +63,7 @@ function Shell() {
         {tab === 'dtc' && connected && <DtcPanel onViewFreezeFrame={() => setTab('freeze')} />}
         {tab === 'freeze' && connected && <FreezeFramePanel />}
         {tab === 'vehicle' && connected && <VehicleInfoPanel />}
+        {tab === 'service' && connected && <ThrottleBodyPanel />}
         {tab === 'report' && connected && <ReportPanel />}
         {tab !== 'connection' && !connected && (
           <section className="panel">

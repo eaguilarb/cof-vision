@@ -445,6 +445,21 @@ select {
   font-size: 0.9rem;
 }
 
+/* --- Servicios (cuerpo de aceleración, etc.) --- */
+
+.steps-list {
+  margin: 0;
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 0.92rem;
+}
+
+.steps-list li {
+  padding-left: 4px;
+}
+
 /* --- Freeze frame / info del vehículo --- */
 
 .data-table {
