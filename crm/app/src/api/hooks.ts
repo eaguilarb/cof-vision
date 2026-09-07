@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Platform } from 'react-native';
 import { api } from './client';
-import type { AppConfig, Case, CasePriority, CaseStatus, Equipment, Technician } from './types';
+import type { AppConfig, Case, CasePhoto, CasePriority, CaseStatus, Equipment, Technician } from './types';
 
 export function useConfig() {
   return useQuery({
@@ -128,6 +129,56 @@ export function useAddCaseNote() {
     mutationFn: async ({ id, text }: { id: string; text: string }) =>
       (await api.post(`/cases/${id}/notes`, { text })).data,
     onSuccess: (_note, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['cases', variables.id] });
+    },
+  });
+}
+
+export function useUploadCasePhoto() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      uri,
+      fileName,
+      mimeType,
+    }: {
+      id: string;
+      uri: string;
+      fileName: string;
+      mimeType: string;
+    }) => {
+      const formData = new FormData();
+      if (Platform.OS === 'web') {
+        // En web el picker entrega un blob:/data: URI real — hay que
+        // convertirlo a Blob; el truco {uri,name,type} de abajo solo lo
+        // entiende el shim de red de React Native (Android/iOS).
+        const blob = await (await fetch(uri)).blob();
+        formData.append('photo', blob, fileName);
+      } else {
+        // React Native's FormData accepts this {uri,name,type} shape for
+        // files (it isn't a real Blob/File, but RN's networking layer
+        // knows how to read it) — see https://reactnative.dev/docs/network#uploading-files.
+        formData.append('photo', { uri, name: fileName, type: mimeType } as unknown as Blob);
+      }
+      // No content-type header here on purpose: both the browser and RN's
+      // networking layer set multipart/form-data with the right boundary
+      // automatically from the FormData body — setting it ourselves
+      // without a boundary breaks the request.
+      return (await api.post<CasePhoto>(`/cases/${id}/photos`, formData)).data;
+    },
+    onSuccess: (_photo, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['cases', variables.id] });
+    },
+  });
+}
+
+export function useDeleteCasePhoto() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, photoId }: { id: string; photoId: string }) =>
+      api.delete(`/cases/${id}/photos/${photoId}`),
+    onSuccess: (_res, variables) => {
       queryClient.invalidateQueries({ queryKey: ['cases', variables.id] });
     },
   });

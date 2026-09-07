@@ -127,6 +127,7 @@ const cases: Case[] = [
       { id: 'h2', status: 'assigned', changedBy: 'Administrador', changedAt: '2026-09-06T10:10:00.000Z' },
       { id: 'h3', status: 'in_progress', changedBy: 'Carlos Pérez', changedAt: '2026-09-06T10:28:00.000Z' },
     ],
+    photos: [],
   },
   {
     id: 'c2',
@@ -148,6 +149,7 @@ const cases: Case[] = [
       { id: 'a6b46b82-ad9a-4fd4-bdf3-aee6add1c124', status: 'in_progress', changedBy: 'Administrador', changedAt: '2026-09-06T22:54:55.781Z' },
       { id: 'e09f7862-d30f-452b-8d89-6cb47b3c9138', status: 'in_progress', changedBy: 'Administrador', changedAt: '2026-09-06T22:55:06.147Z' },
     ],
+    photos: [],
   },
   {
     id: 'c3',
@@ -175,6 +177,7 @@ const cases: Case[] = [
       { id: 'h6', status: 'open', changedBy: 'Administrador', changedAt: '2026-09-06T08:00:00.000Z' },
       { id: '8c0f90cd-89a2-44d2-8924-ad88ff648daa', status: 'resolved', changedBy: 'Administrador', changedAt: '2026-09-06T22:54:06.950Z' },
     ],
+    photos: [],
   },
 ];
 

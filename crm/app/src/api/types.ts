@@ -50,6 +50,14 @@ export interface CaseHistoryEntry {
   changedAt: string;
 }
 
+export interface CasePhoto {
+  id: string;
+  filename: string;
+  mimeType: string;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+
 export interface Case {
   id: string;
   code: string;
@@ -65,6 +73,7 @@ export interface Case {
   updatedAt: string;
   notes: CaseNote[];
   history: CaseHistoryEntry[];
+  photos: CasePhoto[];
 }
 
 export const STATUS_LABELS: Record<CaseStatus, string> = {

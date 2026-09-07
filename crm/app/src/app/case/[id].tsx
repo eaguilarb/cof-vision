@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,21 +9,25 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams } from 'expo-router';
 import {
   useAddCaseNote,
   useAssignCase,
   useCase,
+  useDeleteCasePhoto,
   useEquipment,
   useTechnicians,
   useUpdateCasePriority,
   useUpdateCaseStatus,
+  useUploadCasePhoto,
 } from '@/api/hooks';
-import { apiErrorMessage } from '@/api/client';
+import { apiErrorMessage, getCasePhotoUrl } from '@/api/client';
 import { PRIORITY_LABELS, STATUS_LABELS, type CasePriority, type CaseStatus } from '@/api/types';
 import { useAuth } from '@/state/auth-context';
 import { colors, priorityColors, statusColors } from '@/constants/colors';
 import { Badge } from '@/components/badge';
+import { AuthImage } from '@/components/auth-image';
 
 const STATUSES = Object.keys(STATUS_LABELS) as CaseStatus[];
 const PRIORITIES = Object.keys(PRIORITY_LABELS) as CasePriority[];
@@ -37,9 +42,12 @@ export default function CaseDetailScreen() {
   const updatePriority = useUpdateCasePriority();
   const assignCase = useAssignCase();
   const addNote = useAddCaseNote();
+  const uploadPhoto = useUploadCasePhoto();
+  const deletePhoto = useDeleteCasePhoto();
 
   const [noteText, setNoteText] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
+  const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
 
   if (caseQuery.isLoading || !caseQuery.data) {
     return (
@@ -91,6 +99,46 @@ export default function CaseDetailScreen() {
     }
   }
 
+  async function handleAddPhoto(source: 'camera' | 'library') {
+    setActionError(null);
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setActionError(
+        source === 'camera' ? 'Necesitamos permiso para usar la cámara.' : 'Necesitamos permiso para ver tus fotos.',
+      );
+      return;
+    }
+
+    const options: ImagePicker.ImagePickerOptions = { mediaTypes: ['images'], quality: 0.6 };
+    const result =
+      source === 'camera' ? await ImagePicker.launchCameraAsync(options) : await ImagePicker.launchImageLibraryAsync(options);
+    if (result.canceled || !result.assets[0]) return;
+
+    const asset = result.assets[0];
+    try {
+      await uploadPhoto.mutateAsync({
+        id: item.id,
+        uri: asset.uri,
+        fileName: asset.fileName || `foto-${Date.now()}.jpg`,
+        mimeType: asset.mimeType || 'image/jpeg',
+      });
+    } catch (err) {
+      setActionError(apiErrorMessage(err));
+    }
+  }
+
+  async function handleDeletePhoto(photoId: string) {
+    setActionError(null);
+    try {
+      await deletePhoto.mutateAsync({ id: item.id, photoId });
+    } catch (err) {
+      setActionError(apiErrorMessage(err));
+    }
+  }
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.headerRow}>
@@ -112,6 +160,46 @@ export default function CaseDetailScreen() {
       </Text>
 
       {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
+
+      <Text style={styles.sectionTitle}>Fotos</Text>
+      <View style={styles.photoRow}>
+        {item.photos.map((photo) => {
+          const uri = getCasePhotoUrl(item.id, photo.id);
+          return (
+            <View key={photo.id} style={styles.photoThumbWrap}>
+              <Pressable onPress={() => setViewingPhotoUrl(uri)}>
+                <AuthImage uri={uri} style={styles.photoThumb} />
+              </Pressable>
+              {user?.role === 'admin' && (
+                <Pressable style={styles.photoDeleteBadge} onPress={() => handleDeletePhoto(photo.id)}>
+                  <Text style={styles.photoDeleteText}>✕</Text>
+                </Pressable>
+              )}
+            </View>
+          );
+        })}
+        <Pressable
+          style={styles.photoAddButton}
+          onPress={() => handleAddPhoto('camera')}
+          disabled={uploadPhoto.isPending}
+        >
+          <Text style={styles.photoAddIcon}>📷</Text>
+        </Pressable>
+        <Pressable
+          style={styles.photoAddButton}
+          onPress={() => handleAddPhoto('library')}
+          disabled={uploadPhoto.isPending}
+        >
+          <Text style={styles.photoAddIcon}>🖼️</Text>
+        </Pressable>
+        {uploadPhoto.isPending && <ActivityIndicator color={colors.primary} />}
+      </View>
+
+      <Modal visible={!!viewingPhotoUrl} transparent onRequestClose={() => setViewingPhotoUrl(null)}>
+        <Pressable style={styles.photoModalBackdrop} onPress={() => setViewingPhotoUrl(null)}>
+          {viewingPhotoUrl && <AuthImage uri={viewingPhotoUrl} style={styles.photoModalImage} />}
+        </Pressable>
+      </Modal>
 
       <Text style={styles.sectionTitle}>Prioridad</Text>
       <View style={styles.chipRow}>
@@ -267,4 +355,45 @@ const styles = StyleSheet.create({
   },
   noteButtonText: { color: '#fff', fontWeight: '700' },
   historyLine: { fontSize: 12, color: colors.textMuted, marginBottom: 4 },
+  photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center' },
+  photoThumbWrap: { position: 'relative' },
+  photoThumb: {
+    width: 72,
+    height: 72,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  photoDeleteBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoDeleteText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  photoAddButton: {
+    width: 72,
+    height: 72,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+  },
+  photoAddIcon: { fontSize: 22 },
+  photoModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.9)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoModalImage: { width: '100%', height: '80%', resizeMode: 'contain' },
 });

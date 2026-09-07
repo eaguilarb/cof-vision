@@ -1,6 +1,7 @@
 import 'dotenv/config';
-import express from 'express';
+import express, { type ErrorRequestHandler } from 'express';
 import cors from 'cors';
+import multer from 'multer';
 import { authRouter } from './routes/auth.js';
 import { techniciansRouter } from './routes/technicians.js';
 import { equipmentRouter } from './routes/equipment.js';
@@ -19,6 +20,15 @@ app.use('/technicians', techniciansRouter);
 app.use('/equipment', equipmentRouter);
 app.use('/cases', casesRouter);
 app.use('/config', configRouter);
+
+const handleUploadErrors: ErrorRequestHandler = (err, _req, res, next) => {
+  if (err instanceof multer.MulterError || (err instanceof Error && err.message === 'Solo se permiten imágenes')) {
+    res.status(400).json({ error: err.message });
+    return;
+  }
+  next(err);
+};
+app.use(handleUploadErrors);
 
 const PORT = Number(process.env.PORT) || 4000;
 app.listen(PORT, () => {

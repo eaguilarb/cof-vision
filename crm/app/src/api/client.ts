@@ -44,6 +44,15 @@ export function setAuthToken(token: string | null) {
   authToken = token;
 }
 
+/** Para pedir imágenes (React Native <Image source={{ uri, headers }}>). */
+export function getAuthHeaders(): Record<string, string> {
+  return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+}
+
+export function getCasePhotoUrl(caseId: string, photoId: string): string {
+  return `${getApiBaseUrl()}/cases/${caseId}/photos/${photoId}`;
+}
+
 api.interceptors.request.use((config) => {
   if (authToken) {
     config.headers.Authorization = `Bearer ${authToken}`;

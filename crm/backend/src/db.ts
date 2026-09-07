@@ -17,6 +17,12 @@ import type { DbShape } from './types.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || join(__dirname, '..', 'data');
 const DATA_FILE = join(DATA_DIR, 'db.json');
+const UPLOADS_DIR = join(DATA_DIR, 'uploads');
+
+export function getUploadsDir(): string {
+  if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+  return UPLOADS_DIR;
+}
 
 const empty: DbShape = {
   users: [],
@@ -37,6 +43,12 @@ export function loadDb(): DbShape {
   const raw = readFileSync(DATA_FILE, 'utf-8');
   const db = JSON.parse(raw) as DbShape;
   db.caseOverlays = db.caseOverlays || {};
+  for (const overlay of Object.values(db.caseOverlays)) {
+    overlay.photos = overlay.photos || [];
+  }
+  for (const c of db.cases) {
+    c.photos = c.photos || [];
+  }
   return db;
 }
 

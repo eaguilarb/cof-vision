@@ -52,6 +52,14 @@ export interface CaseHistoryEntry {
   changedAt: string;
 }
 
+export interface CasePhoto {
+  id: string;
+  filename: string;
+  mimeType: string;
+  uploadedBy: string;
+  uploadedAt: string;
+}
+
 export interface Case {
   id: string;
   code: string;
@@ -67,18 +75,20 @@ export interface Case {
   updatedAt: string;
   notes: CaseNote[];
   history: CaseHistoryEntry[];
+  photos: CasePhoto[];
 }
 
 /**
  * Datos que el CRM guarda de forma local para un caso que en realidad
  * vive en la intranet (que no tiene dónde guardar técnico asignado,
- * prioridad ni notas). Se indexa por el id del caso en la intranet.
+ * prioridad, notas ni fotos). Se indexa por el id del caso en la intranet.
  */
 export interface CaseOverlay {
   assignedTechnicianId: string | null;
   priority: CasePriority;
   notes: CaseNote[];
   history: CaseHistoryEntry[];
+  photos: CasePhoto[];
 }
 
 export interface DbShape {

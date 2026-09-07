@@ -1,8 +1,11 @@
 import { Router } from 'express';
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { extname, join } from 'node:path';
+import multer from 'multer';
 import { v4 as uuid } from 'uuid';
-import { loadDb, saveDb } from '../db.js';
+import { getUploadsDir, loadDb, saveDb } from '../db.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
-import type { Case, CaseOverlay, CasePriority, CaseStatus, DbShape } from '../types.js';
+import type { Case, CaseOverlay, CasePhoto, CasePriority, CaseStatus, DbShape } from '../types.js';
 import {
   CATEGORIA_LABELS,
   ESTADO_TO_STATUS,
@@ -22,7 +25,7 @@ const VALID_STATUSES: CaseStatus[] = ['open', 'assigned', 'in_progress', 'resolv
 const VALID_PRIORITIES: CasePriority[] = ['low', 'medium', 'high', 'urgent'];
 
 function emptyOverlay(): CaseOverlay {
-  return { assignedTechnicianId: null, priority: 'medium', notes: [], history: [] };
+  return { assignedTechnicianId: null, priority: 'medium', notes: [], history: [], photos: [] };
 }
 
 function getOverlay(db: DbShape, id: string): CaseOverlay {
@@ -49,6 +52,7 @@ function toCase(raw: IntranetCaso, db: DbShape): Case {
     updatedAt: raw.actualizado_en || raw.creado_en,
     notes: overlay.notes,
     history: overlay.history,
+    photos: overlay.photos,
   };
 }
 
@@ -147,6 +151,7 @@ casesRouter.post('/', async (req, res) => {
         priority: resolvedPriority,
         notes: [],
         history: [{ id: uuid(), status, changedBy: req.auth!.name, changedAt: now }],
+        photos: [],
       };
       if (assignedTechnicianId) {
         await updateEstadoCaso(String(created.id), STATUS_TO_ESTADO.assigned);
@@ -192,6 +197,7 @@ casesRouter.post('/', async (req, res) => {
     updatedAt: now,
     notes: [],
     history: [{ id: uuid(), status, changedBy: req.auth!.name, changedAt: now }],
+    photos: [],
   };
 
   db.cases.push(newCase);
@@ -392,4 +398,138 @@ casesRouter.post('/:id/notes', async (req, res) => {
   found.updatedAt = note.createdAt;
   saveDb(db);
   res.status(201).json(note);
+});
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (!file.mimetype.startsWith('image/')) {
+      cb(new Error('Solo se permiten imágenes'));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+function photoPath(caseId: string, photo: CasePhoto): string {
+  return join(getUploadsDir(), caseId, photo.filename);
+}
+
+casesRouter.post('/:id/photos', upload.single('photo'), async (req, res) => {
+  if (!req.file) {
+    res.status(400).json({ error: 'Falta el archivo "photo"' });
+    return;
+  }
+
+  const db = loadDb();
+  const caseId = req.params.id;
+
+  if (isIntranetEnabled()) {
+    try {
+      const casos = await fetchCasos();
+      const raw = casos.find((c) => String(c.id) === caseId);
+      if (!raw) {
+        res.status(404).json({ error: 'Caso no encontrado' });
+        return;
+      }
+      const overlay = getOverlay(db, caseId);
+      const photo: CasePhoto = {
+        id: uuid(),
+        filename: `${uuid()}${extname(req.file.originalname) || '.jpg'}`,
+        mimeType: req.file.mimetype,
+        uploadedBy: req.auth!.name,
+        uploadedAt: new Date().toISOString(),
+      };
+      mkdirSyncFor(caseId);
+      writeFileSync(photoPath(caseId, photo), req.file.buffer);
+      db.caseOverlays[caseId] = { ...overlay, photos: [...overlay.photos, photo] };
+      saveDb(db);
+      res.status(201).json(photo);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
+    }
+    return;
+  }
+
+  const found = db.cases.find((c) => c.id === caseId);
+  if (!found) {
+    res.status(404).json({ error: 'Caso no encontrado' });
+    return;
+  }
+  const photo: CasePhoto = {
+    id: uuid(),
+    filename: `${uuid()}${extname(req.file.originalname) || '.jpg'}`,
+    mimeType: req.file.mimetype,
+    uploadedBy: req.auth!.name,
+    uploadedAt: new Date().toISOString(),
+  };
+  mkdirSyncFor(caseId);
+  writeFileSync(photoPath(caseId, photo), req.file.buffer);
+  found.photos.push(photo);
+  found.updatedAt = photo.uploadedAt;
+  saveDb(db);
+  res.status(201).json(photo);
+});
+
+function mkdirSyncFor(caseId: string) {
+  const dir = join(getUploadsDir(), caseId);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+}
+
+casesRouter.get('/:id/photos/:photoId', (req, res) => {
+  const db = loadDb();
+  const overlay = db.caseOverlays[req.params.id];
+  const localCase = db.cases.find((c) => c.id === req.params.id);
+  const photo =
+    overlay?.photos.find((p) => p.id === req.params.photoId) ||
+    localCase?.photos.find((p) => p.id === req.params.photoId);
+
+  if (!photo) {
+    res.status(404).json({ error: 'Foto no encontrada' });
+    return;
+  }
+  const filePath = photoPath(req.params.id, photo);
+  if (!existsSync(filePath)) {
+    res.status(404).json({ error: 'Foto no encontrada' });
+    return;
+  }
+  res.setHeader('Content-Type', photo.mimeType);
+  res.sendFile(filePath);
+});
+
+casesRouter.delete('/:id/photos/:photoId', (req, res) => {
+  const db = loadDb();
+  const caseId = req.params.id;
+
+  if (isIntranetEnabled()) {
+    const overlay = getOverlay(db, caseId);
+    const photo = overlay.photos.find((p) => p.id === req.params.photoId);
+    if (!photo) {
+      res.status(404).json({ error: 'Foto no encontrada' });
+      return;
+    }
+    const filePath = photoPath(caseId, photo);
+    if (existsSync(filePath)) unlinkSync(filePath);
+    db.caseOverlays[caseId] = { ...overlay, photos: overlay.photos.filter((p) => p.id !== photo.id) };
+    saveDb(db);
+    res.status(204).end();
+    return;
+  }
+
+  const found = db.cases.find((c) => c.id === caseId);
+  if (!found) {
+    res.status(404).json({ error: 'Caso no encontrado' });
+    return;
+  }
+  const photo = found.photos.find((p) => p.id === req.params.photoId);
+  if (!photo) {
+    res.status(404).json({ error: 'Foto no encontrada' });
+    return;
+  }
+  const filePath = photoPath(caseId, photo);
+  if (existsSync(filePath)) unlinkSync(filePath);
+  found.photos = found.photos.filter((p) => p.id !== photo.id);
+  saveDb(db);
+  res.status(204).end();
 });
