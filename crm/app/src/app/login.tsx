@@ -11,15 +11,23 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/state/auth-context';
+import { getApiBaseUrl, getDefaultApiBaseUrl, setApiBaseUrl } from '@/api/client';
 import { colors } from '@/constants/colors';
 
 export default function LoginScreen() {
   const { login } = useAuth();
   const router = useRouter();
-  const [email, setEmail] = useState('admin@cof.local');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const [showServerField, setShowServerField] = useState(false);
+  const [serverUrl, setServerUrl] = useState(getApiBaseUrl());
+  const [serverSaved, setServerSaved] = useState(false);
+  const [serverError, setServerError] = useState<string | null>(null);
+
+  const isDefaultServer = getApiBaseUrl() === getDefaultApiBaseUrl();
 
   async function handleSubmit() {
     setError(null);
@@ -32,6 +40,17 @@ export default function LoginScreen() {
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  async function handleSaveServer() {
+    setServerError(null);
+    if (!/^https?:\/\/.+/.test(serverUrl.trim())) {
+      setServerError('La URL debe empezar con http:// o https://');
+      return;
+    }
+    await setApiBaseUrl(serverUrl);
+    setServerSaved(true);
+    setShowServerField(false);
   }
 
   return (
@@ -76,9 +95,54 @@ export default function LoginScreen() {
           )}
         </Pressable>
 
-        <Text style={styles.hint}>
-          Demo: admin@cof.local / admin123{'\n'}Técnico: carlos@cof.local / tecnico123
-        </Text>
+        <View style={styles.serverBox}>
+          {showServerField ? (
+            <>
+              <Text style={styles.serverLabel}>URL del servidor</Text>
+              <TextInput
+                style={styles.serverInput}
+                value={serverUrl}
+                onChangeText={setServerUrl}
+                placeholder="https://tu-backend.up.railway.app"
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+              />
+              {serverError ? <Text style={styles.error}>{serverError}</Text> : null}
+              <View style={styles.serverButtonRow}>
+                <Pressable
+                  style={[styles.smallButton, styles.smallButtonSecondary]}
+                  onPress={() => {
+                    setServerUrl(getApiBaseUrl());
+                    setServerError(null);
+                    setShowServerField(false);
+                  }}
+                >
+                  <Text style={styles.smallButtonSecondaryText}>Cancelar</Text>
+                </Pressable>
+                <Pressable style={styles.smallButton} onPress={handleSaveServer}>
+                  <Text style={styles.smallButtonText}>Guardar</Text>
+                </Pressable>
+              </View>
+            </>
+          ) : (
+            <Pressable onPress={() => setShowServerField(true)}>
+              <Text style={styles.serverCurrent}>
+                Servidor: <Text style={styles.serverCurrentValue}>{getApiBaseUrl()}</Text>
+              </Text>
+              <Text style={styles.linkText}>Cambiar servidor</Text>
+            </Pressable>
+          )}
+          {serverSaved && !showServerField && (
+            <Text style={styles.serverSavedHint}>Guardado. Ya puedes iniciar sesión.</Text>
+          )}
+          {isDefaultServer && !showServerField && !serverSaved && (
+            <Text style={styles.hint}>
+              Este es el servidor de prueba de la app — probablemente necesites cambiarlo por el
+              real antes de entrar.
+            </Text>
+          )}
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
@@ -152,9 +216,65 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   hint: {
-    marginTop: 18,
+    marginTop: 8,
     fontSize: 11,
     color: colors.textMuted,
     textAlign: 'center',
+  },
+  serverBox: {
+    marginTop: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  serverCurrent: {
+    fontSize: 11,
+    color: colors.textMuted,
+    textAlign: 'center',
+  },
+  serverCurrentValue: {
+    fontWeight: '600',
+    color: colors.text,
+  },
+  linkText: {
+    marginTop: 4,
+    fontSize: 12,
+    color: colors.primary,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  serverLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.text,
+    marginBottom: 4,
+  },
+  serverInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 13,
+    backgroundColor: colors.background,
+    color: colors.text,
+  },
+  serverButtonRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  smallButton: {
+    flex: 1,
+    backgroundColor: colors.primary,
+    borderRadius: 8,
+    paddingVertical: 9,
+    alignItems: 'center',
+  },
+  smallButtonText: { color: colors.primaryText, fontWeight: '700', fontSize: 13 },
+  smallButtonSecondary: { backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border },
+  smallButtonSecondaryText: { color: colors.text, fontWeight: '700', fontSize: 13 },
+  serverSavedHint: {
+    marginTop: 8,
+    fontSize: 12,
+    color: colors.success,
+    textAlign: 'center',
+    fontWeight: '600',
   },
 });
