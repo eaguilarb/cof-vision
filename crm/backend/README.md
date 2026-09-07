@@ -96,9 +96,14 @@ Todos (salvo `/auth/login`) requieren `Authorization: Bearer <token>`.
 
 1. Crea un servicio nuevo en tu proyecto de Railway apuntando a este
    repositorio (carpeta `crm/backend`).
-2. Define las variables de entorno `INTRANET_EMAIL`, `INTRANET_PASSWORD`
-   y `JWT_SECRET` (una clave propia para firmar los tokens del CRM) en
-   ese servicio.
-3. Railway detecta el `npm run build` / `npm start`; asegúrate de correr
-   `npm run seed` una vez (por ejemplo desde una shell de Railway) para
-   crear las cuentas de administrador/técnicos del CRM.
+2. **Agrega un volumen** montado en `/data` (Settings → Volumes) y define
+   la variable `DATA_DIR=/data` — sin esto, las cuentas y asignaciones se
+   pierden en cada redeploy.
+3. Define las variables de entorno `INTRANET_EMAIL`, `INTRANET_PASSWORD`,
+   `JWT_SECRET` (una clave propia para firmar los tokens del CRM) y la
+   cuenta de administrador real: `ADMIN_EMAIL`, `ADMIN_NAME`,
+   `ADMIN_PASSWORD`.
+4. Railway detecta `npm run build` / `npm start`. El `start` corre el
+   script de siembra antes de levantar el servidor — crea las cuentas
+   solo la primera vez (si ya existen datos en el volumen, no hace nada),
+   así que no hace falta ejecutar nada a mano.
