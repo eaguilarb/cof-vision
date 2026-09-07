@@ -4,6 +4,8 @@ App móvil y web (un solo código) para asignar y dar seguimiento a casos de
 reparación de equipamiento tecnológico. Corre con [Expo](https://expo.dev) +
 [Expo Router](https://docs.expo.dev/router/introduction/).
 
+**Versión web en producción: https://cof-crm.vercel.app**
+
 ## Requisitos
 
 - Node.js 20+
@@ -89,3 +91,17 @@ compilar: cualquiera puede cambiarla después, dentro de la app, en
 `src/api/client.ts`). Así, cuando despliegues el backend en Railway, no
 hace falta generar un `.apk` nuevo — solo actualizar esa URL desde la
 app.
+
+## Desplegar/actualizar la versión web (Vercel)
+
+La versión web (`https://cof-crm.vercel.app`) es el export estático de
+Expo, subido a Vercel (proyecto `cof-crm-web/cof-crm`):
+
+```bash
+npm install -g vercel   # o usa npx vercel
+EXPO_PUBLIC_API_URL='https://cof-crm-backend-production.up.railway.app' \
+  npx expo export --platform web
+vercel deploy dist --prod
+```
+
+Repite esto cada vez que quieras publicar cambios de la app en la web.
