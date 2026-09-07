@@ -4,14 +4,18 @@ import { fileURLToPath } from 'node:url';
 import type { DbShape } from './types.js';
 
 /**
- * Almacén simple respaldado por un archivo JSON. Sirve como backend "mock"
- * mientras se conecta esta API a la base de datos/API real de la intranet:
- * basta con reemplazar las funciones de este archivo (load/save) por
- * llamadas al sistema real sin tocar las rutas ni el resto de la app.
+ * Almacén simple respaldado por un archivo JSON: cuentas del CRM
+ * (admin/técnicos) y, en modo intranet, el "overlay" local (técnico
+ * asignado, prioridad, notas) — ver intranet.ts. En modo local/demo
+ * también guarda equipos/casos de ejemplo.
+ *
+ * DATA_DIR debe apuntar a un volumen persistente en producción (en
+ * Railway: monta un volumen y define DATA_DIR con su mount path) — sin
+ * eso, cada redeploy borra las cuentas y las asignaciones.
  */
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, '..', 'data');
+const DATA_DIR = process.env.DATA_DIR || join(__dirname, '..', 'data');
 const DATA_FILE = join(DATA_DIR, 'db.json');
 
 const empty: DbShape = {
