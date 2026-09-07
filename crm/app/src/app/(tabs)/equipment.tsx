@@ -26,6 +26,7 @@ interface TerminalGroup {
   equipment: Equipment[];
   statusCounts: Record<CaseStatus, number>;
   totalCases: number;
+  resolvedPct: number;
 }
 
 export default function EquipmentScreen() {
@@ -73,6 +74,7 @@ export default function EquipmentScreen() {
           equipment: [],
           statusCounts: { open: 0, assigned: 0, in_progress: 0, resolved: 0 },
           totalCases: 0,
+          resolvedPct: 0,
         });
       }
       const group = groups.get(terminal)!;
@@ -81,6 +83,11 @@ export default function EquipmentScreen() {
         group.statusCounts[status] += 1;
         group.totalCases += 1;
       }
+    }
+
+    for (const group of groups.values()) {
+      group.resolvedPct =
+        group.totalCases > 0 ? Math.round((group.statusCounts.resolved / group.totalCases) * 100) : 0;
     }
 
     return Array.from(groups.values()).sort((a, b) => b.equipment.length - a.equipment.length);
@@ -214,6 +221,20 @@ function TerminalCard({
         <Text style={styles.chevron}>{isExpanded ? '▲' : '▼'}</Text>
       </Pressable>
 
+      {group.totalCases > 0 && (
+        <View style={styles.performanceRow}>
+          <View style={styles.performanceBarTrack}>
+            <View
+              style={[
+                styles.performanceBarFill,
+                { width: `${group.resolvedPct}%`, backgroundColor: group.accent },
+              ]}
+            />
+          </View>
+          <Text style={[styles.performancePct, { color: group.accent }]}>{group.resolvedPct}% resuelto</Text>
+        </View>
+      )}
+
       <View style={styles.statusPillRow}>
         {STATUS_ORDER.map((status) =>
           group.statusCounts[status] > 0 ? (
@@ -343,6 +364,16 @@ const styles = StyleSheet.create({
   terminalName: { fontSize: 16, fontWeight: '800', color: colors.text },
   terminalMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   chevron: { fontSize: 12, color: colors.textMuted },
+  performanceRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  performanceBarTrack: {
+    flex: 1,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.border,
+    overflow: 'hidden',
+  },
+  performanceBarFill: { height: '100%', borderRadius: 4 },
+  performancePct: { fontSize: 12, fontWeight: '700', minWidth: 78, textAlign: 'right' },
   statusPillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   noCasesHint: { fontSize: 12, color: colors.textMuted, fontStyle: 'italic' },
   busList: {

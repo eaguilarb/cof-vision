@@ -4,6 +4,7 @@ import { extname, join } from 'node:path';
 import multer from 'multer';
 import { v4 as uuid } from 'uuid';
 import { getUploadsDir, loadDb, saveDb } from '../db.js';
+import { notifyIntranetCaso, notifyLocalCase } from '../notifications.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import type { Case, CaseOverlay, CasePhoto, CasePriority, CaseStatus, DbShape } from '../types.js';
 import {
@@ -157,6 +158,7 @@ casesRouter.post('/', async (req, res) => {
         await updateEstadoCaso(String(created.id), STATUS_TO_ESTADO.assigned);
         created.estado_caso = STATUS_TO_ESTADO.assigned;
       }
+      await notifyIntranetCaso(created, db.caseOverlays[String(created.id)], db, { save: false });
       saveDb(db);
       res.status(201).json(toCase(created, db));
     } catch (err) {
@@ -201,6 +203,7 @@ casesRouter.post('/', async (req, res) => {
   };
 
   db.cases.push(newCase);
+  await notifyLocalCase(newCase, db, { save: false });
   saveDb(db);
   res.status(201).json(newCase);
 });
@@ -295,6 +298,7 @@ casesRouter.patch('/:id/status', async (req, res) => {
         ...overlay,
         history: [...overlay.history, { id: uuid(), status, changedBy: req.auth!.name, changedAt: now }],
       };
+      await notifyIntranetCaso(raw, db.caseOverlays[req.params.id], db, { save: false });
       saveDb(db);
       res.json(toCase(raw, db));
     } catch (err) {
@@ -319,6 +323,7 @@ casesRouter.patch('/:id/status', async (req, res) => {
   found.status = status;
   found.updatedAt = new Date().toISOString();
   found.history.push({ id: uuid(), status, changedBy: req.auth!.name, changedAt: found.updatedAt });
+  await notifyLocalCase(found, db, { save: false });
   saveDb(db);
   res.json(found);
 });

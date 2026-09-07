@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isIntranetEnabled } from './intranet.js';
 import type { DbShape } from './types.js';
 
 /**
@@ -31,6 +32,11 @@ const empty: DbShape = {
   cases: [],
   caseSequence: 0,
   caseOverlays: {},
+  pushTokens: [],
+  // En modo local/demo no hay riesgo de "avalancha" de casos preexistentes
+  // (a diferencia de la intranet real, con cientos), así que arranca
+  // notificando de una vez.
+  notifyState: { bootstrapped: !isIntranetEnabled(), lastStatusByCaseId: {} },
 };
 
 function ensureFile() {
@@ -49,6 +55,8 @@ export function loadDb(): DbShape {
   for (const c of db.cases) {
     c.photos = c.photos || [];
   }
+  db.pushTokens = db.pushTokens || [];
+  db.notifyState = db.notifyState || { bootstrapped: !isIntranetEnabled(), lastStatusByCaseId: {} };
   return db;
 }
 

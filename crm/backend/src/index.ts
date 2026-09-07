@@ -7,7 +7,9 @@ import { techniciansRouter } from './routes/technicians.js';
 import { equipmentRouter } from './routes/equipment.js';
 import { casesRouter } from './routes/cases.js';
 import { configRouter } from './routes/config.js';
+import { pushTokensRouter } from './routes/push-tokens.js';
 import { isIntranetEnabled } from './intranet.js';
+import { startPolling } from './notifications.js';
 
 const app = express();
 app.use(cors());
@@ -20,6 +22,7 @@ app.use('/technicians', techniciansRouter);
 app.use('/equipment', equipmentRouter);
 app.use('/cases', casesRouter);
 app.use('/config', configRouter);
+app.use('/push-tokens', pushTokensRouter);
 
 const handleUploadErrors: ErrorRequestHandler = (err, _req, res, next) => {
   if (err instanceof multer.MulterError || (err instanceof Error && err.message === 'Solo se permiten imágenes')) {
@@ -38,4 +41,5 @@ app.listen(PORT, () => {
       ? 'Conectado a la intranet real (INTRANET_EMAIL configurado).'
       : 'Modo local/demo (define INTRANET_EMAIL e INTRANET_PASSWORD para conectar la intranet real).',
   );
+  startPolling();
 });

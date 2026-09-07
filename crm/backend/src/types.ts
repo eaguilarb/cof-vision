@@ -91,6 +91,25 @@ export interface CaseOverlay {
   photos: CasePhoto[];
 }
 
+export interface PushToken {
+  token: string;
+  userId: string;
+  createdAt: string;
+}
+
+/**
+ * Recuerda, por caso, el último estado que ya generó una notificación (o
+ * que ya se vio al menos una vez). Así el sondeo periódico de la intranet
+ * (ver notifications.ts) sabe qué es "nuevo" o "recién resuelto" sin
+ * volver a avisar de algo ya notificado, y `bootstrapped` evita mandar
+ * notificaciones de todos los casos preexistentes la primera vez que
+ * corre.
+ */
+export interface NotifyState {
+  bootstrapped: boolean;
+  lastStatusByCaseId: Record<string, CaseStatus>;
+}
+
 export interface DbShape {
   users: User[];
   technicians: Technician[];
@@ -98,4 +117,6 @@ export interface DbShape {
   cases: Case[];
   caseSequence: number;
   caseOverlays: Record<string, CaseOverlay>;
+  pushTokens: PushToken[];
+  notifyState: NotifyState;
 }

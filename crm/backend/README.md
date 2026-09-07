@@ -58,6 +58,30 @@ Con la intranet conectada:
   Si en el futuro la intranet agrega esos campos, esta es la parte a
   actualizar.
 
+## Notificaciones (correo y push)
+
+- **Correo al resolver un caso**: cuando un caso pasa a estado "resuelto"
+  (desde el CRM o, si está conectada la intranet, detectado por el sondeo
+  periódico) se envía un correo con el detalle (notas) y las fotos
+  adjuntas, vía [Resend](https://resend.com). Variables:
+  ```
+  RESEND_API_KEY=re_xxx                          # obligatoria para que se envíe
+  NOTIFY_EMAIL_TO=eaguilarb@stpsantiago.cl        # opcional, es el valor por defecto
+  NOTIFY_EMAIL_FROM=COF CRM <onboarding@resend.dev>  # opcional; para usar tu propio dominio, verifícalo en Resend
+  ```
+  Sin `RESEND_API_KEY` definida, el envío simplemente no ocurre (no da error).
+- **Push al entrar un caso nuevo**: el `.apk` registra el token de push de
+  Expo del teléfono (`POST /push-tokens`, requiere sesión) al iniciar
+  sesión. Cuando aparece un caso nuevo — creado desde el CRM o detectado
+  por el sondeo de la intranet — se manda una notificación push a todos
+  los teléfonos registrados. No requiere configuración adicional (usa el
+  servicio push de Expo).
+- **Sondeo de la intranet**: con la intranet conectada, cada 5 minutos
+  (`NOTIFY_POLL_INTERVAL_MS`, opcional) se revisan los casos reales para
+  detectar cambios hechos fuera del CRM (directo en la intranet). La
+  primera vez que corre no notifica nada de los casos ya existentes —
+  solo lo que cambie después.
+
 ## Cuentas de ejemplo (creadas por `npm run seed`)
 
 Estas son cuentas del CRM (para entrar a la app), no de la intranet:
@@ -91,6 +115,7 @@ Todos (salvo `/auth/login`) requieren `Authorization: Bearer <token>`.
 - `PATCH /cases/:id/status` (admin o el técnico asignado) — `{ status }` (se refleja en la intranet si está conectada)
 - `PATCH /cases/:id/priority` — `{ priority }` (local al CRM)
 - `POST /cases/:id/notes` — `{ text }` (local al CRM)
+- `POST /push-tokens` — `{ token }` (token de push de Expo del dispositivo; ver sección de notificaciones)
 
 ## Desplegar en Railway
 
@@ -100,9 +125,10 @@ Todos (salvo `/auth/login`) requieren `Authorization: Bearer <token>`.
    la variable `DATA_DIR=/data` — sin esto, las cuentas y asignaciones se
    pierden en cada redeploy.
 3. Define las variables de entorno `INTRANET_EMAIL`, `INTRANET_PASSWORD`,
-   `JWT_SECRET` (una clave propia para firmar los tokens del CRM) y la
-   cuenta de administrador real: `ADMIN_EMAIL`, `ADMIN_NAME`,
-   `ADMIN_PASSWORD`.
+   `JWT_SECRET` (una clave propia para firmar los tokens del CRM), la
+   cuenta de administrador real (`ADMIN_EMAIL`, `ADMIN_NAME`,
+   `ADMIN_PASSWORD`) y, para las notificaciones, `RESEND_API_KEY` (ver
+   sección de notificaciones más arriba).
 4. Railway detecta `npm run build` / `npm start`. El `start` corre el
    script de siembra antes de levantar el servidor — crea las cuentas
    solo la primera vez (si ya existen datos en el volumen, no hace nada),

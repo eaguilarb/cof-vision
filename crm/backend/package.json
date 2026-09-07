@@ -17,6 +17,7 @@
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.3.0",
+    "resend": "^4.0.1",
     "uuid": "^9.0.1"
   },
   "devDependencies": {
