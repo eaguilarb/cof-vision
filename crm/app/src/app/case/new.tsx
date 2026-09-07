@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -9,41 +9,63 @@ import {
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useCreateCase, useEquipment, useTechnicians } from '@/api/hooks';
+import { useConfig, useCreateCase, useEquipment, useTechnicians } from '@/api/hooks';
 import { apiErrorMessage } from '@/api/client';
 import { PRIORITY_LABELS, type CasePriority } from '@/api/types';
 import { colors } from '@/constants/colors';
 
 const PRIORITIES = Object.keys(PRIORITY_LABELS) as CasePriority[];
+const MAX_EQUIPMENT_RESULTS = 25;
 
 export default function NewCaseScreen() {
   const router = useRouter();
+  const configQuery = useConfig();
   const equipmentQuery = useEquipment();
   const techniciansQuery = useTechnicians();
   const createCase = useCreateCase();
 
+  const intranetEnabled = configQuery.data?.intranetEnabled ?? false;
+
   const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
   const [clientName, setClientName] = useState('');
+  const [categoria, setCategoria] = useState<string | null>(null);
+  const [description, setDescription] = useState('');
   const [priority, setPriority] = useState<CasePriority>('medium');
+  const [equipmentSearch, setEquipmentSearch] = useState('');
   const [equipmentId, setEquipmentId] = useState<string | null>(null);
   const [technicianId, setTechnicianId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const filteredEquipment = useMemo(() => {
+    const all = equipmentQuery.data ?? [];
+    if (!intranetEnabled) return all;
+    const query = equipmentSearch.trim().toLowerCase();
+    const matches = query ? all.filter((eq) => eq.name.toLowerCase().includes(query)) : all;
+    return matches.slice(0, MAX_EQUIPMENT_RESULTS);
+  }, [equipmentQuery.data, equipmentSearch, intranetEnabled]);
+
   async function handleSubmit() {
     setError(null);
-    if (!title.trim() || !description.trim() || !clientName.trim() || !equipmentId) {
-      setError('Título, descripción, cliente y equipo son requeridos');
+    if (!description.trim() || !equipmentId) {
+      setError('Descripción y equipo son requeridos');
       return;
     }
+    if (intranetEnabled && !categoria) {
+      setError('Selecciona una categoría');
+      return;
+    }
+    if (!intranetEnabled && (!title.trim() || !clientName.trim())) {
+      setError('Título y cliente son requeridos');
+      return;
+    }
+
     try {
       const created = await createCase.mutateAsync({
-        title,
         description,
-        clientName,
         priority,
         equipmentId,
         assignedTechnicianId: technicianId,
+        ...(intranetEnabled ? { categoria: categoria! } : { title, clientName }),
       });
       router.replace(`/case/${created.id}`);
     } catch (err) {
@@ -53,8 +75,31 @@ export default function NewCaseScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.label}>Título</Text>
-      <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Resumen del problema" />
+      {!intranetEnabled && (
+        <>
+          <Text style={styles.label}>Título</Text>
+          <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Resumen del problema" />
+        </>
+      )}
+
+      {intranetEnabled && (
+        <>
+          <Text style={styles.label}>Categoría</Text>
+          <View style={styles.chipRow}>
+            {(configQuery.data?.categorias ?? []).map((cat) => (
+              <Pressable
+                key={cat.value}
+                style={[styles.chip, categoria === cat.value && styles.chipActive]}
+                onPress={() => setCategoria(cat.value)}
+              >
+                <Text style={[styles.chipText, categoria === cat.value && styles.chipTextActive]}>
+                  {cat.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </>
+      )}
 
       <Text style={styles.label}>Descripción</Text>
       <TextInput
@@ -65,8 +110,17 @@ export default function NewCaseScreen() {
         multiline
       />
 
-      <Text style={styles.label}>Cliente / área</Text>
-      <TextInput style={styles.input} value={clientName} onChangeText={setClientName} placeholder="Ej. Contabilidad" />
+      {!intranetEnabled && (
+        <>
+          <Text style={styles.label}>Cliente / área</Text>
+          <TextInput
+            style={styles.input}
+            value={clientName}
+            onChangeText={setClientName}
+            placeholder="Ej. Contabilidad"
+          />
+        </>
+      )}
 
       <Text style={styles.label}>Prioridad</Text>
       <View style={styles.chipRow}>
@@ -83,12 +137,21 @@ export default function NewCaseScreen() {
         ))}
       </View>
 
-      <Text style={styles.label}>Equipo</Text>
+      <Text style={styles.label}>{intranetEnabled ? 'Bus (patente)' : 'Equipo'}</Text>
+      {intranetEnabled && (
+        <TextInput
+          style={[styles.input, { marginBottom: 8 }]}
+          value={equipmentSearch}
+          onChangeText={setEquipmentSearch}
+          placeholder="Busca por patente, ej. SPBP91"
+          autoCapitalize="characters"
+        />
+      )}
       {equipmentQuery.isLoading ? (
         <ActivityIndicator color={colors.primary} />
       ) : (
         <View style={styles.chipRow}>
-          {(equipmentQuery.data ?? []).map((eq) => (
+          {filteredEquipment.map((eq) => (
             <Pressable
               key={eq.id}
               style={[styles.chip, equipmentId === eq.id && styles.chipActive]}
@@ -99,8 +162,11 @@ export default function NewCaseScreen() {
               </Text>
             </Pressable>
           ))}
-          {(equipmentQuery.data ?? []).length === 0 && (
+          {filteredEquipment.length === 0 && !intranetEnabled && (
             <Text style={styles.hint}>Registra un equipo primero en la pestaña "Equipos".</Text>
+          )}
+          {filteredEquipment.length === 0 && intranetEnabled && (
+            <Text style={styles.hint}>Sin resultados para "{equipmentSearch}".</Text>
           )}
         </View>
       )}

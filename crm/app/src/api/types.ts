@@ -31,13 +31,7 @@ export interface Equipment {
   createdAt: string;
 }
 
-export type CaseStatus =
-  | 'open'
-  | 'assigned'
-  | 'in_progress'
-  | 'waiting_parts'
-  | 'resolved'
-  | 'closed';
+export type CaseStatus = 'open' | 'assigned' | 'in_progress' | 'resolved';
 
 export type CasePriority = 'low' | 'medium' | 'high' | 'urgent';
 
@@ -74,12 +68,10 @@ export interface Case {
 }
 
 export const STATUS_LABELS: Record<CaseStatus, string> = {
-  open: 'Abierto',
+  open: 'Pendiente',
   assigned: 'Asignado',
-  in_progress: 'En progreso',
-  waiting_parts: 'Esperando repuestos',
+  in_progress: 'En proceso',
   resolved: 'Resuelto',
-  closed: 'Cerrado',
 };
 
 export const PRIORITY_LABELS: Record<CasePriority, string> = {
@@ -88,3 +80,13 @@ export const PRIORITY_LABELS: Record<CasePriority, string> = {
   high: 'Alta',
   urgent: 'Urgente',
 };
+
+export interface Categoria {
+  value: string;
+  label: string;
+}
+
+export interface AppConfig {
+  intranetEnabled: boolean;
+  categorias: Categoria[];
+}

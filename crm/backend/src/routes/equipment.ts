@@ -2,17 +2,49 @@ import { Router } from 'express';
 import { v4 as uuid } from 'uuid';
 import { loadDb, saveDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { fetchFlota, isIntranetEnabled, type IntranetBus } from '../intranet.js';
+import type { Equipment } from '../types.js';
 
 export const equipmentRouter = Router();
 
 equipmentRouter.use(requireAuth);
 
-equipmentRouter.get('/', (_req, res) => {
+function toEquipment(bus: IntranetBus): Equipment {
+  return {
+    id: bus.ppu,
+    name: bus.ppu,
+    type: bus.tipo_bus || 'Bus',
+    brand: bus.marca ?? undefined,
+    model: bus.modelo ?? undefined,
+    clientName: bus.terminal || '—',
+    location: bus.terminal ?? undefined,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+equipmentRouter.get('/', async (_req, res) => {
+  if (isIntranetEnabled()) {
+    try {
+      const flota = await fetchFlota();
+      res.json(flota.map(toEquipment));
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
+    }
+    return;
+  }
+
   const db = loadDb();
   res.json(db.equipment);
 });
 
 equipmentRouter.post('/', (req, res) => {
+  if (isIntranetEnabled()) {
+    res.status(400).json({
+      error: 'La flota se administra desde la intranet (módulo Flota), no se puede agregar equipos desde aquí.',
+    });
+    return;
+  }
+
   const { name, type, brand, model, serialNumber, clientName, clientContact, location } =
     req.body as Partial<{
       name: string;

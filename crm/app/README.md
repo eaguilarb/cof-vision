@@ -31,6 +31,14 @@ EXPO_PUBLIC_API_URL=http://192.168.1.50:4000
   `http://10.0.2.2:4000` o la IP de tu red local.
 - **Dispositivo físico (Expo Go)**: usa la IP de tu computadora en la red
   local, ej. `http://192.168.1.50:4000`.
+- **Producción**: apunta a la URL pública del backend desplegado (ej. en
+  Railway, junto a la intranet).
+
+La app se adapta sola según lo que responda `GET /config` del backend: si
+el backend está conectado a la intranet real (ver `../backend/README.md`),
+"Nuevo caso" pide categoría de falla y patente del bus en vez de
+título/cliente libres, y la pestaña "Equipos" muestra la flota real con
+buscador en vez del alta manual.
 
 ## Estructura
 

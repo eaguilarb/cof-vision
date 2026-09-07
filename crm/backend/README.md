@@ -1,20 +1,66 @@
 # COF CRM — Backend
 
-API REST del CRM de reparación de equipamiento tecnológico. Hoy es un
-backend "mock" con persistencia en un archivo JSON (`data/db.json`),
-pensado para poder reemplazarse por la intranet real sin tocar la app:
-basta con exponer los mismos endpoints (o adaptar `src/routes/*` para
-llamar al sistema real) y apuntar la app a esa URL.
+API REST del CRM de reparación de equipamiento tecnológico. Puede correr en
+dos modos:
+
+- **Conectado a la intranet real de COF** (recomendado, es el modo de
+  producción): los casos y el equipamiento (flota de buses) se leen y
+  escriben en vivo desde `https://intranet-cof-production.up.railway.app`.
+  Se activa automáticamente si defines `INTRANET_EMAIL` e
+  `INTRANET_PASSWORD`.
+- **Modo local/demo**: sin esas variables, usa un archivo JSON local
+  (`data/db.json`) con datos de ejemplo. Útil para desarrollar sin tocar
+  datos reales.
 
 ## Desarrollo
 
 ```bash
 npm install
-npm run seed   # crea datos de ejemplo (usuarios, técnicos, equipos, casos)
+npm run seed   # crea cuentas/datos de ejemplo para el CRM (ver abajo)
 npm run dev    # levanta la API en http://localhost:4000
 ```
 
+`npm run seed` solo crea las cuentas y datos **propios del CRM** (usuarios
+admin/técnico, y en modo local también casos/equipos de ejemplo). Nunca
+toca la intranet real.
+
+## Conectar la intranet real
+
+Define estas variables de entorno (en `.env` local, o en las variables de
+la app en Railway):
+
+```
+INTRANET_BASE_URL=https://intranet-cof-production.up.railway.app   # opcional, es el valor por defecto
+INTRANET_EMAIL=una-cuenta-con-acceso@stpsantiago.cl
+INTRANET_PASSWORD=su-contraseña
+```
+
+El backend inicia sesión con esa cuenta (como lo haría cualquier persona
+en el sitio) y usa esa sesión para leer y escribir. **Nunca pongas estas
+credenciales directamente en el código o en un archivo que se suba a
+git** — solo como variables de entorno del servicio.
+
+Con la intranet conectada:
+
+- `GET /equipment` devuelve la flota real (`/api/flota`): cada bus es un
+  "equipo", identificado por su patente.
+- `GET /cases` devuelve los casos reales del módulo de reparaciones
+  técnicas (`/api/problemas-tecnicos`): discos duros, DVR, cámaras, GPS,
+  WiFi, consola de validación, validador.
+- Cambiar el estado de un caso desde el CRM (`PATCH /cases/:id/status`)
+  actualiza el estado real en la intranet (mismo endpoint que usa su
+  propia interfaz).
+- Crear un caso desde el CRM (`POST /cases`) lo crea también en la
+  intranet.
+- **Técnico asignado, prioridad y notas** son conceptos que la intranet no
+  tiene todavía — el CRM los guarda de forma local, superpuestos sobre el
+  caso real (ver `CaseOverlay` en `src/types.ts` y `src/routes/cases.ts`).
+  Si en el futuro la intranet agrega esos campos, esta es la parte a
+  actualizar.
+
 ## Cuentas de ejemplo (creadas por `npm run seed`)
+
+Estas son cuentas del CRM (para entrar a la app), no de la intranet:
 
 | Rol       | Email               | Contraseña |
 |-----------|---------------------|------------|
@@ -24,34 +70,35 @@ npm run dev    # levanta la API en http://localhost:4000
 
 ## Modelo de datos
 
-- **Technician**: técnico que puede tener casos asignados.
-- **Equipment**: equipo del cliente/área que se está reparando.
-- **Case**: caso/ticket de reparación — título, descripción, equipo, cliente,
-  prioridad, estado, técnico asignado, notas e historial de cambios de estado.
+- **Technician**: técnico del CRM que puede tener casos asignados.
+- **Equipment**: en modo intranet, un bus de la flota (patente, marca,
+  modelo, terminal). En modo local, un equipo cualquiera.
+- **Case**: caso de reparación — descripción, equipo, categoría/cliente,
+  prioridad, estado (`open` = pendiente, `assigned` = asignado,
+  `in_progress` = en proceso, `resolved` = resuelto), técnico asignado,
+  notas e historial.
 
 ## Endpoints principales
 
 Todos (salvo `/auth/login`) requieren `Authorization: Bearer <token>`.
 
 - `POST /auth/login` — `{ email, password }` → `{ token, user }`
+- `GET /config` — `{ intranetEnabled, categorias }` (para que el frontend sepa qué modo mostrar)
 - `GET /technicians` · `POST /technicians` (solo admin) · `PATCH /technicians/:id` (solo admin)
-- `GET /equipment` · `POST /equipment`
+- `GET /equipment` · `POST /equipment` (solo en modo local; en modo intranet la flota se administra desde ahí)
 - `GET /cases?status=&mine=true` · `GET /cases/:id` · `POST /cases`
-- `PATCH /cases/:id/assign` (solo admin) — `{ technicianId }`
-- `PATCH /cases/:id/status` (admin o el técnico asignado) — `{ status }`
-- `POST /cases/:id/notes` — `{ text }`
+- `PATCH /cases/:id/assign` (solo admin) — `{ technicianId }` (local al CRM)
+- `PATCH /cases/:id/status` (admin o el técnico asignado) — `{ status }` (se refleja en la intranet si está conectada)
+- `PATCH /cases/:id/priority` — `{ priority }` (local al CRM)
+- `POST /cases/:id/notes` — `{ text }` (local al CRM)
 
-## Conectar con la intranet real
+## Desplegar en Railway
 
-Este backend es intencionalmente simple para poder arrancar ya. Cuando se
-quiera conectar a la base de datos o API real de la intranet, hay dos
-caminos:
-
-1. **Reemplazar el almacenamiento**: cambiar `src/db.ts` (que hoy lee/escribe
-   `data/db.json`) por llamadas a la base de datos o API real, manteniendo
-   las mismas funciones `loadDb`/`saveDb` y formas de datos en `src/types.ts`.
-   Las rutas (`src/routes/*`) no necesitan cambiar.
-2. **Apuntar la app directamente a la API real**: si la intranet ya expone
-   una API REST equivalente, se puede saltar este backend por completo y
-   configurar `EXPO_PUBLIC_API_URL` en la app para que apunte allá
-   (ver `../app/README.md`).
+1. Crea un servicio nuevo en tu proyecto de Railway apuntando a este
+   repositorio (carpeta `crm/backend`).
+2. Define las variables de entorno `INTRANET_EMAIL`, `INTRANET_PASSWORD`
+   y `JWT_SECRET` (una clave propia para firmar los tokens del CRM) en
+   ese servicio.
+3. Railway detecta el `npm run build` / `npm start`; asegúrate de correr
+   `npm run seed` una vez (por ejemplo desde una shell de Railway) para
+   crear las cuentas de administrador/técnicos del CRM.

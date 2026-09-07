@@ -20,6 +20,7 @@ const empty: DbShape = {
   equipment: [],
   cases: [],
   caseSequence: 0,
+  caseOverlays: {},
 };
 
 function ensureFile() {
@@ -30,7 +31,9 @@ function ensureFile() {
 export function loadDb(): DbShape {
   ensureFile();
   const raw = readFileSync(DATA_FILE, 'utf-8');
-  return JSON.parse(raw) as DbShape;
+  const db = JSON.parse(raw) as DbShape;
+  db.caseOverlays = db.caseOverlays || {};
+  return db;
 }
 
 export function saveDb(db: DbShape): void {

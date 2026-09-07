@@ -33,13 +33,7 @@ export interface Equipment {
   createdAt: string;
 }
 
-export type CaseStatus =
-  | 'open'
-  | 'assigned'
-  | 'in_progress'
-  | 'waiting_parts'
-  | 'resolved'
-  | 'closed';
+export type CaseStatus = 'open' | 'assigned' | 'in_progress' | 'resolved';
 
 export type CasePriority = 'low' | 'medium' | 'high' | 'urgent';
 
@@ -75,10 +69,23 @@ export interface Case {
   history: CaseHistoryEntry[];
 }
 
+/**
+ * Datos que el CRM guarda de forma local para un caso que en realidad
+ * vive en la intranet (que no tiene dónde guardar técnico asignado,
+ * prioridad ni notas). Se indexa por el id del caso en la intranet.
+ */
+export interface CaseOverlay {
+  assignedTechnicianId: string | null;
+  priority: CasePriority;
+  notes: CaseNote[];
+  history: CaseHistoryEntry[];
+}
+
 export interface DbShape {
   users: User[];
   technicians: Technician[];
   equipment: Equipment[];
   cases: Case[];
   caseSequence: number;
+  caseOverlays: Record<string, CaseOverlay>;
 }

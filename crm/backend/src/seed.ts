@@ -139,11 +139,7 @@ const cases: Case[] = [
     history: [
       { id: 'h4', status: 'open', changedBy: 'Administrador', changedAt: '2026-09-06T09:00:00.000Z' },
       { id: 'h5', status: 'assigned', changedBy: 'Administrador', changedAt: '2026-09-06T09:05:00.000Z' },
-      { id: 'd1661796-5535-41b5-ad2b-dc3b43df60a2', status: 'waiting_parts', changedBy: 'Administrador', changedAt: '2026-09-06T22:54:53.499Z' },
       { id: 'a6b46b82-ad9a-4fd4-bdf3-aee6add1c124', status: 'in_progress', changedBy: 'Administrador', changedAt: '2026-09-06T22:54:55.781Z' },
-      { id: '430f0277-9499-4fc5-9154-75c467227c72', status: 'resolved', changedBy: 'Administrador', changedAt: '2026-09-06T22:54:56.329Z' },
-      { id: 'c228804c-b1c6-4c09-a800-1aebf94c5f5a', status: 'closed', changedBy: 'Administrador', changedAt: '2026-09-06T22:54:57.011Z' },
-      { id: 'f8ec14e0-e786-4ac1-92d2-c924f65f20e9', status: 'waiting_parts', changedBy: 'Administrador', changedAt: '2026-09-06T22:54:57.876Z' },
       { id: 'e09f7862-d30f-452b-8d89-6cb47b3c9138', status: 'in_progress', changedBy: 'Administrador', changedAt: '2026-09-06T22:55:06.147Z' },
     ],
   },

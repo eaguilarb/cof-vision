@@ -2,47 +2,114 @@ import { Router } from 'express';
 import { v4 as uuid } from 'uuid';
 import { loadDb, saveDb } from '../db.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
-import type { CaseStatus } from '../types.js';
+import type { Case, CaseOverlay, CasePriority, CaseStatus, DbShape } from '../types.js';
+import {
+  CATEGORIA_LABELS,
+  ESTADO_TO_STATUS,
+  STATUS_TO_ESTADO,
+  createCaso,
+  fetchCasos,
+  isIntranetEnabled,
+  updateEstadoCaso,
+  type IntranetCaso,
+} from '../intranet.js';
 
 export const casesRouter = Router();
 
 casesRouter.use(requireAuth);
 
-const VALID_STATUSES: CaseStatus[] = [
-  'open',
-  'assigned',
-  'in_progress',
-  'waiting_parts',
-  'resolved',
-  'closed',
-];
+const VALID_STATUSES: CaseStatus[] = ['open', 'assigned', 'in_progress', 'resolved'];
+const VALID_PRIORITIES: CasePriority[] = ['low', 'medium', 'high', 'urgent'];
+
+function emptyOverlay(): CaseOverlay {
+  return { assignedTechnicianId: null, priority: 'medium', notes: [], history: [] };
+}
+
+function getOverlay(db: DbShape, id: string): CaseOverlay {
+  return db.caseOverlays[id] || emptyOverlay();
+}
+
+function toCase(raw: IntranetCaso, db: DbShape): Case {
+  const id = String(raw.id);
+  const overlay = getOverlay(db, id);
+  const categoriaLabel = CATEGORIA_LABELS[raw.categoria] ?? raw.categoria;
+
+  return {
+    id,
+    code: `COF-${id}`,
+    title: `${categoriaLabel} · ${raw.ppu}`,
+    description: raw.descripcion || '(sin descripción)',
+    equipmentId: raw.ppu,
+    clientName: raw.terminal || '—',
+    priority: overlay.priority,
+    status: ESTADO_TO_STATUS[raw.estado_caso] ?? 'open',
+    assignedTechnicianId: overlay.assignedTechnicianId,
+    createdBy: raw.creado_por || 'intranet',
+    createdAt: raw.creado_en,
+    updatedAt: raw.actualizado_en || raw.creado_en,
+    notes: overlay.notes,
+    history: overlay.history,
+  };
+}
+
+function applyFilters(
+  cases: Case[],
+  query: { status?: string; technicianId?: string; mine?: string },
+  auth?: { technicianId?: string },
+): Case[] {
+  let result = cases;
+  if (query.mine === 'true' && auth?.technicianId) {
+    result = result.filter((c) => c.assignedTechnicianId === auth.technicianId);
+  } else if (query.technicianId) {
+    result = result.filter((c) => c.assignedTechnicianId === query.technicianId);
+  }
+  if (query.status) {
+    result = result.filter((c) => c.status === query.status);
+  }
+  return result;
+}
 
 // GET /cases?status=&technicianId=&mine=true
-casesRouter.get('/', (req, res) => {
+casesRouter.get('/', async (req, res) => {
+  const query = req.query as { status?: string; technicianId?: string; mine?: string };
+
+  if (isIntranetEnabled()) {
+    try {
+      const db = loadDb();
+      const casos = await fetchCasos();
+      let cases = casos.map((c) => toCase(c, db));
+      cases = applyFilters(cases, query, req.auth);
+      cases.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      res.json(cases);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
+    }
+    return;
+  }
+
   const db = loadDb();
-  let cases = db.cases;
-
-  const { status, technicianId, mine } = req.query as {
-    status?: string;
-    technicianId?: string;
-    mine?: string;
-  };
-
-  if (mine === 'true' && req.auth?.technicianId) {
-    cases = cases.filter((c) => c.assignedTechnicianId === req.auth!.technicianId);
-  } else if (technicianId) {
-    cases = cases.filter((c) => c.assignedTechnicianId === technicianId);
-  }
-
-  if (status) {
-    cases = cases.filter((c) => c.status === status);
-  }
-
+  let cases = applyFilters(db.cases, query, req.auth);
   cases = [...cases].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json(cases);
 });
 
-casesRouter.get('/:id', (req, res) => {
+casesRouter.get('/:id', async (req, res) => {
+  if (isIntranetEnabled()) {
+    try {
+      const db = loadDb();
+      const casos = await fetchCasos();
+      const raw = casos.find((c) => String(c.id) === req.params.id);
+      if (!raw) {
+        res.status(404).json({ error: 'Caso no encontrado' });
+        return;
+      }
+      res.json(toCase(raw, db));
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
+    }
+    return;
+  }
+
   const db = loadDb();
   const found = db.cases.find((c) => c.id === req.params.id);
   if (!found) {
@@ -52,17 +119,48 @@ casesRouter.get('/:id', (req, res) => {
   res.json(found);
 });
 
-casesRouter.post('/', (req, res) => {
-  const { title, description, equipmentId, clientName, priority, assignedTechnicianId } =
-    req.body as Partial<{
-      title: string;
-      description: string;
-      equipmentId: string;
-      clientName: string;
-      priority: string;
-      assignedTechnicianId: string | null;
-    }>;
+casesRouter.post('/', async (req, res) => {
+  const { description, equipmentId, priority, assignedTechnicianId } = req.body as Partial<{
+    description: string;
+    equipmentId: string;
+    priority: string;
+    assignedTechnicianId: string | null;
+  }>;
 
+  const resolvedPriority: CasePriority = VALID_PRIORITIES.includes(priority as CasePriority)
+    ? (priority as CasePriority)
+    : 'medium';
+
+  if (isIntranetEnabled()) {
+    const { categoria } = req.body as { categoria?: string };
+    if (!categoria || !description || !equipmentId) {
+      res.status(400).json({ error: 'categoria, description y equipmentId (patente) son requeridos' });
+      return;
+    }
+    try {
+      const created = await createCaso({ ppu: equipmentId, categoria, descripcion: description });
+      const db = loadDb();
+      const now = new Date().toISOString();
+      const status: CaseStatus = assignedTechnicianId ? 'assigned' : 'open';
+      db.caseOverlays[String(created.id)] = {
+        assignedTechnicianId: assignedTechnicianId ?? null,
+        priority: resolvedPriority,
+        notes: [],
+        history: [{ id: uuid(), status, changedBy: req.auth!.name, changedAt: now }],
+      };
+      if (assignedTechnicianId) {
+        await updateEstadoCaso(String(created.id), STATUS_TO_ESTADO.assigned);
+        created.estado_caso = STATUS_TO_ESTADO.assigned;
+      }
+      saveDb(db);
+      res.status(201).json(toCase(created, db));
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
+    }
+    return;
+  }
+
+  const { title, clientName } = req.body as Partial<{ title: string; clientName: string }>;
   if (!title || !description || !equipmentId || !clientName) {
     res.status(400).json({ error: 'title, description, equipmentId y clientName son requeridos' });
     return;
@@ -79,14 +177,14 @@ casesRouter.post('/', (req, res) => {
   const now = new Date().toISOString();
   const status: CaseStatus = assignedTechnicianId ? 'assigned' : 'open';
 
-  const newCase = {
+  const newCase: Case = {
     id: uuid(),
     code: `CASE-${String(db.caseSequence).padStart(4, '0')}`,
     title,
     description,
     equipmentId,
     clientName,
-    priority: (priority as any) || 'medium',
+    priority: resolvedPriority,
     status,
     assignedTechnicianId: assignedTechnicianId ?? null,
     createdBy: req.auth!.sub,
@@ -101,16 +199,46 @@ casesRouter.post('/', (req, res) => {
   res.status(201).json(newCase);
 });
 
-casesRouter.patch('/:id/assign', requireRole('admin'), (req, res) => {
+casesRouter.patch('/:id/assign', requireRole('admin'), async (req, res) => {
   const { technicianId } = req.body as { technicianId?: string | null };
   const db = loadDb();
+
+  if (technicianId && !db.technicians.some((t) => t.id === technicianId)) {
+    res.status(400).json({ error: 'Técnico no encontrado' });
+    return;
+  }
+
+  if (isIntranetEnabled()) {
+    try {
+      const casos = await fetchCasos();
+      const raw = casos.find((c) => String(c.id) === req.params.id);
+      if (!raw) {
+        res.status(404).json({ error: 'Caso no encontrado' });
+        return;
+      }
+      const overlay = { ...getOverlay(db, req.params.id) };
+      overlay.assignedTechnicianId = technicianId ?? null;
+      const now = new Date().toISOString();
+      if (technicianId && raw.estado_caso === 'pendiente') {
+        await updateEstadoCaso(req.params.id, STATUS_TO_ESTADO.assigned);
+        raw.estado_caso = STATUS_TO_ESTADO.assigned;
+        overlay.history = [
+          ...overlay.history,
+          { id: uuid(), status: 'assigned', changedBy: req.auth!.name, changedAt: now },
+        ];
+      }
+      db.caseOverlays[req.params.id] = overlay;
+      saveDb(db);
+      res.json(toCase(raw, db));
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
+    }
+    return;
+  }
+
   const found = db.cases.find((c) => c.id === req.params.id);
   if (!found) {
     res.status(404).json({ error: 'Caso no encontrado' });
-    return;
-  }
-  if (technicianId && !db.technicians.some((t) => t.id === technicianId)) {
-    res.status(400).json({ error: 'Técnico no encontrado' });
     return;
   }
 
@@ -129,7 +257,7 @@ casesRouter.patch('/:id/assign', requireRole('admin'), (req, res) => {
   res.json(found);
 });
 
-casesRouter.patch('/:id/status', (req, res) => {
+casesRouter.patch('/:id/status', async (req, res) => {
   const { status } = req.body as { status?: CaseStatus };
   if (!status || !VALID_STATUSES.includes(status)) {
     res.status(400).json({ error: `status debe ser uno de: ${VALID_STATUSES.join(', ')}` });
@@ -137,6 +265,38 @@ casesRouter.patch('/:id/status', (req, res) => {
   }
 
   const db = loadDb();
+
+  if (isIntranetEnabled()) {
+    try {
+      const casos = await fetchCasos();
+      const raw = casos.find((c) => String(c.id) === req.params.id);
+      if (!raw) {
+        res.status(404).json({ error: 'Caso no encontrado' });
+        return;
+      }
+      const overlay = getOverlay(db, req.params.id);
+      const isOwnerTechnician =
+        req.auth?.role === 'technician' && req.auth.technicianId === overlay.assignedTechnicianId;
+      if (req.auth?.role !== 'admin' && !isOwnerTechnician) {
+        res.status(403).json({ error: 'Solo el técnico asignado o un admin pueden cambiar el estado' });
+        return;
+      }
+
+      await updateEstadoCaso(req.params.id, STATUS_TO_ESTADO[status]);
+      raw.estado_caso = STATUS_TO_ESTADO[status];
+      const now = new Date().toISOString();
+      db.caseOverlays[req.params.id] = {
+        ...overlay,
+        history: [...overlay.history, { id: uuid(), status, changedBy: req.auth!.name, changedAt: now }],
+      };
+      saveDb(db);
+      res.json(toCase(raw, db));
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
+    }
+    return;
+  }
+
   const found = db.cases.find((c) => c.id === req.params.id);
   if (!found) {
     res.status(404).json({ error: 'Caso no encontrado' });
@@ -157,7 +317,44 @@ casesRouter.patch('/:id/status', (req, res) => {
   res.json(found);
 });
 
-casesRouter.post('/:id/notes', (req, res) => {
+casesRouter.patch('/:id/priority', async (req, res) => {
+  const { priority } = req.body as { priority?: CasePriority };
+  if (!priority || !VALID_PRIORITIES.includes(priority)) {
+    res.status(400).json({ error: `priority debe ser una de: ${VALID_PRIORITIES.join(', ')}` });
+    return;
+  }
+
+  const db = loadDb();
+
+  if (isIntranetEnabled()) {
+    try {
+      const casos = await fetchCasos();
+      const raw = casos.find((c) => String(c.id) === req.params.id);
+      if (!raw) {
+        res.status(404).json({ error: 'Caso no encontrado' });
+        return;
+      }
+      db.caseOverlays[req.params.id] = { ...getOverlay(db, req.params.id), priority };
+      saveDb(db);
+      res.json(toCase(raw, db));
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
+    }
+    return;
+  }
+
+  const found = db.cases.find((c) => c.id === req.params.id);
+  if (!found) {
+    res.status(404).json({ error: 'Caso no encontrado' });
+    return;
+  }
+  found.priority = priority;
+  found.updatedAt = new Date().toISOString();
+  saveDb(db);
+  res.json(found);
+});
+
+casesRouter.post('/:id/notes', async (req, res) => {
   const { text } = req.body as { text?: string };
   if (!text) {
     res.status(400).json({ error: 'text es requerido' });
@@ -165,19 +362,32 @@ casesRouter.post('/:id/notes', (req, res) => {
   }
 
   const db = loadDb();
+  const now = new Date().toISOString();
+  const note = { id: uuid(), authorId: req.auth!.sub, authorName: req.auth!.name, text, createdAt: now };
+
+  if (isIntranetEnabled()) {
+    try {
+      const casos = await fetchCasos();
+      const raw = casos.find((c) => String(c.id) === req.params.id);
+      if (!raw) {
+        res.status(404).json({ error: 'Caso no encontrado' });
+        return;
+      }
+      const overlay = getOverlay(db, req.params.id);
+      db.caseOverlays[req.params.id] = { ...overlay, notes: [...overlay.notes, note] };
+      saveDb(db);
+      res.status(201).json(note);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
+    }
+    return;
+  }
+
   const found = db.cases.find((c) => c.id === req.params.id);
   if (!found) {
     res.status(404).json({ error: 'Caso no encontrado' });
     return;
   }
-
-  const note = {
-    id: uuid(),
-    authorId: req.auth!.sub,
-    authorName: req.auth!.name,
-    text,
-    createdAt: new Date().toISOString(),
-  };
   found.notes.push(note);
   found.updatedAt = note.createdAt;
   saveDb(db);

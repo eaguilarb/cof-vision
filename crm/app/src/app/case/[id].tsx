@@ -15,15 +15,17 @@ import {
   useCase,
   useEquipment,
   useTechnicians,
+  useUpdateCasePriority,
   useUpdateCaseStatus,
 } from '@/api/hooks';
 import { apiErrorMessage } from '@/api/client';
-import { PRIORITY_LABELS, STATUS_LABELS, type CaseStatus } from '@/api/types';
+import { PRIORITY_LABELS, STATUS_LABELS, type CasePriority, type CaseStatus } from '@/api/types';
 import { useAuth } from '@/state/auth-context';
 import { colors, priorityColors, statusColors } from '@/constants/colors';
 import { Badge } from '@/components/badge';
 
 const STATUSES = Object.keys(STATUS_LABELS) as CaseStatus[];
+const PRIORITIES = Object.keys(PRIORITY_LABELS) as CasePriority[];
 
 export default function CaseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -32,6 +34,7 @@ export default function CaseDetailScreen() {
   const equipmentQuery = useEquipment();
   const techniciansQuery = useTechnicians();
   const updateStatus = useUpdateCaseStatus();
+  const updatePriority = useUpdateCasePriority();
   const assignCase = useAssignCase();
   const addNote = useAddCaseNote();
 
@@ -55,6 +58,15 @@ export default function CaseDetailScreen() {
     setActionError(null);
     try {
       await updateStatus.mutateAsync({ id: item.id, status });
+    } catch (err) {
+      setActionError(apiErrorMessage(err));
+    }
+  }
+
+  async function handlePriorityChange(priority: CasePriority) {
+    setActionError(null);
+    try {
+      await updatePriority.mutateAsync({ id: item.id, priority });
     } catch (err) {
       setActionError(apiErrorMessage(err));
     }
@@ -91,7 +103,7 @@ export default function CaseDetailScreen() {
       <Text style={styles.sectionTitle}>Descripción</Text>
       <Text style={styles.text}>{item.description}</Text>
 
-      <Text style={styles.sectionTitle}>Cliente</Text>
+      <Text style={styles.sectionTitle}>Cliente / Terminal</Text>
       <Text style={styles.text}>{item.clientName}</Text>
 
       <Text style={styles.sectionTitle}>Equipo</Text>
@@ -100,6 +112,22 @@ export default function CaseDetailScreen() {
       </Text>
 
       {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
+
+      <Text style={styles.sectionTitle}>Prioridad</Text>
+      <View style={styles.chipRow}>
+        {PRIORITIES.map((p) => (
+          <Pressable
+            key={p}
+            style={[styles.chip, item.priority === p && styles.chipActive]}
+            onPress={() => handlePriorityChange(p)}
+            disabled={updatePriority.isPending}
+          >
+            <Text style={[styles.chipText, item.priority === p && styles.chipTextActive]}>
+              {PRIORITY_LABELS[p]}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
 
       <Text style={styles.sectionTitle}>Estado</Text>
       {canManage ? (

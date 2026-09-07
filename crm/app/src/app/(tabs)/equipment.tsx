@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -8,19 +8,32 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { useCreateEquipment, useEquipment } from '@/api/hooks';
+import { useConfig, useCreateEquipment, useEquipment } from '@/api/hooks';
 import { apiErrorMessage } from '@/api/client';
 import { colors } from '@/constants/colors';
 import type { Equipment } from '@/api/types';
 
 export default function EquipmentScreen() {
+  const configQuery = useConfig();
   const equipmentQuery = useEquipment();
   const createEquipment = useCreateEquipment();
+  const intranetEnabled = configQuery.data?.intranetEnabled ?? false;
+
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
   const [type, setType] = useState('');
   const [clientName, setClientName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+
+  const filtered = useMemo(() => {
+    const all = equipmentQuery.data ?? [];
+    const query = search.trim().toLowerCase();
+    if (!query) return all;
+    return all.filter(
+      (eq) => eq.name.toLowerCase().includes(query) || eq.clientName.toLowerCase().includes(query),
+    );
+  }, [equipmentQuery.data, search]);
 
   async function handleCreate() {
     setError(null);
@@ -42,13 +55,25 @@ export default function EquipmentScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Equipos registrados</Text>
-        <Pressable style={styles.addButton} onPress={() => setShowForm((v) => !v)}>
-          <Text style={styles.addButtonText}>{showForm ? 'Cancelar' : '+ Agregar'}</Text>
-        </Pressable>
+        <Text style={styles.headerTitle}>{intranetEnabled ? 'Flota' : 'Equipos registrados'}</Text>
+        {!intranetEnabled && (
+          <Pressable style={styles.addButton} onPress={() => setShowForm((v) => !v)}>
+            <Text style={styles.addButtonText}>{showForm ? 'Cancelar' : '+ Agregar'}</Text>
+          </Pressable>
+        )}
       </View>
 
-      {showForm && (
+      <View style={styles.searchWrap}>
+        <TextInput
+          style={styles.searchInput}
+          placeholder={intranetEnabled ? 'Buscar por patente o terminal…' : 'Buscar equipo…'}
+          value={search}
+          onChangeText={setSearch}
+          autoCapitalize="characters"
+        />
+      </View>
+
+      {showForm && !intranetEnabled && (
         <View style={styles.form}>
           <TextInput
             style={styles.input}
@@ -81,10 +106,10 @@ export default function EquipmentScreen() {
         <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary} />
       ) : (
         <FlatList
-          data={equipmentQuery.data ?? []}
+          data={filtered}
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
-          ListEmptyComponent={<Text style={styles.empty}>Aún no hay equipos registrados.</Text>}
+          ListEmptyComponent={<Text style={styles.empty}>Sin resultados.</Text>}
           renderItem={({ item }) => <EquipmentCard item={item} />}
         />
       )}
@@ -101,9 +126,8 @@ function EquipmentCard({ item }: { item: Equipment }) {
         {item.brand ? ` · ${item.brand}` : ''}
         {item.model ? ` ${item.model}` : ''}
       </Text>
-      <Text style={styles.cardMeta}>Cliente: {item.clientName}</Text>
+      <Text style={styles.cardMeta}>Terminal: {item.clientName}</Text>
       {item.serialNumber ? <Text style={styles.cardMeta}>N/S: {item.serialNumber}</Text> : null}
-      {item.location ? <Text style={styles.cardMeta}>Ubicación: {item.location}</Text> : null}
     </View>
   );
 }
@@ -115,6 +139,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     padding: 14,
+    paddingBottom: 8,
   },
   headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
   addButton: {
@@ -124,6 +149,16 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   addButtonText: { color: colors.primaryText, fontWeight: '600', fontSize: 13 },
+  searchWrap: { paddingHorizontal: 14, paddingBottom: 10 },
+  searchInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 14,
+    backgroundColor: colors.surface,
+  },
   form: {
     backgroundColor: colors.surface,
     marginHorizontal: 14,
