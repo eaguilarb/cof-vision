@@ -60,3 +60,32 @@ src/
 ## Cuentas de prueba
 
 Ver `../backend/README.md` para las credenciales sembradas por `npm run seed`.
+
+## Generar el instalable de Android (.apk)
+
+La app está conectada a un proyecto de [EAS Build](https://docs.expo.dev/build/introduction/)
+(`@eaguilarb/cof-crm`, ver `eas.json`), que compila un `.apk` real en la nube
+de Expo — no requiere Android Studio ni una PC con Android SDK.
+
+```bash
+npm install -g eas-cli   # o usa npx eas-cli
+eas login                # con tu cuenta de expo.dev
+eas build --platform android --profile apk
+```
+
+Al terminar (10–20 min), el comando muestra un link de descarga directa del
+`.apk`. Cualquiera con ese link puede descargarlo e instalarlo en un
+Android (puede que el teléfono pida habilitar "instalar apps de origen
+desconocido" la primera vez — es normal al no venir de Play Store).
+
+Vuelve a correr `eas build` cada vez que quieras una versión nueva
+instalable con los últimos cambios del código.
+
+### Configurar a qué backend apunta el `.apk`
+
+El `.apk` no necesita saber la URL final del backend al momento de
+compilar: cualquiera puede cambiarla después, dentro de la app, en
+**Perfil → Cambiar servidor** (se guarda en el teléfono; ver
+`src/api/client.ts`). Así, cuando despliegues el backend en Railway, no
+hace falta generar un `.apk` nuevo — solo actualizar esa URL desde la
+app.

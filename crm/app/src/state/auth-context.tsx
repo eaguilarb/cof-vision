@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { api, apiErrorMessage, setAuthToken } from '@/api/client';
+import { api, apiErrorMessage, loadStoredApiBaseUrl, setAuthToken } from '@/api/client';
 import type { AuthUser } from '@/api/types';
 
 const STORAGE_KEY = 'crm.auth';
@@ -26,6 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
+        await loadStoredApiBaseUrl();
         const raw = await AsyncStorage.getItem(STORAGE_KEY);
         if (raw) {
           const stored = JSON.parse(raw) as StoredAuth;
