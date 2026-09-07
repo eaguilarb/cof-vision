@@ -101,7 +101,16 @@ Expo, subido a Vercel (proyecto `cof-crm-web/cof-crm`):
 npm install -g vercel   # o usa npx vercel
 EXPO_PUBLIC_API_URL='https://cof-crm-backend-production.up.railway.app' \
   npx expo export --platform web
-vercel deploy dist --prod
+mkdir -p dist/.vercel && cp vercel-project-link.json dist/.vercel/project.json
+vercel deploy dist --prod --no-wait
 ```
+
+- `expo export` borra y regenera `dist/`, por eso hay que volver a copiar
+  `vercel-project-link.json` (que si está en el repo) ahí cada vez — sin
+  eso, `vercel deploy` no sabe que es el mismo proyecto y crea uno nuevo
+  con otro nombre.
+- `--no-wait` evita quedarse esperando el estado final del build; para un
+  sitio estático como este el despliegue ya terminó cuando el comando
+  imprime el resultado, así que no hace falta esperar.
 
 Repite esto cada vez que quieras publicar cambios de la app en la web.
