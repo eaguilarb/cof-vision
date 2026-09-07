@@ -14,12 +14,18 @@ const adminUserId = uuid();
 const carlosUserId = uuid();
 const anaUserId = uuid();
 
+// En producción, define ADMIN_EMAIL/ADMIN_NAME/ADMIN_PASSWORD para que la
+// cuenta de administrador sea la real (no la de ejemplo).
+const adminEmail = process.env.ADMIN_EMAIL || 'admin@cof.local';
+const adminName = process.env.ADMIN_NAME || 'Admin COF';
+const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
+
 const users: User[] = [
   {
     id: adminUserId,
-    name: 'Admin COF',
-    email: 'admin@cof.local',
-    passwordHash: bcrypt.hashSync('admin123', 10),
+    name: adminName,
+    email: adminEmail,
+    passwordHash: bcrypt.hashSync(adminPassword, 10),
     role: 'admin',
     createdAt: '2026-09-01T09:00:00.000Z',
   },
@@ -180,6 +186,6 @@ db.caseSequence = 3;
 
 saveDb(db);
 console.log('Datos de ejemplo creados (mismos casos que la demo web "COF Taller").');
-console.log('Login admin: admin@cof.local / admin123');
+console.log(`Login admin: ${adminEmail} / (la contraseña que definiste en ADMIN_PASSWORD)`);
 console.log('Login técnico 1: carlos@cof.local / tecnico123');
 console.log('Login técnico 2: ana@cof.local / tecnico123');
