@@ -120,7 +120,15 @@ export default function EquipmentScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>{intranetEnabled ? 'Flota' : 'Equipos registrados'}</Text>
+        <View>
+          <Text style={styles.headerTitle}>{intranetEnabled ? 'Flota' : 'Equipos registrados'}</Text>
+          {!isLoading && (
+            <Text style={styles.headerCount}>
+              {equipmentQuery.data?.length ?? 0} {intranetEnabled ? 'buses' : 'equipos'} ·{' '}
+              {casesQuery.data?.length ?? 0} casos
+            </Text>
+          )}
+        </View>
         {!intranetEnabled && (
           <Pressable style={styles.addButton} onPress={() => setShowForm((v) => !v)}>
             <Text style={styles.addButtonText}>{showForm ? 'Cancelar' : '+ Agregar'}</Text>
@@ -210,7 +218,7 @@ function TerminalCard({
 }) {
   return (
     <View style={[styles.terminalCard, { borderLeftColor: group.accent }]}>
-      <Pressable style={styles.terminalHeader} onPress={onToggle}>
+      <Pressable style={styles.terminalHeader} onPress={onToggle} hitSlop={6}>
         <View style={{ flex: 1 }}>
           <Text style={styles.terminalName}>{group.terminal}</Text>
           <Text style={styles.terminalMeta}>
@@ -218,7 +226,10 @@ function TerminalCard({
             {group.totalCases > 0 ? ` · ${group.totalCases} caso${group.totalCases === 1 ? '' : 's'}` : ''}
           </Text>
         </View>
-        <Text style={styles.chevron}>{isExpanded ? '▲' : '▼'}</Text>
+        <View style={styles.expandButton}>
+          <Text style={styles.expandButtonText}>{isExpanded ? 'Ocultar' : 'Ver buses'}</Text>
+          <Text style={styles.chevron}>{isExpanded ? '▲' : '▼'}</Text>
+        </View>
       </Pressable>
 
       {group.totalCases > 0 && (
@@ -294,6 +305,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+  headerCount: { fontSize: 12, color: colors.textMuted, marginTop: 2, fontWeight: '600' },
   addButton: {
     backgroundColor: colors.primary,
     paddingHorizontal: 12,
@@ -366,7 +378,19 @@ const styles = StyleSheet.create({
   terminalHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   terminalName: { fontSize: 16, fontWeight: '800', color: colors.text },
   terminalMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-  chevron: { fontSize: 12, color: colors.textMuted },
+  expandButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  expandButtonText: { fontSize: 12, fontWeight: '700', color: colors.primary },
+  chevron: { fontSize: 11, color: colors.primary },
   performanceRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   performanceBarTrack: {
     flex: 1,

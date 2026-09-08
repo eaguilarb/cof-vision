@@ -13,7 +13,7 @@ import { useRouter } from 'expo-router';
 import { useCases, useTechnicians } from '@/api/hooks';
 import { STATUS_LABELS, type CaseStatus } from '@/api/types';
 import { useAuth } from '@/state/auth-context';
-import { colors } from '@/constants/colors';
+import { colors, statusColors } from '@/constants/colors';
 import { CaseListItem } from '@/components/case-list-item';
 
 const STATUS_FILTERS: Array<{ label: string; value: CaseStatus | undefined }> = [
@@ -35,8 +35,19 @@ export default function CasesScreen() {
 
   const isLoading = casesQuery.isLoading || techniciansQuery.isLoading;
 
+  const total = casesQuery.data?.length ?? 0;
+
   return (
     <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>Casos</Text>
+        {!isLoading && (
+          <Text style={styles.headerCount}>
+            {total} {total === 1 ? 'caso' : 'casos'}
+          </Text>
+        )}
+      </View>
+
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -49,6 +60,14 @@ export default function CasesScreen() {
             style={[styles.filterChip, status === f.value && styles.filterChipActive]}
             onPress={() => setStatus(f.value)}
           >
+            {f.value && (
+              <View
+                style={[
+                  styles.filterDot,
+                  { backgroundColor: status === f.value ? colors.primaryText : statusColors[f.value] },
+                ]}
+              />
+            )}
             <Text style={[styles.filterText, status === f.value && styles.filterTextActive]}>
               {f.label}
             </Text>
@@ -97,34 +116,53 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 6,
+    backgroundColor: colors.surface,
+  },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+  headerCount: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
   filters: {
-    maxHeight: 52,
+    maxHeight: 58,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
     backgroundColor: colors.surface,
   },
   filtersContent: {
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 8,
+    paddingVertical: 10,
+    gap: 10,
     alignItems: 'center',
   },
   filterChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
     borderRadius: 999,
     backgroundColor: colors.background,
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: colors.border,
   },
   filterChipActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
+  filterDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
   filterText: {
-    fontSize: 13,
+    fontSize: 13.5,
     color: colors.text,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   filterTextActive: {
     color: colors.primaryText,
