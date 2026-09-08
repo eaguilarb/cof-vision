@@ -148,6 +148,13 @@ export async function createCaso(input: {
   return created;
 }
 
+export async function deleteCaso(id: string): Promise<void> {
+  const res = await intranetFetch(`/api/problemas-tecnicos/${id}`, { method: 'DELETE' });
+  if (!res.ok) {
+    throw new Error(`No se pudo eliminar el caso en la intranet (código ${res.status})`);
+  }
+}
+
 export const STATUS_TO_ESTADO: Record<CaseStatus, string> = {
   open: 'pendiente',
   assigned: 'asignado',

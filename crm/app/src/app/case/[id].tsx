@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,11 +12,12 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   useAddCaseNote,
   useAssignCase,
   useCase,
+  useDeleteCase,
   useDeleteCasePhoto,
   useEquipment,
   useTechnicians,
@@ -34,6 +37,7 @@ const PRIORITIES = Object.keys(PRIORITY_LABELS) as CasePriority[];
 
 export default function CaseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
   const { user } = useAuth();
   const caseQuery = useCase(id);
   const equipmentQuery = useEquipment();
@@ -44,6 +48,7 @@ export default function CaseDetailScreen() {
   const addNote = useAddCaseNote();
   const uploadPhoto = useUploadCasePhoto();
   const deletePhoto = useDeleteCasePhoto();
+  const deleteCase = useDeleteCase();
 
   const [noteText, setNoteText] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
@@ -145,6 +150,28 @@ export default function CaseDetailScreen() {
     setActionError(null);
     try {
       await deletePhoto.mutateAsync({ id: item.id, photoId });
+    } catch (err) {
+      setActionError(apiErrorMessage(err));
+    }
+  }
+
+  async function handleDeleteCase() {
+    const message = `¿Eliminar el caso ${item.code} definitivamente? Esta acción no se puede deshacer.`;
+    const confirmed =
+      Platform.OS === 'web'
+        ? window.confirm(message)
+        : await new Promise<boolean>((resolve) => {
+            Alert.alert('Eliminar caso', message, [
+              { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Eliminar', style: 'destructive', onPress: () => resolve(true) },
+            ]);
+          });
+    if (!confirmed) return;
+
+    setActionError(null);
+    try {
+      await deleteCase.mutateAsync(item.id);
+      router.back();
     } catch (err) {
       setActionError(apiErrorMessage(err));
     }
@@ -314,6 +341,18 @@ export default function CaseDetailScreen() {
           {new Date(entry.changedAt).toLocaleString()} · {STATUS_LABELS[entry.status]} · {entry.changedBy}
         </Text>
       ))}
+
+      {user?.role === 'admin' && (
+        <Pressable
+          style={styles.deleteCaseButton}
+          onPress={handleDeleteCase}
+          disabled={deleteCase.isPending}
+        >
+          <Text style={styles.deleteCaseButtonText}>
+            {deleteCase.isPending ? 'Eliminando…' : '🗑️ Eliminar caso'}
+          </Text>
+        </Pressable>
+      )}
     </ScrollView>
   );
 }
@@ -370,6 +409,15 @@ const styles = StyleSheet.create({
   },
   noteButtonText: { color: '#fff', fontWeight: '700' },
   historyLine: { fontSize: 12, color: colors.textMuted, marginBottom: 4 },
+  deleteCaseButton: {
+    marginTop: 28,
+    borderWidth: 1.5,
+    borderColor: colors.danger,
+    borderRadius: 10,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  deleteCaseButtonText: { color: colors.danger, fontWeight: '700', fontSize: 14 },
   photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center' },
   photoThumbWrap: { position: 'relative' },
   photoThumb: {

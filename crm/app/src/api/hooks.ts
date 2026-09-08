@@ -80,6 +80,14 @@ export function useCase(id: string | undefined) {
   });
 }
 
+export function useDeleteCase() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => api.delete(`/cases/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cases'] }),
+  });
+}
+
 export function useCreateCase() {
   const queryClient = useQueryClient();
   return useMutation({

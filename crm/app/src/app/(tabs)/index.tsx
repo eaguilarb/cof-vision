@@ -1,41 +1,92 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useCases, useTechnicians } from '@/api/hooks';
-import { STATUS_LABELS, type CaseStatus } from '@/api/types';
+import { STATUS_LABELS, type Case, type CaseStatus, type Technician } from '@/api/types';
 import { useAuth } from '@/state/auth-context';
 import { colors, statusColors } from '@/constants/colors';
 import { CaseListItem } from '@/components/case-list-item';
+import { Badge } from '@/components/badge';
 
-const STATUS_FILTERS: Array<{ label: string; value: CaseStatus | undefined }> = [
-  { label: 'Todos', value: undefined },
-  ...(Object.entries(STATUS_LABELS) as [CaseStatus, string][]).map(([value, label]) => ({
-    label,
-    value,
-  })),
-];
+const STATUS_ORDER = Object.keys(STATUS_LABELS) as CaseStatus[];
+const TERMINAL_ACCENTS = ['#0ea5e9', '#f97316', '#22c55e', '#a855f7', '#ec4899', '#14b8a6', '#eab308', '#ef4444'];
+
+type StatusFilter = CaseStatus | 'all';
+
+interface TerminalGroup {
+  terminal: string;
+  accent: string;
+  cases: Case[];
+  counts: Record<CaseStatus, number>;
+}
 
 export default function CasesScreen() {
   const router = useRouter();
   const { user } = useAuth();
-  const [status, setStatus] = useState<CaseStatus | undefined>(undefined);
   const [onlyMine, setOnlyMine] = useState(false);
+  const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [terminalFilter, setTerminalFilter] = useState<Record<string, StatusFilter>>({});
 
-  const casesQuery = useCases({ status, mine: onlyMine });
+  // Trae todos los casos (sin filtrar por estado) para poder desglosarlos
+  // por terminal y contar cada estado nosotros mismos.
+  const casesQuery = useCases({ mine: onlyMine });
   const techniciansQuery = useTechnicians();
 
   const isLoading = casesQuery.isLoading || techniciansQuery.isLoading;
+  const allCases = useMemo(() => casesQuery.data ?? [], [casesQuery.data]);
+  const total = allCases.length;
 
-  const total = casesQuery.data?.length ?? 0;
+  const searchResults = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return [];
+    return allCases.filter(
+      (c) =>
+        c.code.toLowerCase().includes(query) ||
+        c.title.toLowerCase().includes(query) ||
+        c.clientName.toLowerCase().includes(query) ||
+        c.equipmentId.toLowerCase().includes(query),
+    );
+  }, [allCases, search]);
+
+  const terminalGroups = useMemo<TerminalGroup[]>(() => {
+    const groups = new Map<string, TerminalGroup>();
+    for (const c of allCases) {
+      const terminal = c.clientName || 'Sin terminal';
+      if (!groups.has(terminal)) {
+        groups.set(terminal, {
+          terminal,
+          accent: TERMINAL_ACCENTS[groups.size % TERMINAL_ACCENTS.length],
+          cases: [],
+          counts: { open: 0, assigned: 0, in_progress: 0, resolved: 0 },
+        });
+      }
+      const group = groups.get(terminal)!;
+      group.cases.push(c);
+      group.counts[c.status] += 1;
+    }
+    return Array.from(groups.values()).sort((a, b) => b.cases.length - a.cases.length);
+  }, [allCases]);
+
+  function toggleExpanded(terminal: string) {
+    setExpanded((prev) => ({ ...prev, [terminal]: !prev[terminal] }));
+  }
+
+  function setFilterFor(terminal: string, value: StatusFilter) {
+    setTerminalFilter((prev) => ({ ...prev, [terminal]: value }));
+    setExpanded((prev) => ({ ...prev, [terminal]: true }));
+  }
+
+  const isSearching = search.trim().length > 0;
 
   return (
     <View style={styles.container}>
@@ -48,58 +99,57 @@ export default function CasesScreen() {
         )}
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.filters}
-        contentContainerStyle={styles.filtersContent}
-      >
-        {STATUS_FILTERS.map((f) => (
-          <Pressable
-            key={f.label}
-            style={[styles.filterChip, status === f.value && styles.filterChipActive]}
-            onPress={() => setStatus(f.value)}
-          >
-            {f.value && (
-              <View
-                style={[
-                  styles.filterDot,
-                  { backgroundColor: status === f.value ? colors.primaryText : statusColors[f.value] },
-                ]}
-              />
-            )}
-            <Text style={[styles.filterText, status === f.value && styles.filterTextActive]}>
-              {f.label}
-            </Text>
-          </Pressable>
-        ))}
-        {user?.role === 'technician' && (
-          <Pressable
-            style={[styles.filterChip, onlyMine && styles.filterChipActive]}
-            onPress={() => setOnlyMine((v) => !v)}
-          >
-            <Text style={[styles.filterText, onlyMine && styles.filterTextActive]}>
-              Solo mis casos
-            </Text>
-          </Pressable>
-        )}
-      </ScrollView>
+      <View style={styles.searchWrap}>
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Buscar por código, patente o terminal…"
+          value={search}
+          onChangeText={setSearch}
+          autoCapitalize="characters"
+        />
+      </View>
+
+      {user?.role === 'technician' && (
+        <Pressable
+          style={[styles.mineToggle, onlyMine && styles.mineToggleActive]}
+          onPress={() => setOnlyMine((v) => !v)}
+        >
+          <Text style={[styles.mineToggleText, onlyMine && styles.mineToggleTextActive]}>
+            {onlyMine ? '✓ Solo mis casos' : 'Solo mis casos'}
+          </Text>
+        </Pressable>
+      )}
 
       {isLoading ? (
         <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary} />
+      ) : isSearching ? (
+        <FlatList
+          data={searchResults}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          ListEmptyComponent={<Text style={styles.empty}>Sin resultados para "{search}".</Text>}
+          renderItem={({ item }) => (
+            <CaseListItem item={item} technicians={techniciansQuery.data ?? []} />
+          )}
+        />
       ) : (
         <FlatList
-          data={casesQuery.data ?? []}
-          keyExtractor={(item) => item.id}
+          data={terminalGroups}
+          keyExtractor={(g) => g.terminal}
           contentContainerStyle={styles.listContent}
           refreshControl={
             <RefreshControl refreshing={casesQuery.isFetching} onRefresh={casesQuery.refetch} />
           }
-          ListEmptyComponent={
-            <Text style={styles.empty}>No hay casos con estos filtros.</Text>
-          }
+          ListEmptyComponent={<Text style={styles.empty}>Aún no hay casos.</Text>}
           renderItem={({ item }) => (
-            <CaseListItem item={item} technicians={techniciansQuery.data ?? []} />
+            <TerminalCasesCard
+              group={item}
+              isExpanded={!!expanded[item.terminal]}
+              onToggle={() => toggleExpanded(item.terminal)}
+              filter={terminalFilter[item.terminal] ?? 'all'}
+              onFilterChange={(v) => setFilterFor(item.terminal, v)}
+              technicians={techniciansQuery.data ?? []}
+            />
           )}
         />
       )}
@@ -107,6 +157,86 @@ export default function CasesScreen() {
       <Pressable style={styles.fab} onPress={() => router.push('/case/new')}>
         <Text style={styles.fabText}>+ Nuevo caso</Text>
       </Pressable>
+    </View>
+  );
+}
+
+function TerminalCasesCard({
+  group,
+  isExpanded,
+  onToggle,
+  filter,
+  onFilterChange,
+  technicians,
+}: {
+  group: TerminalGroup;
+  isExpanded: boolean;
+  onToggle: () => void;
+  filter: StatusFilter;
+  onFilterChange: (v: StatusFilter) => void;
+  technicians: Technician[];
+}) {
+  const filteredCases = filter === 'all' ? group.cases : group.cases.filter((c) => c.status === filter);
+
+  return (
+    <View style={[styles.terminalCard, { borderLeftColor: group.accent }]}>
+      <Pressable style={styles.terminalHeader} onPress={onToggle} hitSlop={6}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.terminalName}>{group.terminal}</Text>
+          <Text style={styles.terminalMeta}>
+            {group.cases.length} caso{group.cases.length === 1 ? '' : 's'}
+          </Text>
+        </View>
+        <View style={styles.expandButton}>
+          <Text style={styles.expandButtonText}>{isExpanded ? 'Ocultar' : 'Ver casos'}</Text>
+          <Text style={styles.chevron}>{isExpanded ? '▲' : '▼'}</Text>
+        </View>
+      </Pressable>
+
+      <View style={styles.statusPillRow}>
+        {STATUS_ORDER.map((status) =>
+          group.counts[status] > 0 ? (
+            <Pressable key={status} onPress={() => onFilterChange(filter === status ? 'all' : status)}>
+              <Badge
+                label={`${STATUS_LABELS[status]}: ${group.counts[status]}`}
+                color={statusColors[status]}
+              />
+            </Pressable>
+          ) : null,
+        )}
+      </View>
+
+      {isExpanded && (
+        <>
+          <View style={styles.miniChipRow}>
+            <Pressable
+              style={[styles.miniChip, filter === 'all' && styles.miniChipActive]}
+              onPress={() => onFilterChange('all')}
+            >
+              <Text style={[styles.miniChipText, filter === 'all' && styles.miniChipTextActive]}>Todos</Text>
+            </Pressable>
+            {STATUS_ORDER.map((status) => (
+              <Pressable
+                key={status}
+                style={[styles.miniChip, filter === status && styles.miniChipActive]}
+                onPress={() => onFilterChange(status)}
+              >
+                <Text style={[styles.miniChipText, filter === status && styles.miniChipTextActive]}>
+                  {STATUS_LABELS[status]}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          <View style={styles.terminalCaseList}>
+            {filteredCases.length === 0 ? (
+              <Text style={styles.noCasesHint}>Sin casos con este filtro.</Text>
+            ) : (
+              filteredCases.map((c) => <CaseListItem key={c.id} item={c} technicians={technicians} />)
+            )}
+          </View>
+        </>
+      )}
     </View>
   );
 }
@@ -127,46 +257,31 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
   headerCount: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
-  filters: {
-    maxHeight: 58,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  filtersContent: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 10,
-    alignItems: 'center',
-  },
-  filterChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 999,
+  searchWrap: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4, backgroundColor: colors.surface },
+  searchInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 14,
     backgroundColor: colors.background,
+  },
+  mineToggle: {
+    marginHorizontal: 14,
+    marginTop: 10,
+    marginBottom: 4,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 999,
     borderWidth: 1.5,
     borderColor: colors.border,
+    backgroundColor: colors.surface,
   },
-  filterChipActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  filterDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  filterText: {
-    fontSize: 13.5,
-    color: colors.text,
-    fontWeight: '700',
-  },
-  filterTextActive: {
-    color: colors.primaryText,
-  },
+  mineToggleActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  mineToggleText: { fontSize: 13, fontWeight: '700', color: colors.text },
+  mineToggleTextActive: { color: colors.primaryText },
   listContent: {
     padding: 14,
     paddingBottom: 90,
@@ -176,6 +291,54 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     marginTop: 40,
   },
+  terminalCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderLeftWidth: 5,
+    marginBottom: 10,
+    padding: 14,
+    gap: 10,
+  },
+  terminalHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  terminalName: { fontSize: 16, fontWeight: '800', color: colors.text },
+  terminalMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  expandButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  expandButtonText: { fontSize: 12, fontWeight: '700', color: colors.primary },
+  chevron: { fontSize: 11, color: colors.primary },
+  statusPillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  miniChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: 10,
+  },
+  miniChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  miniChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  miniChipText: { fontSize: 12, fontWeight: '700', color: colors.text },
+  miniChipTextActive: { color: colors.primaryText },
+  terminalCaseList: { gap: 0 },
+  noCasesHint: { fontSize: 12, color: colors.textMuted, fontStyle: 'italic' },
   fab: {
     position: 'absolute',
     right: 16,

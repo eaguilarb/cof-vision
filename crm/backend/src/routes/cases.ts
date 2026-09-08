@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 import multer from 'multer';
 import { v4 as uuid } from 'uuid';
@@ -11,6 +11,7 @@ import type { Case, CasePhoto, CasePriority, CaseStatus, CaseWithAge } from '../
 import {
   STATUS_TO_ESTADO,
   createCaso,
+  deleteCaso,
   fetchCasos,
   isIntranetEnabled,
   updateEstadoCaso,
@@ -172,6 +173,41 @@ casesRouter.post('/', async (req, res) => {
   await notifyLocalCase(newCase, db, { save: false });
   saveDb(db);
   res.status(201).json(withLocalAge(newCase));
+});
+
+// Elimina un caso definitivamente (de la intranet real si está conectada,
+// o del almacén local). Solo admin — es irreversible.
+casesRouter.delete('/:id', requireRole('admin'), async (req, res) => {
+  const caseId = req.params.id;
+  const db = loadDb();
+
+  if (isIntranetEnabled()) {
+    try {
+      await deleteCaso(caseId);
+    } catch (err) {
+      res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
+      return;
+    }
+    delete db.caseOverlays[caseId];
+    delete db.notifyState.lastStatusByCaseId[caseId];
+    saveDb(db);
+    const uploadsDir = join(getUploadsDir(), caseId);
+    if (existsSync(uploadsDir)) rmSync(uploadsDir, { recursive: true, force: true });
+    res.status(204).end();
+    return;
+  }
+
+  const found = db.cases.find((c) => c.id === caseId);
+  if (!found) {
+    res.status(404).json({ error: 'Caso no encontrado' });
+    return;
+  }
+  db.cases = db.cases.filter((c) => c.id !== caseId);
+  delete db.notifyState.lastStatusByCaseId[caseId];
+  saveDb(db);
+  const uploadsDir = join(getUploadsDir(), caseId);
+  if (existsSync(uploadsDir)) rmSync(uploadsDir, { recursive: true, force: true });
+  res.status(204).end();
 });
 
 casesRouter.patch('/:id/assign', requireRole('admin'), async (req, res) => {
