@@ -4,6 +4,19 @@ import { colors, priorityColors, statusColors } from '@/constants/colors';
 import { PRIORITY_LABELS, STATUS_LABELS, type Case, type Technician } from '@/api/types';
 import { Badge } from './badge';
 
+function plural(n: number): string {
+  return n === 1 ? 'día' : 'días';
+}
+
+function ageLabel(item: Case): string {
+  if (item.status === 'resolved') {
+    return item.resolvedInDays === 0
+      ? 'Resuelto hoy'
+      : `Resuelto en ${item.resolvedInDays} ${plural(item.resolvedInDays!)}`;
+  }
+  return item.daysOpen === 0 ? 'Abierto hoy' : `${item.daysOpen} ${plural(item.daysOpen)} abierto`;
+}
+
 export function CaseListItem({ item, technicians }: { item: Case; technicians: Technician[] }) {
   const router = useRouter();
   const technician = technicians.find((t) => t.id === item.assignedTechnicianId);
@@ -26,6 +39,7 @@ export function CaseListItem({ item, technicians }: { item: Case; technicians: T
           {technician ? technician.name : 'Sin asignar'}
         </Text>
       </View>
+      <Text style={styles.age}>{ageLabel(item)}</Text>
     </Pressable>
   );
 }
@@ -69,5 +83,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textMuted,
     maxWidth: '55%',
+  },
+  age: {
+    fontSize: 11,
+    color: colors.textMuted,
+    fontStyle: 'italic',
   },
 });

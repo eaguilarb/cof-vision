@@ -47,7 +47,8 @@
           "icon": "./assets/images/android-icon-foreground.png",
           "color": "#208AEF"
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,

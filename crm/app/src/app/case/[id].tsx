@@ -60,7 +60,18 @@ export default function CaseDetailScreen() {
   const item = caseQuery.data;
   const equipment = equipmentQuery.data?.find((e) => e.id === item.equipmentId);
   const canManage =
-    user?.role === 'admin' || (user?.role === 'technician' && user.technicianId === item.assignedTechnicianId);
+    user?.role === 'admin' ||
+    user?.role === 'operator' ||
+    (user?.role === 'technician' && user.technicianId === item.assignedTechnicianId);
+  const dayWord = (n: number) => (n === 1 ? 'día' : 'días');
+  const ageLabel =
+    item.status === 'resolved'
+      ? item.resolvedInDays === 0
+        ? 'Resuelto hoy'
+        : `Resuelto en ${item.resolvedInDays} ${dayWord(item.resolvedInDays!)}`
+      : item.daysOpen === 0
+        ? 'Abierto hoy'
+        : `${item.daysOpen} ${dayWord(item.daysOpen)} abierto`;
 
   async function handleStatusChange(status: CaseStatus) {
     setActionError(null);
@@ -146,7 +157,10 @@ export default function CaseDetailScreen() {
         <Badge label={PRIORITY_LABELS[item.priority]} color={priorityColors[item.priority]} />
       </View>
       <Text style={styles.title}>{item.title}</Text>
-      <Badge label={STATUS_LABELS[item.status]} color={statusColors[item.status]} />
+      <View style={styles.headerRow}>
+        <Badge label={STATUS_LABELS[item.status]} color={statusColors[item.status]} />
+        <Text style={styles.ageText}>{ageLabel}</Text>
+      </View>
 
       <Text style={styles.sectionTitle}>Descripción</Text>
       <Text style={styles.text}>{item.description}</Text>
@@ -234,7 +248,7 @@ export default function CaseDetailScreen() {
           ))}
         </View>
       ) : (
-        <Text style={styles.hint}>Solo el técnico asignado o un administrador pueden cambiar el estado.</Text>
+        <Text style={styles.hint}>Solo el técnico asignado, un administrador o un operador pueden cambiar el estado.</Text>
       )}
 
       <Text style={styles.sectionTitle}>Técnico asignado</Text>
@@ -309,6 +323,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
   content: { padding: 16, paddingBottom: 40, gap: 4 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  ageText: { fontSize: 12, color: colors.textMuted, fontStyle: 'italic' },
   code: { fontSize: 12, color: colors.textMuted, fontWeight: '700' },
   title: { fontSize: 20, fontWeight: '800', color: colors.text, marginTop: 4, marginBottom: 8 },
   sectionTitle: { fontSize: 13, fontWeight: '700', color: colors.text, marginTop: 18, marginBottom: 6 },

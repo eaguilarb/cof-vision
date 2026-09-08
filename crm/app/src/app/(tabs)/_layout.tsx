@@ -15,6 +15,7 @@ export default function TabsLayout() {
   }
 
   const isAdmin = user?.role === 'admin';
+  const canSeeReports = user?.role === 'admin' || user?.role === 'operator';
 
   return (
     <Tabs
@@ -39,11 +40,27 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="reports"
+        options={{
+          title: 'Reportes',
+          href: canSeeReports ? undefined : null,
+          tabBarIcon: () => <TabIcon symbol="📊" />,
+        }}
+      />
+      <Tabs.Screen
         name="technicians"
         options={{
           title: 'Técnicos',
           href: isAdmin ? undefined : null,
           tabBarIcon: () => <TabIcon symbol="🧑‍🔧" />,
+        }}
+      />
+      <Tabs.Screen
+        name="users"
+        options={{
+          title: 'Usuarios',
+          href: isAdmin ? undefined : null,
+          tabBarIcon: () => <TabIcon symbol="🛡️" />,
         }}
       />
       <Tabs.Screen

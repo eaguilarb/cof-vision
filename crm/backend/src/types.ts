@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'technician';
+export type Role = 'admin' | 'technician' | 'operator';
 
 export interface User {
   id: string;
@@ -31,6 +31,8 @@ export interface Equipment {
   clientContact?: string;
   location?: string;
   createdAt: string;
+  /** Estándar del bus (solo modo intranet): "RED" tiene wifi/cámaras, "TS" no. */
+  estandar?: 'RED' | 'TS';
 }
 
 export type CaseStatus = 'open' | 'assigned' | 'in_progress' | 'resolved';
@@ -76,6 +78,18 @@ export interface Case {
   notes: CaseNote[];
   history: CaseHistoryEntry[];
   photos: CasePhoto[];
+}
+
+/**
+ * Lo que devuelven las rutas de casos: un Case más los días calculados al
+ * vuelo (no se guardan en el JSON, se recalculan en cada respuesta — ver
+ * services/case-service.ts).
+ */
+export interface CaseWithAge extends Case {
+  /** Días desde que se creó el caso hasta hoy (o hasta que se resolvió, si ya está resuelto). */
+  daysOpen: number;
+  /** Días que tomó resolverlo, o null si todavía no está resuelto. */
+  resolvedInDays: number | null;
 }
 
 /**

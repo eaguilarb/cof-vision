@@ -6,16 +6,14 @@ import { v4 as uuid } from 'uuid';
 import { getUploadsDir, loadDb, saveDb } from '../db.js';
 import { notifyIntranetCaso, notifyLocalCase } from '../notifications.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
-import type { Case, CaseOverlay, CasePhoto, CasePriority, CaseStatus, DbShape } from '../types.js';
+import { getOverlay, toCase, withLocalAge } from '../services/case-service.js';
+import type { Case, CasePhoto, CasePriority, CaseStatus, CaseWithAge } from '../types.js';
 import {
-  CATEGORIA_LABELS,
-  ESTADO_TO_STATUS,
   STATUS_TO_ESTADO,
   createCaso,
   fetchCasos,
   isIntranetEnabled,
   updateEstadoCaso,
-  type IntranetCaso,
 } from '../intranet.js';
 
 export const casesRouter = Router();
@@ -25,43 +23,11 @@ casesRouter.use(requireAuth);
 const VALID_STATUSES: CaseStatus[] = ['open', 'assigned', 'in_progress', 'resolved'];
 const VALID_PRIORITIES: CasePriority[] = ['low', 'medium', 'high', 'urgent'];
 
-function emptyOverlay(): CaseOverlay {
-  return { assignedTechnicianId: null, priority: 'medium', notes: [], history: [], photos: [] };
-}
-
-function getOverlay(db: DbShape, id: string): CaseOverlay {
-  return db.caseOverlays[id] || emptyOverlay();
-}
-
-function toCase(raw: IntranetCaso, db: DbShape): Case {
-  const id = String(raw.id);
-  const overlay = getOverlay(db, id);
-  const categoriaLabel = CATEGORIA_LABELS[raw.categoria] ?? raw.categoria;
-
-  return {
-    id,
-    code: `COF-${id}`,
-    title: `${categoriaLabel} · ${raw.ppu}`,
-    description: raw.descripcion || '(sin descripción)',
-    equipmentId: raw.ppu,
-    clientName: raw.terminal || '—',
-    priority: overlay.priority,
-    status: ESTADO_TO_STATUS[raw.estado_caso] ?? 'open',
-    assignedTechnicianId: overlay.assignedTechnicianId,
-    createdBy: raw.creado_por || 'intranet',
-    createdAt: raw.creado_en,
-    updatedAt: raw.actualizado_en || raw.creado_en,
-    notes: overlay.notes,
-    history: overlay.history,
-    photos: overlay.photos,
-  };
-}
-
-function applyFilters(
-  cases: Case[],
+function applyFilters<T extends Case>(
+  cases: T[],
   query: { status?: string; technicianId?: string; mine?: string },
   auth?: { technicianId?: string },
-): Case[] {
+): T[] {
   let result = cases;
   if (query.mine === 'true' && auth?.technicianId) {
     result = result.filter((c) => c.assignedTechnicianId === auth.technicianId);
@@ -95,7 +61,7 @@ casesRouter.get('/', async (req, res) => {
   const db = loadDb();
   let cases = applyFilters(db.cases, query, req.auth);
   cases = [...cases].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  res.json(cases);
+  res.json(cases.map(withLocalAge));
 });
 
 casesRouter.get('/:id', async (req, res) => {
@@ -121,7 +87,7 @@ casesRouter.get('/:id', async (req, res) => {
     res.status(404).json({ error: 'Caso no encontrado' });
     return;
   }
-  res.json(found);
+  res.json(withLocalAge(found));
 });
 
 casesRouter.post('/', async (req, res) => {
@@ -205,7 +171,7 @@ casesRouter.post('/', async (req, res) => {
   db.cases.push(newCase);
   await notifyLocalCase(newCase, db, { save: false });
   saveDb(db);
-  res.status(201).json(newCase);
+  res.status(201).json(withLocalAge(newCase));
 });
 
 casesRouter.patch('/:id/assign', requireRole('admin'), async (req, res) => {
@@ -263,7 +229,7 @@ casesRouter.patch('/:id/assign', requireRole('admin'), async (req, res) => {
     });
   }
   saveDb(db);
-  res.json(found);
+  res.json(withLocalAge(found));
 });
 
 casesRouter.patch('/:id/status', async (req, res) => {
@@ -286,8 +252,9 @@ casesRouter.patch('/:id/status', async (req, res) => {
       const overlay = getOverlay(db, req.params.id);
       const isOwnerTechnician =
         req.auth?.role === 'technician' && req.auth.technicianId === overlay.assignedTechnicianId;
-      if (req.auth?.role !== 'admin' && !isOwnerTechnician) {
-        res.status(403).json({ error: 'Solo el técnico asignado o un admin pueden cambiar el estado' });
+      const canChangeStatus = req.auth?.role === 'admin' || req.auth?.role === 'operator' || isOwnerTechnician;
+      if (!canChangeStatus) {
+        res.status(403).json({ error: 'Solo el técnico asignado, un admin o un operador pueden cambiar el estado' });
         return;
       }
 
@@ -315,8 +282,9 @@ casesRouter.patch('/:id/status', async (req, res) => {
 
   const isOwnerTechnician =
     req.auth?.role === 'technician' && req.auth.technicianId === found.assignedTechnicianId;
-  if (req.auth?.role !== 'admin' && !isOwnerTechnician) {
-    res.status(403).json({ error: 'Solo el técnico asignado o un admin pueden cambiar el estado' });
+  const canChangeStatus = req.auth?.role === 'admin' || req.auth?.role === 'operator' || isOwnerTechnician;
+  if (!canChangeStatus) {
+    res.status(403).json({ error: 'Solo el técnico asignado, un admin o un operador pueden cambiar el estado' });
     return;
   }
 
@@ -325,7 +293,7 @@ casesRouter.patch('/:id/status', async (req, res) => {
   found.history.push({ id: uuid(), status, changedBy: req.auth!.name, changedAt: found.updatedAt });
   await notifyLocalCase(found, db, { save: false });
   saveDb(db);
-  res.json(found);
+  res.json(withLocalAge(found));
 });
 
 casesRouter.patch('/:id/priority', async (req, res) => {
@@ -362,7 +330,7 @@ casesRouter.patch('/:id/priority', async (req, res) => {
   found.priority = priority;
   found.updatedAt = new Date().toISOString();
   saveDb(db);
-  res.json(found);
+  res.json(withLocalAge(found));
 });
 
 casesRouter.post('/:id/notes', async (req, res) => {

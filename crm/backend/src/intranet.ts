@@ -93,6 +93,8 @@ export interface IntranetBus {
   anio: number | null;
   disco_operativo: number | null;
   streaming_online: number | null;
+  /** "RED" (con wifi/cámaras) o "TS" (sin wifi/cámaras). */
+  estandar: string | null;
 }
 
 export async function fetchCasos(): Promise<IntranetCaso[]> {

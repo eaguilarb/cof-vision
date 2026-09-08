@@ -57,6 +57,40 @@ Con la intranet conectada:
   caso real (ver `CaseOverlay` en `src/types.ts` y `src/routes/cases.ts`).
   Si en el futuro la intranet agrega esos campos, esta es la parte a
   actualizar.
+- **Estándar del bus (RED/TS)**: la flota real trae un campo `estandar`
+  ("RED" = con wifi/cámaras, "TS" = sin wifi/cámaras). El CRM lo expone en
+  `GET /equipment` (`estandar: 'RED' | 'TS'`) y la app excluye los buses
+  "TS" del selector al crear un caso de categoría `wifi` o `camaras`
+  (no tiene sentido reportar una falla de un equipo que el bus no tiene).
+
+## Roles
+
+- **admin**: control total — técnicos, usuarios, asignación de casos,
+  todo lo que hace un operador.
+- **operator**: puede ver todo (casos, equipos, reportes) y cambiar el
+  estado de cualquier caso (incluido cerrarlo), pero no administra
+  técnicos ni usuarios. Pensado para operar el día a día sin dar acceso
+  de administrador. Se crean desde `POST /users` o la pestaña "Usuarios"
+  de la app (solo visible para admins).
+- **technician**: solo ve y cierra sus propios casos asignados (salvo que
+  se filtre por otro). Se administran desde `/technicians`.
+
+## Reportes y exportación
+
+- `GET /reports/summary` — casos por estado y por terminal (total,
+  % resuelto, promedio de días para resolver). Es lo que alimenta la
+  pestaña "Reportes" de la app (gráficos de barras) y, a futuro, el
+  módulo de reportes dentro de la intranet.
+- `GET /reports/export?format=xlsx|pdf` — exporta el listado de casos
+  (con los mismos filtros que `GET /cases`: `status`, `technicianId`,
+  `mine`) a Excel o PDF, incluyendo los días abiertos/para resolver.
+
+## Días abiertos / resueltos
+
+Cada caso devuelto por la API trae `daysOpen` (días desde que se creó
+hasta hoy, o hasta que se resolvió) y `resolvedInDays` (días que tomó
+resolverlo, `null` si sigue abierto) — se calculan al vuelo en cada
+respuesta, no se guardan.
 
 ## Notificaciones (correo y push)
 
@@ -116,6 +150,8 @@ Todos (salvo `/auth/login`) requieren `Authorization: Bearer <token>`.
 - `PATCH /cases/:id/priority` — `{ priority }` (local al CRM)
 - `POST /cases/:id/notes` — `{ text }` (local al CRM)
 - `POST /push-tokens` — `{ token }` (token de push de Expo del dispositivo; ver sección de notificaciones)
+- `GET /users` · `POST /users` · `DELETE /users/:id` (solo admin) — cuentas admin/operator (ver sección de Roles)
+- `GET /reports/summary` · `GET /reports/export?format=xlsx|pdf` (ver sección de Reportes)
 
 ## Desplegar en Railway
 

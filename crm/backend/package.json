@@ -14,9 +14,11 @@
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "express": "^4.19.2",
     "jsonwebtoken": "^9.0.2",
     "multer": "^2.3.0",
+    "pdfkit": "^0.20.2",
     "resend": "^4.0.1",
     "uuid": "^9.0.1"
   },
@@ -27,6 +29,7 @@
     "@types/jsonwebtoken": "^9.0.6",
     "@types/multer": "^2.2.0",
     "@types/node": "^20.14.9",
+    "@types/pdfkit": "^0.17.6",
     "@types/uuid": "^9.0.8",
     "tsx": "^4.16.2",
     "typescript": "^5.5.3"

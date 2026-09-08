@@ -19,6 +19,8 @@ function toEquipment(bus: IntranetBus): Equipment {
     clientName: bus.terminal || '—',
     location: bus.terminal ?? undefined,
     createdAt: new Date().toISOString(),
+    // "RED" tiene wifi/cámaras, "TS" no — ver categorías wifi/camaras al crear casos.
+    estandar: bus.estandar === 'TS' ? 'TS' : 'RED',
   };
 }
 

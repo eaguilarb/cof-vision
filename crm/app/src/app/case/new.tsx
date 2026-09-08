@@ -36,13 +36,16 @@ export default function NewCaseScreen() {
   const [technicianId, setTechnicianId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const requiresFleetEquipment = categoria === 'wifi' || categoria === 'camaras';
+
   const filteredEquipment = useMemo(() => {
     const all = equipmentQuery.data ?? [];
     if (!intranetEnabled) return all;
+    const eligible = requiresFleetEquipment ? all.filter((eq) => eq.estandar !== 'TS') : all;
     const query = equipmentSearch.trim().toLowerCase();
-    const matches = query ? all.filter((eq) => eq.name.toLowerCase().includes(query)) : all;
+    const matches = query ? eligible.filter((eq) => eq.name.toLowerCase().includes(query)) : eligible;
     return matches.slice(0, MAX_EQUIPMENT_RESULTS);
-  }, [equipmentQuery.data, equipmentSearch, intranetEnabled]);
+  }, [equipmentQuery.data, equipmentSearch, intranetEnabled, requiresFleetEquipment]);
 
   async function handleSubmit() {
     setError(null);
@@ -138,6 +141,11 @@ export default function NewCaseScreen() {
       </View>
 
       <Text style={styles.label}>{intranetEnabled ? 'Bus (patente)' : 'Equipo'}</Text>
+      {intranetEnabled && requiresFleetEquipment && (
+        <Text style={styles.hint}>
+          Los buses estándar TS no tienen wifi ni cámaras — no aparecen en esta lista.
+        </Text>
+      )}
       {intranetEnabled && (
         <TextInput
           style={[styles.input, { marginBottom: 8 }]}

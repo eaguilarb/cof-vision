@@ -252,7 +252,10 @@ function TerminalCard({
         <View style={styles.busList}>
           {group.equipment.map((eq) => (
             <View key={eq.id} style={styles.busRow}>
-              <Text style={styles.busName}>{eq.name}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={styles.busName}>{eq.name}</Text>
+                {eq.estandar && <Badge label={eq.estandar} color={eq.estandar === 'TS' ? '#f97316' : '#0ea5e9'} />}
+              </View>
               <Text style={styles.busMeta}>
                 {eq.type}
                 {eq.brand ? ` · ${eq.brand}` : ''}

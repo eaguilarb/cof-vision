@@ -1,4 +1,10 @@
-export type Role = 'admin' | 'technician';
+export type Role = 'admin' | 'technician' | 'operator';
+
+export const ROLE_LABELS: Record<Role, string> = {
+  admin: 'Administrador',
+  technician: 'Técnico',
+  operator: 'Operador',
+};
 
 export interface AuthUser {
   id: string;
@@ -6,6 +12,14 @@ export interface AuthUser {
   email: string;
   role: Role;
   technicianId: string | null;
+}
+
+export interface AppUser {
+  id: string;
+  name: string;
+  email: string;
+  role: Role;
+  createdAt: string;
 }
 
 export interface Technician {
@@ -29,6 +43,8 @@ export interface Equipment {
   clientContact?: string;
   location?: string;
   createdAt: string;
+  /** Estándar del bus (solo modo intranet): "RED" tiene wifi/cámaras, "TS" no. */
+  estandar?: 'RED' | 'TS';
 }
 
 export type CaseStatus = 'open' | 'assigned' | 'in_progress' | 'resolved';
@@ -74,6 +90,10 @@ export interface Case {
   notes: CaseNote[];
   history: CaseHistoryEntry[];
   photos: CasePhoto[];
+  /** Días desde que se creó el caso hasta hoy (o hasta que se resolvió). */
+  daysOpen: number;
+  /** Días que tomó resolverlo, o null si todavía no está resuelto. */
+  resolvedInDays: number | null;
 }
 
 export const STATUS_LABELS: Record<CaseStatus, string> = {
@@ -98,4 +118,19 @@ export interface Categoria {
 export interface AppConfig {
   intranetEnabled: boolean;
   categorias: Categoria[];
+}
+
+export interface TerminalReport {
+  terminal: string;
+  total: number;
+  resolved: number;
+  resolvedPct: number;
+  avgDaysToResolve: number | null;
+}
+
+export interface ReportSummary {
+  generatedAt: string;
+  totalCases: number;
+  byStatus: Record<CaseStatus, number>;
+  byTerminal: TerminalReport[];
 }

@@ -1,7 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Platform } from 'react-native';
 import { api } from './client';
-import type { AppConfig, Case, CasePhoto, CasePriority, CaseStatus, Equipment, Technician } from './types';
+import type {
+  AppConfig,
+  AppUser,
+  Case,
+  CasePhoto,
+  CasePriority,
+  CaseStatus,
+  Equipment,
+  ReportSummary,
+  Role,
+  Technician,
+} from './types';
 
 export function useConfig() {
   return useQuery({
@@ -170,6 +181,37 @@ export function useUploadCasePhoto() {
     onSuccess: (_photo, variables) => {
       queryClient.invalidateQueries({ queryKey: ['cases', variables.id] });
     },
+  });
+}
+
+export function useReportSummary() {
+  return useQuery({
+    queryKey: ['reports', 'summary'],
+    queryFn: async () => (await api.get<ReportSummary>('/reports/summary')).data,
+  });
+}
+
+export function useUsers() {
+  return useQuery({
+    queryKey: ['users'],
+    queryFn: async () => (await api.get<AppUser[]>('/users')).data,
+  });
+}
+
+export function useCreateUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: { name: string; email: string; password: string; role: Role }) =>
+      (await api.post<AppUser>('/users', input)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+export function useDeleteUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => api.delete(`/users/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
 }
 
