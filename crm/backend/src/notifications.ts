@@ -6,10 +6,11 @@ import { CATEGORIA_LABELS, ESTADO_TO_STATUS, fetchCasos, isIntranetEnabled, type
 import type { Case, CaseOverlay, CaseStatus, DbShape } from './types.js';
 
 /**
- * Dos avisos, según lo pedido:
- *   - Correo (Resend) cuando un caso pasa a "resuelto", con el detalle
+ * Avisos, según lo pedido:
+ *   - Cuando aparece un caso nuevo: push (Expo) a los teléfonos
+ *     registrados + correo (Resend) de apertura.
+ *   - Cuando un caso pasa a "resuelto": correo (Resend) con el detalle
  *     (notas) y las fotos adjuntas.
- *   - Notificación push (Expo) cuando aparece un caso nuevo.
  *
  * Se disparan en dos lugares: al tiro cuando el cambio se hace desde este
  * mismo CRM (ver routes/cases.ts), y cada POLL_INTERVAL_MS sondeando la
@@ -85,6 +86,25 @@ function fromLocalCase(c: Case): NotifyCaseInfo {
   };
 }
 
+async function sendNewCaseEmail(info: NotifyCaseInfo): Promise<void> {
+  if (!resend) return;
+  try {
+    await resend.emails.send({
+      from: NOTIFY_EMAIL_FROM,
+      to: NOTIFY_EMAIL_TO,
+      subject: `Nuevo caso COF-${info.id} — ${info.title}`,
+      html: `
+        <h2>Nuevo caso COF-${info.id}</h2>
+        <p><strong>Terminal:</strong> ${info.terminal}</p>
+        <p><strong>${info.title}</strong></p>
+        <p><strong>Descripción:</strong> ${info.description}</p>
+      `,
+    });
+  } catch (err) {
+    console.error('Error al enviar correo de caso nuevo:', err);
+  }
+}
+
 async function sendResolvedEmail(info: NotifyCaseInfo): Promise<void> {
   if (!resend) return;
   const notesHtml = info.notes.length
@@ -134,6 +154,7 @@ export async function processCaseInfo(info: NotifyCaseInfo, db: DbShape, opts: {
   if (previous === undefined) {
     if (db.notifyState.bootstrapped) {
       await sendPushToAll(db, 'Nuevo caso COF', `${info.title} · ${info.terminal}`, { caseId: info.id });
+      await sendNewCaseEmail(info);
     }
   } else if (previous !== 'resolved' && info.status === 'resolved') {
     await sendResolvedEmail(info);
