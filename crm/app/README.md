@@ -102,13 +102,27 @@ npm install -g vercel   # o usa npx vercel
 EXPO_PUBLIC_API_URL='https://cof-crm-backend-production.up.railway.app' \
   npx expo export --platform web
 mkdir -p dist/.vercel && cp vercel-project-link.json dist/.vercel/project.json
-vercel deploy dist --prod --no-wait
+
+# Copia dist/ FUERA de este repo antes de desplegar (ver nota abajo) y
+# despliega desde ahí:
+rm -rf /tmp/cof-crm-web-deploy && mkdir -p /tmp/cof-crm-web-deploy
+cp -r dist/. /tmp/cof-crm-web-deploy/
+cd /tmp/cof-crm-web-deploy && vercel deploy . --prod --no-wait
 ```
 
 - `expo export` borra y regenera `dist/`, por eso hay que volver a copiar
   `vercel-project-link.json` (que si está en el repo) ahí cada vez — sin
   eso, `vercel deploy` no sabe que es el mismo proyecto y crea uno nuevo
   con otro nombre.
+- **Despliega desde fuera del repo git** (por eso el `cp` a `/tmp`): si
+  corres `vercel deploy` desde una carpeta dentro de este repositorio, la
+  CLI de Vercel detecta el `.git` del monorepo y adjunta el autor del
+  último commit a la metadata del deploy. Si ese proyecto de Vercel tiene
+  conectado un repo de GitHub, valida que ese autor tenga permiso de
+  escritura ahí — un commit de Claude (`noreply@anthropic.com`) no lo
+  tiene, y el deploy queda bloqueado (`readyState: "BLOCKED"`,
+  `readyStateReason: "...commit author doesn't have permission..."`).
+  Desplegar desde una carpeta sin `.git` evita el problema por completo.
 - `--no-wait` evita quedarse esperando el estado final del build; para un
   sitio estático como este el despliegue ya terminó cuando el comando
   imprime el resultado, así que no hace falta esperar.
