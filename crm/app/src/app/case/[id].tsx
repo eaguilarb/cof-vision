@@ -78,6 +78,14 @@ export default function CaseDetailScreen() {
         ? 'Abierto hoy'
         : `${item.daysOpen} ${dayWord(item.daysOpen)} abierto`;
 
+  // El primer evento del historial es siempre la creación del caso (lo
+  // registra el CRM al crearlo); si el caso viene de antes de usar el CRM
+  // o se creó directo en la intranet, no hay ese registro y mostramos el
+  // dato crudo de la intranet como respaldo.
+  const createdByLabel = item.history[0]?.changedBy || item.createdBy;
+  const resolvedEntry = [...item.history].reverse().find((h) => h.status === 'resolved');
+  const closedByLabel = item.status === 'resolved' ? resolvedEntry?.changedBy : undefined;
+
   async function handleStatusChange(status: CaseStatus) {
     setActionError(null);
     try {
@@ -188,6 +196,9 @@ export default function CaseDetailScreen() {
         <Badge label={STATUS_LABELS[item.status]} color={statusColors[item.status]} />
         <Text style={styles.ageText}>{ageLabel}</Text>
       </View>
+
+      <Text style={styles.metaLine}>Creado por: {createdByLabel}</Text>
+      {closedByLabel && <Text style={styles.metaLine}>Cerrado por: {closedByLabel}</Text>}
 
       <Text style={styles.sectionTitle}>Descripción</Text>
       <Text style={styles.text}>{item.description}</Text>
@@ -363,6 +374,7 @@ const styles = StyleSheet.create({
   content: { padding: 16, paddingBottom: 40, gap: 4 },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   ageText: { fontSize: 12, color: colors.textMuted, fontStyle: 'italic' },
+  metaLine: { fontSize: 12.5, color: colors.textMuted, marginTop: 6, fontWeight: '600' },
   code: { fontSize: 12, color: colors.textMuted, fontWeight: '700' },
   title: { fontSize: 20, fontWeight: '800', color: colors.text, marginTop: 4, marginBottom: 8 },
   sectionTitle: { fontSize: 13, fontWeight: '700', color: colors.text, marginTop: 18, marginBottom: 6 },
