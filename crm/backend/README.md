@@ -77,13 +77,29 @@ Con la intranet conectada:
 
 ## Reportes y exportación
 
-- `GET /reports/summary` — casos por estado y por terminal (total,
-  % resuelto, promedio de días para resolver). Es lo que alimenta la
-  pestaña "Reportes" de la app (gráficos de barras) y, a futuro, el
-  módulo de reportes dentro de la intranet.
+- `GET /reports/summary?days=30` — casos por estado, por terminal (total,
+  % resuelto, promedio de días para resolver), por técnico (asignados,
+  resueltos, % y promedio) y repuestos/piezas usadas al cerrar casos
+  (`partsUsage`). `days` es opcional y limita a casos creados en esos
+  últimos N días. Es lo que alimenta la pestaña "Reportes" de la app
+  (gráficos de barras) y, a futuro, el módulo de reportes dentro de la
+  intranet.
 - `GET /reports/export?format=xlsx|pdf` — exporta el listado de casos
   (con los mismos filtros que `GET /cases`: `status`, `technicianId`,
   `mine`) a Excel o PDF, incluyendo los días abiertos/para resolver.
+
+## Control de repuestos (qué se hizo al cerrar un caso)
+
+Al marcar un caso como "resuelto" (`PATCH /cases/:id/status`), además de
+`status: 'resolved'` hay que mandar `resolutionAction` (obligatorio) — un
+valor de una lista fija según la categoría del caso (ej. para
+`disco_duro`: `reemplazo_disco_duro`, `reparacion_disco_duro`, `otro`).
+Rechaza el cambio con 400 si falta o no es válido. `resolutionNotes` es
+opcional (detalle libre adicional). Las listas por categoría están en
+`GET /config` (`resolutionActionsByCategoria`, y `genericResolutionActions`
+para modo local/demo). Esto es lo que permite llevar el control de
+repuestos usados (discos duros, DVR, etc. reemplazados) — ver
+`GET /reports/summary` (`partsUsage`).
 
 ## Días abiertos / resueltos
 

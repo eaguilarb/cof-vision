@@ -121,8 +121,17 @@ export function useAssignCase() {
 export function useUpdateCaseStatus() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: CaseStatus }) =>
-      (await api.patch<Case>(`/cases/${id}/status`, { status })).data,
+    mutationFn: async ({
+      id,
+      status,
+      resolutionAction,
+      resolutionNotes,
+    }: {
+      id: string;
+      status: CaseStatus;
+      resolutionAction?: string;
+      resolutionNotes?: string;
+    }) => (await api.patch<Case>(`/cases/${id}/status`, { status, resolutionAction, resolutionNotes })).data,
     onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: ['cases'] });
       queryClient.setQueryData(['cases', updated.id], updated);
@@ -192,10 +201,11 @@ export function useUploadCasePhoto() {
   });
 }
 
-export function useReportSummary() {
+export function useReportSummary(days?: number) {
   return useQuery({
-    queryKey: ['reports', 'summary'],
-    queryFn: async () => (await api.get<ReportSummary>('/reports/summary')).data,
+    queryKey: ['reports', 'summary', days],
+    queryFn: async () =>
+      (await api.get<ReportSummary>('/reports/summary', { params: { days } })).data,
   });
 }
 

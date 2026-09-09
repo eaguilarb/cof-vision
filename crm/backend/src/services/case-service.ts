@@ -22,7 +22,15 @@ function withAge(c: Case, resolvedAtIso: string | null): CaseWithAge {
 }
 
 export function emptyOverlay(): CaseOverlay {
-  return { assignedTechnicianId: null, priority: 'medium', notes: [], history: [], photos: [] };
+  return {
+    assignedTechnicianId: null,
+    priority: 'medium',
+    notes: [],
+    history: [],
+    photos: [],
+    resolutionAction: null,
+    resolutionNotes: null,
+  };
 }
 
 export function getOverlay(db: DbShape, id: string): CaseOverlay {
@@ -51,6 +59,9 @@ export function toCase(raw: IntranetCaso, db: DbShape): CaseWithAge {
       notes: overlay.notes,
       history: overlay.history,
       photos: overlay.photos,
+      categoria: raw.categoria,
+      resolutionAction: overlay.resolutionAction,
+      resolutionNotes: overlay.resolutionNotes,
     },
     raw.resuelto_en,
   );

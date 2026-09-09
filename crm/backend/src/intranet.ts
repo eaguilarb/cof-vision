@@ -183,3 +183,65 @@ export const CATEGORIAS: { value: string; label: string }[] = [
 export const CATEGORIA_LABELS: Record<string, string> = Object.fromEntries(
   CATEGORIAS.map((c) => [c.value, c.label]),
 );
+
+/**
+ * Qué se hizo para resolver un caso, según su categoría — se pide al
+ * cerrarlo (ver PATCH /cases/:id/status) para llevar el control de
+ * repuestos/piezas usadas (discos duros, DVR, etc. reemplazados).
+ */
+export const RESOLUTION_ACTIONS_BY_CATEGORIA: Record<string, { value: string; label: string }[]> = {
+  disco_duro: [
+    { value: 'reemplazo_disco_duro', label: 'Reemplazo de disco duro' },
+    { value: 'reparacion_disco_duro', label: 'Reparación/formateo de disco duro' },
+    { value: 'otro', label: 'Otro' },
+  ],
+  dvr: [
+    { value: 'reemplazo_dvr', label: 'Reemplazo de DVR' },
+    { value: 'reparacion_dvr', label: 'Reparación/configuración de DVR' },
+    { value: 'otro', label: 'Otro' },
+  ],
+  camaras: [
+    { value: 'reemplazo_camara', label: 'Reemplazo de cámara' },
+    { value: 'reparacion_camara', label: 'Reparación/reinstalación de cámara' },
+    { value: 'otro', label: 'Otro' },
+  ],
+  gps: [
+    { value: 'reemplazo_gps', label: 'Reemplazo de equipo GPS' },
+    { value: 'reparacion_gps', label: 'Reparación/configuración de GPS' },
+    { value: 'otro', label: 'Otro' },
+  ],
+  wifi: [
+    { value: 'reemplazo_wifi', label: 'Reemplazo de router/antena WiFi' },
+    { value: 'reparacion_wifi', label: 'Reparación/configuración de WiFi' },
+    { value: 'otro', label: 'Otro' },
+  ],
+  consola_validacion: [
+    { value: 'reemplazo_consola', label: 'Reemplazo de consola de validación' },
+    { value: 'reparacion_consola', label: 'Reparación de consola de validación' },
+    { value: 'otro', label: 'Otro' },
+  ],
+  validador: [
+    { value: 'reemplazo_validador', label: 'Reemplazo de validador' },
+    { value: 'reparacion_validador', label: 'Reparación de validador' },
+    { value: 'otro', label: 'Otro' },
+  ],
+  otro: [
+    { value: 'reparacion', label: 'Reparación' },
+    { value: 'reemplazo_equipo', label: 'Reemplazo de equipo' },
+    { value: 'otro', label: 'Otro' },
+  ],
+};
+
+/** Lista genérica para modo local/demo (sin categoría de intranet). */
+export const GENERIC_RESOLUTION_ACTIONS: { value: string; label: string }[] = [
+  { value: 'reparado', label: 'Reparado' },
+  { value: 'reemplazado', label: 'Equipo reemplazado' },
+  { value: 'configurado', label: 'Configurado/ajustado' },
+  { value: 'otro', label: 'Otro' },
+];
+
+export function resolutionActionLabel(categoria: string | null, action: string | null): string | null {
+  if (!action) return null;
+  const list = (categoria && RESOLUTION_ACTIONS_BY_CATEGORIA[categoria]) || GENERIC_RESOLUTION_ACTIONS;
+  return list.find((a) => a.value === action)?.label ?? action;
+}

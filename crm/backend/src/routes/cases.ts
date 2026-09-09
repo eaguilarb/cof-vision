@@ -9,6 +9,8 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 import { getOverlay, toCase, withLocalAge } from '../services/case-service.js';
 import type { Case, CasePhoto, CasePriority, CaseStatus, CaseWithAge } from '../types.js';
 import {
+  GENERIC_RESOLUTION_ACTIONS,
+  RESOLUTION_ACTIONS_BY_CATEGORIA,
   STATUS_TO_ESTADO,
   createCaso,
   deleteCaso,
@@ -16,6 +18,11 @@ import {
   isIntranetEnabled,
   updateEstadoCaso,
 } from '../intranet.js';
+
+function validResolutionActionValues(categoria: string | null): string[] {
+  const list = (categoria && RESOLUTION_ACTIONS_BY_CATEGORIA[categoria]) || GENERIC_RESOLUTION_ACTIONS;
+  return list.map((a) => a.value);
+}
 
 export const casesRouter = Router();
 
@@ -120,6 +127,8 @@ casesRouter.post('/', async (req, res) => {
         notes: [],
         history: [{ id: uuid(), status, changedBy: req.auth!.name, changedAt: now }],
         photos: [],
+        resolutionAction: null,
+        resolutionNotes: null,
       };
       if (assignedTechnicianId) {
         await updateEstadoCaso(String(created.id), STATUS_TO_ESTADO.assigned);
@@ -167,6 +176,9 @@ casesRouter.post('/', async (req, res) => {
     notes: [],
     history: [{ id: uuid(), status, changedBy: req.auth!.name, changedAt: now }],
     photos: [],
+    categoria: null,
+    resolutionAction: null,
+    resolutionNotes: null,
   };
 
   db.cases.push(newCase);
@@ -269,7 +281,11 @@ casesRouter.patch('/:id/assign', requireRole('admin'), async (req, res) => {
 });
 
 casesRouter.patch('/:id/status', async (req, res) => {
-  const { status } = req.body as { status?: CaseStatus };
+  const { status, resolutionAction, resolutionNotes } = req.body as {
+    status?: CaseStatus;
+    resolutionAction?: string;
+    resolutionNotes?: string;
+  };
   if (!status || !VALID_STATUSES.includes(status)) {
     res.status(400).json({ error: `status debe ser uno de: ${VALID_STATUSES.join(', ')}` });
     return;
@@ -294,12 +310,23 @@ casesRouter.patch('/:id/status', async (req, res) => {
         return;
       }
 
+      if (status === 'resolved') {
+        const valid = validResolutionActionValues(raw.categoria);
+        if (!resolutionAction || !valid.includes(resolutionAction)) {
+          res.status(400).json({ error: 'Debes indicar qué se hizo para resolver el caso (resolutionAction)' });
+          return;
+        }
+      }
+
       await updateEstadoCaso(req.params.id, STATUS_TO_ESTADO[status]);
       raw.estado_caso = STATUS_TO_ESTADO[status];
       const now = new Date().toISOString();
       db.caseOverlays[req.params.id] = {
         ...overlay,
         history: [...overlay.history, { id: uuid(), status, changedBy: req.auth!.name, changedAt: now }],
+        ...(status === 'resolved'
+          ? { resolutionAction: resolutionAction!, resolutionNotes: resolutionNotes || null }
+          : {}),
       };
       await notifyIntranetCaso(raw, db.caseOverlays[req.params.id], db, { save: false });
       saveDb(db);
@@ -322,6 +349,16 @@ casesRouter.patch('/:id/status', async (req, res) => {
   if (!canChangeStatus) {
     res.status(403).json({ error: 'Solo el técnico asignado, un admin o un operador pueden cambiar el estado' });
     return;
+  }
+
+  if (status === 'resolved') {
+    const valid = validResolutionActionValues(found.categoria);
+    if (!resolutionAction || !valid.includes(resolutionAction)) {
+      res.status(400).json({ error: 'Debes indicar qué se hizo para resolver el caso (resolutionAction)' });
+      return;
+    }
+    found.resolutionAction = resolutionAction;
+    found.resolutionNotes = resolutionNotes || null;
   }
 
   found.status = status;

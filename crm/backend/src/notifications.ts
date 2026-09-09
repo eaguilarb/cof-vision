@@ -2,7 +2,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Resend } from 'resend';
 import { getUploadsDir, loadDb, saveDb } from './db.js';
-import { CATEGORIA_LABELS, ESTADO_TO_STATUS, fetchCasos, isIntranetEnabled, type IntranetCaso } from './intranet.js';
+import {
+  CATEGORIA_LABELS,
+  ESTADO_TO_STATUS,
+  fetchCasos,
+  isIntranetEnabled,
+  resolutionActionLabel,
+  type IntranetCaso,
+} from './intranet.js';
 import type { Case, CaseOverlay, CaseStatus, DbShape } from './types.js';
 
 /**
@@ -57,6 +64,8 @@ interface NotifyCaseInfo {
   notes: { authorName: string; text: string }[];
   photos: { filename: string }[];
   uploadsSubdir: string;
+  resolutionActionLabel: string | null;
+  resolutionNotes: string | null;
 }
 
 function fromIntranetCaso(raw: IntranetCaso, overlay: CaseOverlay): NotifyCaseInfo {
@@ -70,6 +79,8 @@ function fromIntranetCaso(raw: IntranetCaso, overlay: CaseOverlay): NotifyCaseIn
     notes: overlay.notes.map((n) => ({ authorName: n.authorName, text: n.text })),
     photos: overlay.photos.map((p) => ({ filename: p.filename })),
     uploadsSubdir: String(raw.id),
+    resolutionActionLabel: resolutionActionLabel(raw.categoria, overlay.resolutionAction),
+    resolutionNotes: overlay.resolutionNotes,
   };
 }
 
@@ -83,6 +94,8 @@ function fromLocalCase(c: Case): NotifyCaseInfo {
     notes: c.notes.map((n) => ({ authorName: n.authorName, text: n.text })),
     photos: c.photos.map((p) => ({ filename: p.filename })),
     uploadsSubdir: c.id,
+    resolutionActionLabel: resolutionActionLabel(c.categoria, c.resolutionAction),
+    resolutionNotes: c.resolutionNotes,
   };
 }
 
@@ -129,7 +142,12 @@ async function sendResolvedEmail(info: NotifyCaseInfo): Promise<void> {
         <p><strong>Terminal:</strong> ${info.terminal}</p>
         <p><strong>${info.title}</strong></p>
         <p><strong>Descripción original:</strong> ${info.description}</p>
-        <p><strong>Detalle de lo realizado:</strong></p>
+        ${
+          info.resolutionActionLabel
+            ? `<p><strong>Qué se hizo:</strong> ${info.resolutionActionLabel}${info.resolutionNotes ? ` — ${info.resolutionNotes}` : ''}</p>`
+            : ''
+        }
+        <p><strong>Notas:</strong></p>
         <ul>${notesHtml}</ul>
         <p>${
           info.photos.length ? `Se adjuntan ${info.photos.length} foto(s).` : 'No se adjuntaron fotos.'
@@ -184,6 +202,8 @@ async function pollIntranetOnce(): Promise<void> {
         notes: [],
         history: [],
         photos: [],
+        resolutionAction: null,
+        resolutionNotes: null,
       };
       await processCaseInfo(fromIntranetCaso(raw, overlay), db, { save: false });
     }

@@ -17,6 +17,7 @@ import {
   useAddCaseNote,
   useAssignCase,
   useCase,
+  useConfig,
   useDeleteCase,
   useDeleteCasePhoto,
   useEquipment,
@@ -40,6 +41,7 @@ export default function CaseDetailScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const caseQuery = useCase(id);
+  const configQuery = useConfig();
   const equipmentQuery = useEquipment();
   const techniciansQuery = useTechnicians();
   const updateStatus = useUpdateCaseStatus();
@@ -53,6 +55,10 @@ export default function CaseDetailScreen() {
   const [noteText, setNoteText] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
+  const [showResolveModal, setShowResolveModal] = useState(false);
+  const [resolveAction, setResolveAction] = useState<string | null>(null);
+  const [resolveNotes, setResolveNotes] = useState('');
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   if (caseQuery.isLoading || !caseQuery.data) {
     return (
@@ -86,12 +92,44 @@ export default function CaseDetailScreen() {
   const resolvedEntry = [...item.history].reverse().find((h) => h.status === 'resolved');
   const closedByLabel = item.status === 'resolved' ? resolvedEntry?.changedBy : undefined;
 
+  const resolutionActions =
+    (item.categoria && configQuery.data?.resolutionActionsByCategoria[item.categoria]) ||
+    configQuery.data?.genericResolutionActions ||
+    [];
+  const resolutionActionLabel = resolutionActions.find((a) => a.value === item.resolutionAction)?.label;
+
   async function handleStatusChange(status: CaseStatus) {
+    if (status === 'resolved') {
+      setResolveAction(null);
+      setResolveNotes('');
+      setResolveError(null);
+      setShowResolveModal(true);
+      return;
+    }
     setActionError(null);
     try {
       await updateStatus.mutateAsync({ id: item.id, status });
     } catch (err) {
       setActionError(apiErrorMessage(err));
+    }
+  }
+
+  async function handleConfirmResolve() {
+    if (!resolveAction) {
+      setResolveError('Selecciona qué se hizo para resolver el caso.');
+      return;
+    }
+    setResolveError(null);
+    try {
+      await updateStatus.mutateAsync({
+        id: item.id,
+        status: 'resolved',
+        resolutionAction: resolveAction,
+        resolutionNotes: resolveNotes.trim() || undefined,
+      });
+      setShowResolveModal(false);
+    } catch (err) {
+      setResolveError(apiErrorMessage(err));
     }
   }
 
@@ -200,6 +238,14 @@ export default function CaseDetailScreen() {
       <Text style={styles.metaLine}>Creado por: {createdByLabel}</Text>
       {closedByLabel && <Text style={styles.metaLine}>Cerrado por: {closedByLabel}</Text>}
 
+      {item.status === 'resolved' && resolutionActionLabel && (
+        <View style={styles.resolutionBox}>
+          <Text style={styles.resolutionTitle}>Detalle de la reparación</Text>
+          <Text style={styles.text}>{resolutionActionLabel}</Text>
+          {item.resolutionNotes && <Text style={styles.text}>{item.resolutionNotes}</Text>}
+        </View>
+      )}
+
       <Text style={styles.sectionTitle}>Descripción</Text>
       <Text style={styles.text}>{item.description}</Text>
 
@@ -251,6 +297,50 @@ export default function CaseDetailScreen() {
         <Pressable style={styles.photoModalBackdrop} onPress={() => setViewingPhotoUrl(null)}>
           {viewingPhotoUrl && <AuthImage uri={viewingPhotoUrl} style={styles.photoModalImage} />}
         </Pressable>
+      </Modal>
+
+      <Modal visible={showResolveModal} transparent animationType="fade" onRequestClose={() => setShowResolveModal(false)}>
+        <View style={styles.resolveModalBackdrop}>
+          <View style={styles.resolveModalCard}>
+            <Text style={styles.resolveModalTitle}>Cerrar caso {item.code}</Text>
+            <Text style={styles.hint}>¿Qué se hizo para resolverlo? Esto queda registrado para el control de repuestos.</Text>
+            <View style={[styles.chipRow, { marginTop: 10 }]}>
+              {resolutionActions.map((a) => (
+                <Pressable
+                  key={a.value}
+                  style={[styles.chip, resolveAction === a.value && styles.chipActive]}
+                  onPress={() => setResolveAction(a.value)}
+                >
+                  <Text style={[styles.chipText, resolveAction === a.value && styles.chipTextActive]}>
+                    {a.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <TextInput
+              style={[styles.noteInput, { marginTop: 12 }]}
+              placeholder="Detalle adicional (opcional)"
+              value={resolveNotes}
+              onChangeText={setResolveNotes}
+              multiline
+            />
+            {resolveError && <Text style={styles.error}>{resolveError}</Text>}
+            <View style={styles.resolveModalActions}>
+              <Pressable style={styles.resolveCancelButton} onPress={() => setShowResolveModal(false)}>
+                <Text style={styles.resolveCancelButtonText}>Cancelar</Text>
+              </Pressable>
+              <Pressable
+                style={styles.resolveConfirmButton}
+                onPress={handleConfirmResolve}
+                disabled={updateStatus.isPending}
+              >
+                <Text style={styles.resolveConfirmButtonText}>
+                  {updateStatus.isPending ? 'Guardando…' : 'Cerrar caso'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
       </Modal>
 
       <Text style={styles.sectionTitle}>Prioridad</Text>
@@ -471,4 +561,47 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   photoModalImage: { width: '100%', height: '80%', resizeMode: 'contain' },
+  resolutionBox: {
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: statusColors.resolved,
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 12,
+    gap: 2,
+  },
+  resolutionTitle: { fontSize: 12, fontWeight: '700', color: statusColors.resolved, marginBottom: 2 },
+  resolveModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  resolveModalCard: {
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    padding: 18,
+    width: '100%',
+    maxWidth: 420,
+  },
+  resolveModalTitle: { fontSize: 16, fontWeight: '800', color: colors.text, marginBottom: 6 },
+  resolveModalActions: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  resolveCancelButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+  },
+  resolveCancelButtonText: { color: colors.text, fontWeight: '700' },
+  resolveConfirmButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 10,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+  },
+  resolveConfirmButtonText: { color: '#fff', fontWeight: '700' },
 });

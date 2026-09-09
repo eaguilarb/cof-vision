@@ -128,6 +128,9 @@ const cases: Case[] = [
       { id: 'h3', status: 'in_progress', changedBy: 'Carlos Pérez', changedAt: '2026-09-06T10:28:00.000Z' },
     ],
     photos: [],
+    categoria: null,
+    resolutionAction: null,
+    resolutionNotes: null,
   },
   {
     id: 'c2',
@@ -150,6 +153,9 @@ const cases: Case[] = [
       { id: 'e09f7862-d30f-452b-8d89-6cb47b3c9138', status: 'in_progress', changedBy: 'Administrador', changedAt: '2026-09-06T22:55:06.147Z' },
     ],
     photos: [],
+    categoria: null,
+    resolutionAction: null,
+    resolutionNotes: null,
   },
   {
     id: 'c3',
@@ -178,6 +184,9 @@ const cases: Case[] = [
       { id: '8c0f90cd-89a2-44d2-8924-ad88ff648daa', status: 'resolved', changedBy: 'Administrador', changedAt: '2026-09-06T22:54:06.950Z' },
     ],
     photos: [],
+    categoria: null,
+    resolutionAction: 'reparado',
+    resolutionNotes: 'Mantenimiento realizado sin novedades.',
   },
 ];
 

@@ -78,6 +78,12 @@ export interface Case {
   notes: CaseNote[];
   history: CaseHistoryEntry[];
   photos: CasePhoto[];
+  /** Categoría de falla (solo modo intranet: disco_duro, dvr, camaras, etc). */
+  categoria: string | null;
+  /** Qué se hizo para resolverlo (ej. "Reemplazo de disco duro") — se pide al cerrar el caso. */
+  resolutionAction: string | null;
+  /** Detalle libre adicional sobre la reparación. */
+  resolutionNotes: string | null;
 }
 
 /**
@@ -103,6 +109,8 @@ export interface CaseOverlay {
   notes: CaseNote[];
   history: CaseHistoryEntry[];
   photos: CasePhoto[];
+  resolutionAction: string | null;
+  resolutionNotes: string | null;
 }
 
 export interface PushToken {

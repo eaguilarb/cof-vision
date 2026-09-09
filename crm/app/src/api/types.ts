@@ -94,6 +94,11 @@ export interface Case {
   daysOpen: number;
   /** Días que tomó resolverlo, o null si todavía no está resuelto. */
   resolvedInDays: number | null;
+  /** Categoría de falla (solo modo intranet). */
+  categoria: string | null;
+  /** Qué se hizo para resolverlo (ej. "reemplazo_disco_duro"), pedido al cerrar el caso. */
+  resolutionAction: string | null;
+  resolutionNotes: string | null;
 }
 
 export const STATUS_LABELS: Record<CaseStatus, string> = {
@@ -115,9 +120,16 @@ export interface Categoria {
   label: string;
 }
 
+export interface ResolutionAction {
+  value: string;
+  label: string;
+}
+
 export interface AppConfig {
   intranetEnabled: boolean;
   categorias: Categoria[];
+  resolutionActionsByCategoria: Record<string, ResolutionAction[]>;
+  genericResolutionActions: ResolutionAction[];
 }
 
 export interface TerminalReport {
@@ -128,9 +140,25 @@ export interface TerminalReport {
   avgDaysToResolve: number | null;
 }
 
+export interface TechnicianReport {
+  technicianId: string;
+  name: string;
+  assigned: number;
+  resolved: number;
+  resolvedPct: number;
+  avgDaysToResolve: number | null;
+}
+
+export interface PartsUsageEntry {
+  label: string;
+  count: number;
+}
+
 export interface ReportSummary {
   generatedAt: string;
   totalCases: number;
   byStatus: Record<CaseStatus, number>;
   byTerminal: TerminalReport[];
+  byTechnician: TechnicianReport[];
+  partsUsage: PartsUsageEntry[];
 }
