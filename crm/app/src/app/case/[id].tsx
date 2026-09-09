@@ -258,6 +258,12 @@ export default function CaseDetailScreen() {
       <Text style={styles.text}>
         {equipment ? `${equipment.name} (${equipment.type})` : 'Cargando…'}
       </Text>
+      {equipment && (equipment.brand || equipment.model) && (
+        <Text style={styles.hint}>
+          Modelo: {[equipment.brand, equipment.model].filter(Boolean).join(' ')}
+          {module === 'glass' ? ' — revisa el modelo antes de retirar el vidrio del stock.' : ''}
+        </Text>
+      )}
 
       {actionError ? <Text style={styles.error}>{actionError}</Text> : null}
 

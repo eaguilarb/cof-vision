@@ -54,6 +54,11 @@ export default function NewCaseScreen() {
     return matches.slice(0, MAX_EQUIPMENT_RESULTS);
   }, [equipmentQuery.data, equipmentSearch, useFixedCategories, requiresFleetEquipment]);
 
+  const selectedEquipment = useMemo(
+    () => equipmentQuery.data?.find((eq) => eq.id === equipmentId),
+    [equipmentQuery.data, equipmentId],
+  );
+
   async function handleSubmit() {
     setError(null);
     if (!description.trim() || !equipmentId) {
@@ -184,6 +189,12 @@ export default function NewCaseScreen() {
             <Text style={styles.hint}>Sin resultados para "{equipmentSearch}".</Text>
           )}
         </View>
+      )}
+      {selectedEquipment && (selectedEquipment.brand || selectedEquipment.model) && (
+        <Text style={styles.hint}>
+          Modelo: {[selectedEquipment.brand, selectedEquipment.model].filter(Boolean).join(' ')}
+          {module === 'glass' ? ' — confirma el modelo antes de retirar el vidrio del stock.' : ''}
+        </Text>
       )}
 
       <Text style={styles.label}>Técnico asignado (opcional)</Text>
