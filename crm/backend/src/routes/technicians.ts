@@ -79,3 +79,26 @@ techniciansRouter.patch('/:id', requireRole('admin'), (req, res) => {
   saveDb(db);
   res.json(technician);
 });
+
+// Elimina al técnico y su cuenta de acceso. Los casos que tenía asignados
+// quedan sin asignar (no se borran).
+techniciansRouter.delete('/:id', requireRole('admin'), (req, res) => {
+  const db = loadDb();
+  const technician = db.technicians.find((t) => t.id === req.params.id);
+  if (!technician) {
+    res.status(404).json({ error: 'Técnico no encontrado' });
+    return;
+  }
+
+  db.technicians = db.technicians.filter((t) => t.id !== req.params.id);
+  db.users = db.users.filter((u) => u.technicianId !== req.params.id);
+  for (const overlay of Object.values(db.caseOverlays)) {
+    if (overlay.assignedTechnicianId === req.params.id) overlay.assignedTechnicianId = null;
+  }
+  for (const c of db.cases) {
+    if (c.assignedTechnicianId === req.params.id) c.assignedTechnicianId = null;
+  }
+
+  saveDb(db);
+  res.status(204).end();
+});

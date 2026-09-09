@@ -4,9 +4,12 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '@/state/auth-context';
 import { getApiBaseUrl, getDefaultApiBaseUrl, setApiBaseUrl } from '@/api/client';
 import { colors } from '@/constants/colors';
+import { ROLE_LABELS } from '@/api/types';
+
+const MODULE_LABELS = { tech: 'Tecnológico', glass: 'Vidrios' } as const;
 
 export default function ProfileScreen() {
-  const { user, logout } = useAuth();
+  const { user, logout, module, resetModule } = useAuth();
   const router = useRouter();
 
   const [serverUrl, setServerUrl] = useState(getApiBaseUrl());
@@ -17,6 +20,11 @@ export default function ProfileScreen() {
   async function handleLogout() {
     await logout();
     router.replace('/login');
+  }
+
+  async function handleChangeModule() {
+    await resetModule();
+    router.replace('/module-select');
   }
 
   async function handleSaveServer() {
@@ -42,7 +50,15 @@ export default function ProfileScreen() {
       <View style={styles.card}>
         <Text style={styles.name}>{user?.name}</Text>
         <Text style={styles.email}>{user?.email}</Text>
-        <Text style={styles.role}>{user?.role === 'admin' ? 'Administrador' : 'Técnico'}</Text>
+        <Text style={styles.role}>{user ? ROLE_LABELS[user.role] : ''}</Text>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>Módulo</Text>
+        <Text style={styles.mono}>{module ? MODULE_LABELS[module] : '—'}</Text>
+        <Pressable style={styles.linkButton} onPress={handleChangeModule}>
+          <Text style={styles.linkButtonText}>Cambiar módulo</Text>
+        </Pressable>
       </View>
 
       <View style={styles.card}>

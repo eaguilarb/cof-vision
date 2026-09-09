@@ -39,7 +39,7 @@ const PRIORITIES = Object.keys(PRIORITY_LABELS) as CasePriority[];
 export default function CaseDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, module } = useAuth();
   const caseQuery = useCase(id);
   const configQuery = useConfig();
   const equipmentQuery = useEquipment();
@@ -93,9 +93,11 @@ export default function CaseDetailScreen() {
   const closedByLabel = item.status === 'resolved' ? resolvedEntry?.changedBy : undefined;
 
   const resolutionActions =
-    (item.categoria && configQuery.data?.resolutionActionsByCategoria[item.categoria]) ||
-    configQuery.data?.genericResolutionActions ||
-    [];
+    module === 'glass'
+      ? configQuery.data?.glassResolutionActions ?? []
+      : (item.categoria && configQuery.data?.resolutionActionsByCategoria[item.categoria]) ||
+        configQuery.data?.genericResolutionActions ||
+        [];
   const resolutionActionLabel = resolutionActions.find((a) => a.value === item.resolutionAction)?.label;
 
   async function handleStatusChange(status: CaseStatus) {

@@ -8,14 +8,17 @@ function TabIcon({ symbol }: { symbol: string }) {
 }
 
 export default function TabsLayout() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, module } = useAuth();
 
   if (!isLoading && !user) {
     return <Redirect href="/login" />;
   }
+  if (!isLoading && !module) {
+    return <Redirect href="/module-select" />;
+  }
 
   const isAdmin = user?.role === 'admin';
-  const canSeeReports = user?.role === 'admin' || user?.role === 'operator';
+  const canSeeReports = (user?.role === 'admin' || user?.role === 'operator') && module === 'tech';
 
   return (
     <Tabs

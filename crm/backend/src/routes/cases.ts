@@ -16,6 +16,7 @@ import {
   deleteCaso,
   fetchCasos,
   isIntranetEnabled,
+  isValidPpu,
   updateEstadoCaso,
 } from '../intranet.js';
 
@@ -117,6 +118,10 @@ casesRouter.post('/', async (req, res) => {
       return;
     }
     try {
+      if (!(await isValidPpu(equipmentId))) {
+        res.status(400).json({ error: `La patente ${equipmentId} no existe en la flota` });
+        return;
+      }
       const created = await createCaso({ ppu: equipmentId, categoria, descripcion: description });
       const db = loadDb();
       const now = new Date().toISOString();

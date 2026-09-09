@@ -141,4 +141,11 @@ export interface DbShape {
   caseOverlays: Record<string, CaseOverlay>;
   pushTokens: PushToken[];
   notifyState: NotifyState;
+  /**
+   * Casos del módulo "Vidrios" — siempre locales a este CRM (la intranet
+   * real no tiene un módulo de vidrios), pero validados contra la flota
+   * real al crearse. Mismo modelo de datos que `cases`.
+   */
+  glassCases: Case[];
+  glassCaseSequence: number;
 }

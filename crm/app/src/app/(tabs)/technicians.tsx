@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -9,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useTechnicians } from '@/api/hooks';
+import { useDeleteTechnician, useTechnicians } from '@/api/hooks';
 import { api, apiErrorMessage } from '@/api/client';
 import { colors } from '@/constants/colors';
 import type { Technician } from '@/api/types';
@@ -22,6 +24,7 @@ export default function TechniciansScreen() {
       (await api.post<Technician>('/technicians', input)).data,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['technicians'] }),
   });
+  const deleteTechnician = useDeleteTechnician();
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
@@ -43,6 +46,27 @@ export default function TechniciansScreen() {
       setPassword('');
       setSpecialty('');
       setShowForm(false);
+    } catch (err) {
+      setError(apiErrorMessage(err));
+    }
+  }
+
+  async function handleDelete(technician: Technician) {
+    const message = `¿Eliminar a ${technician.name}? Sus casos asignados quedarán sin asignar.`;
+    const confirmed =
+      Platform.OS === 'web'
+        ? window.confirm(message)
+        : await new Promise<boolean>((resolve) => {
+            Alert.alert('Eliminar técnico', message, [
+              { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Eliminar', style: 'destructive', onPress: () => resolve(true) },
+            ]);
+          });
+    if (!confirmed) return;
+
+    setError(null);
+    try {
+      await deleteTechnician.mutateAsync(technician.id);
     } catch (err) {
       setError(apiErrorMessage(err));
     }
@@ -98,14 +122,23 @@ export default function TechniciansScreen() {
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={<Text style={styles.empty}>Aún no hay técnicos registrados.</Text>}
           renderItem={({ item }) => (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>{item.name}</Text>
-              <Text style={styles.cardSubtitle}>{item.email}</Text>
-              {item.specialty ? <Text style={styles.cardMeta}>{item.specialty}</Text> : null}
-              {item.phone ? <Text style={styles.cardMeta}>{item.phone}</Text> : null}
-              <Text style={[styles.cardMeta, { color: item.active ? colors.success : colors.danger }]}>
-                {item.active ? 'Activo' : 'Inactivo'}
-              </Text>
+            <View style={[styles.card, styles.cardRow]}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardTitle}>{item.name}</Text>
+                <Text style={styles.cardSubtitle}>{item.email}</Text>
+                {item.specialty ? <Text style={styles.cardMeta}>{item.specialty}</Text> : null}
+                {item.phone ? <Text style={styles.cardMeta}>{item.phone}</Text> : null}
+                <Text style={[styles.cardMeta, { color: item.active ? colors.success : colors.danger }]}>
+                  {item.active ? 'Activo' : 'Inactivo'}
+                </Text>
+              </View>
+              <Pressable
+                style={styles.deleteButton}
+                onPress={() => handleDelete(item)}
+                disabled={deleteTechnician.isPending}
+              >
+                <Text style={styles.deleteButtonText}>Eliminar</Text>
+              </Pressable>
             </View>
           )}
         />
@@ -171,4 +204,13 @@ const styles = StyleSheet.create({
   cardSubtitle: { fontSize: 13, color: colors.textMuted },
   cardMeta: { fontSize: 12, color: colors.textMuted },
   empty: { textAlign: 'center', color: colors.textMuted, marginTop: 40 },
+  cardRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  deleteButton: {
+    borderWidth: 1,
+    borderColor: colors.danger,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  deleteButtonText: { color: colors.danger, fontSize: 12, fontWeight: '700' },
 });

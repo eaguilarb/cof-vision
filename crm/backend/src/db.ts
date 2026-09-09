@@ -32,6 +32,8 @@ const empty: DbShape = {
   cases: [],
   caseSequence: 0,
   caseOverlays: {},
+  glassCases: [],
+  glassCaseSequence: 0,
   pushTokens: [],
   // En modo local/demo no hay riesgo de "avalancha" de casos preexistentes
   // (a diferencia de la intranet real, con cientos), así que arranca
@@ -53,6 +55,11 @@ export function loadDb(): DbShape {
     overlay.photos = overlay.photos || [];
   }
   for (const c of db.cases) {
+    c.photos = c.photos || [];
+  }
+  db.glassCases = db.glassCases || [];
+  db.glassCaseSequence = db.glassCaseSequence || 0;
+  for (const c of db.glassCases) {
     c.photos = c.photos || [];
   }
   db.pushTokens = db.pushTokens || [];

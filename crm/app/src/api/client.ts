@@ -49,8 +49,41 @@ export function getAuthHeaders(): Record<string, string> {
   return authToken ? { Authorization: `Bearer ${authToken}` } : {};
 }
 
+/**
+ * Módulo activo: "tech" (equipamiento tecnológico, el CRM original) o
+ * "glass" (vidrios) — mismo backend, distinta colección de casos
+ * (/cases vs /glass-cases). Se elige una vez tras el login (ver
+ * app/module-select.tsx) y se recuerda en el dispositivo.
+ */
+export type AppModule = 'tech' | 'glass';
+const MODULE_STORAGE_KEY = 'cof-crm.module';
+let currentModule: AppModule | null = null;
+
+export function getModule(): AppModule | null {
+  return currentModule;
+}
+
+export async function setModule(module: AppModule | null): Promise<void> {
+  currentModule = module;
+  if (module) await AsyncStorage.setItem(MODULE_STORAGE_KEY, module);
+  else await AsyncStorage.removeItem(MODULE_STORAGE_KEY);
+}
+
+export async function loadStoredModule(): Promise<void> {
+  try {
+    const stored = await AsyncStorage.getItem(MODULE_STORAGE_KEY);
+    if (stored === 'tech' || stored === 'glass') currentModule = stored;
+  } catch {
+    // Sin storage disponible: se pedirá elegir de nuevo.
+  }
+}
+
+export function casesBasePath(): string {
+  return getModule() === 'glass' ? '/glass-cases' : '/cases';
+}
+
 export function getCasePhotoUrl(caseId: string, photoId: string): string {
-  return `${getApiBaseUrl()}/cases/${caseId}/photos/${photoId}`;
+  return `${getApiBaseUrl()}${casesBasePath()}/${caseId}/photos/${photoId}`;
 }
 
 api.interceptors.request.use((config) => {

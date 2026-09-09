@@ -12,6 +12,7 @@ import { useRouter } from 'expo-router';
 import { useConfig, useCreateCase, useEquipment, useTechnicians } from '@/api/hooks';
 import { apiErrorMessage } from '@/api/client';
 import { PRIORITY_LABELS, type CasePriority } from '@/api/types';
+import { useAuth } from '@/state/auth-context';
 import { colors } from '@/constants/colors';
 
 const PRIORITIES = Object.keys(PRIORITY_LABELS) as CasePriority[];
@@ -19,12 +20,18 @@ const MAX_EQUIPMENT_RESULTS = 25;
 
 export default function NewCaseScreen() {
   const router = useRouter();
+  const { module } = useAuth();
   const configQuery = useConfig();
   const equipmentQuery = useEquipment();
   const techniciansQuery = useTechnicians();
   const createCase = useCreateCase();
 
   const intranetEnabled = configQuery.data?.intranetEnabled ?? false;
+  // El módulo Vidrios siempre usa categoría fija + patente (no hay modo
+  // "local/demo" para vidrios: depende de la flota real).
+  const useFixedCategories = module === 'glass' || intranetEnabled;
+  const categoriaOptions =
+    module === 'glass' ? (configQuery.data?.glassCategorias ?? []) : (configQuery.data?.categorias ?? []);
 
   const [title, setTitle] = useState('');
   const [clientName, setClientName] = useState('');
@@ -36,16 +43,16 @@ export default function NewCaseScreen() {
   const [technicianId, setTechnicianId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const requiresFleetEquipment = categoria === 'wifi' || categoria === 'camaras';
+  const requiresFleetEquipment = module === 'tech' && (categoria === 'wifi' || categoria === 'camaras');
 
   const filteredEquipment = useMemo(() => {
     const all = equipmentQuery.data ?? [];
-    if (!intranetEnabled) return all;
+    if (!useFixedCategories) return all;
     const eligible = requiresFleetEquipment ? all.filter((eq) => eq.estandar !== 'TS') : all;
     const query = equipmentSearch.trim().toLowerCase();
     const matches = query ? eligible.filter((eq) => eq.name.toLowerCase().includes(query)) : eligible;
     return matches.slice(0, MAX_EQUIPMENT_RESULTS);
-  }, [equipmentQuery.data, equipmentSearch, intranetEnabled, requiresFleetEquipment]);
+  }, [equipmentQuery.data, equipmentSearch, useFixedCategories, requiresFleetEquipment]);
 
   async function handleSubmit() {
     setError(null);
@@ -53,11 +60,11 @@ export default function NewCaseScreen() {
       setError('Descripción y equipo son requeridos');
       return;
     }
-    if (intranetEnabled && !categoria) {
+    if (useFixedCategories && !categoria) {
       setError('Selecciona una categoría');
       return;
     }
-    if (!intranetEnabled && (!title.trim() || !clientName.trim())) {
+    if (!useFixedCategories && (!title.trim() || !clientName.trim())) {
       setError('Título y cliente son requeridos');
       return;
     }
@@ -68,7 +75,7 @@ export default function NewCaseScreen() {
         priority,
         equipmentId,
         assignedTechnicianId: technicianId,
-        ...(intranetEnabled ? { categoria: categoria! } : { title, clientName }),
+        ...(useFixedCategories ? { categoria: categoria! } : { title, clientName }),
       });
       router.replace(`/case/${created.id}`);
     } catch (err) {
@@ -78,18 +85,18 @@ export default function NewCaseScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {!intranetEnabled && (
+      {!useFixedCategories && (
         <>
           <Text style={styles.label}>Título</Text>
           <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Resumen del problema" />
         </>
       )}
 
-      {intranetEnabled && (
+      {useFixedCategories && (
         <>
           <Text style={styles.label}>Categoría</Text>
           <View style={styles.chipRow}>
-            {(configQuery.data?.categorias ?? []).map((cat) => (
+            {categoriaOptions.map((cat) => (
               <Pressable
                 key={cat.value}
                 style={[styles.chip, categoria === cat.value && styles.chipActive]}
@@ -113,7 +120,7 @@ export default function NewCaseScreen() {
         multiline
       />
 
-      {!intranetEnabled && (
+      {!useFixedCategories && (
         <>
           <Text style={styles.label}>Cliente / área</Text>
           <TextInput
@@ -140,13 +147,13 @@ export default function NewCaseScreen() {
         ))}
       </View>
 
-      <Text style={styles.label}>{intranetEnabled ? 'Bus (patente)' : 'Equipo'}</Text>
-      {intranetEnabled && requiresFleetEquipment && (
+      <Text style={styles.label}>{useFixedCategories ? 'Bus (patente)' : 'Equipo'}</Text>
+      {requiresFleetEquipment && (
         <Text style={styles.hint}>
           Los buses estándar TS no tienen wifi ni cámaras — no aparecen en esta lista.
         </Text>
       )}
-      {intranetEnabled && (
+      {useFixedCategories && (
         <TextInput
           style={[styles.input, { marginBottom: 8 }]}
           value={equipmentSearch}
@@ -170,10 +177,10 @@ export default function NewCaseScreen() {
               </Text>
             </Pressable>
           ))}
-          {filteredEquipment.length === 0 && !intranetEnabled && (
+          {filteredEquipment.length === 0 && !useFixedCategories && (
             <Text style={styles.hint}>Registra un equipo primero en la pestaña "Equipos".</Text>
           )}
-          {filteredEquipment.length === 0 && intranetEnabled && (
+          {filteredEquipment.length === 0 && useFixedCategories && (
             <Text style={styles.hint}>Sin resultados para "{equipmentSearch}".</Text>
           )}
         </View>

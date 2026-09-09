@@ -111,6 +111,12 @@ export async function fetchFlota(): Promise<IntranetBus[]> {
   return data.flota;
 }
 
+/** Confirma que una patente existe en la flota real antes de crear un caso. */
+export async function isValidPpu(ppu: string): Promise<boolean> {
+  const flota = await fetchFlota();
+  return flota.some((b) => b.ppu === ppu);
+}
+
 export async function updateEstadoCaso(id: string, estado_caso: string): Promise<void> {
   const res = await intranetFetch(`/api/problemas-tecnicos/${id}`, {
     method: 'PATCH',

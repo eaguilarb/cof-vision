@@ -130,6 +130,8 @@ export interface AppConfig {
   categorias: Categoria[];
   resolutionActionsByCategoria: Record<string, ResolutionAction[]>;
   genericResolutionActions: ResolutionAction[];
+  glassCategorias: Categoria[];
+  glassResolutionActions: ResolutionAction[];
 }
 
 export interface TerminalReport {

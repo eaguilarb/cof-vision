@@ -4,7 +4,7 @@ import { useAuth } from '@/state/auth-context';
 import { colors } from '@/constants/colors';
 
 export default function Index() {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, module } = useAuth();
 
   if (isLoading) {
     return (
@@ -14,7 +14,9 @@ export default function Index() {
     );
   }
 
-  return <Redirect href={user ? '/(tabs)' : '/login'} />;
+  if (!user) return <Redirect href="/login" />;
+  if (!module) return <Redirect href="/module-select" />;
+  return <Redirect href="/(tabs)" />;
 }
 
 const styles = StyleSheet.create({

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Platform } from 'react-native';
-import { api } from './client';
+import { api, casesBasePath } from './client';
 import type {
   AppConfig,
   AppUser,
@@ -26,6 +26,14 @@ export function useTechnicians() {
   return useQuery({
     queryKey: ['technicians'],
     queryFn: async () => (await api.get<Technician[]>('/technicians')).data,
+  });
+}
+
+export function useDeleteTechnician() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => api.delete(`/technicians/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['technicians'] }),
   });
 }
 
@@ -58,11 +66,12 @@ export interface CaseFilters {
 }
 
 export function useCases(filters: CaseFilters = {}) {
+  const base = casesBasePath();
   return useQuery({
-    queryKey: ['cases', filters],
+    queryKey: [base, 'list', filters],
     queryFn: async () =>
       (
-        await api.get<Case[]>('/cases', {
+        await api.get<Case[]>(base, {
           params: {
             status: filters.status,
             mine: filters.mine ? 'true' : undefined,
@@ -73,53 +82,58 @@ export function useCases(filters: CaseFilters = {}) {
 }
 
 export function useCase(id: string | undefined) {
+  const base = casesBasePath();
   return useQuery({
-    queryKey: ['cases', id],
-    queryFn: async () => (await api.get<Case>(`/cases/${id}`)).data,
+    queryKey: [base, id],
+    queryFn: async () => (await api.get<Case>(`${base}/${id}`)).data,
     enabled: !!id,
   });
 }
 
 export function useDeleteCase() {
   const queryClient = useQueryClient();
+  const base = casesBasePath();
   return useMutation({
-    mutationFn: async (id: string) => api.delete(`/cases/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cases'] }),
+    mutationFn: async (id: string) => api.delete(`${base}/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [base] }),
   });
 }
 
 export function useCreateCase() {
   const queryClient = useQueryClient();
+  const base = casesBasePath();
   return useMutation({
     mutationFn: async (input: {
       description: string;
       equipmentId: string;
       priority: CasePriority;
       assignedTechnicianId?: string | null;
-      // Modo intranet real: categoría fija en vez de título libre.
+      // Modo intranet real / módulo Vidrios: categoría fija en vez de título libre.
       categoria?: string;
       // Modo local/demo (sin intranet conectada).
       title?: string;
       clientName?: string;
-    }) => (await api.post<Case>('/cases', input)).data,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['cases'] }),
+    }) => (await api.post<Case>(base, input)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: [base] }),
   });
 }
 
 export function useAssignCase() {
   const queryClient = useQueryClient();
+  const base = casesBasePath();
   return useMutation({
     mutationFn: async ({ id, technicianId }: { id: string; technicianId: string | null }) =>
-      (await api.patch<Case>(`/cases/${id}/assign`, { technicianId })).data,
+      (await api.patch<Case>(`${base}/${id}/assign`, { technicianId })).data,
     onSuccess: (updated) => {
-      queryClient.invalidateQueries({ queryKey: ['cases'] });
-      queryClient.setQueryData(['cases', updated.id], updated);
+      queryClient.invalidateQueries({ queryKey: [base] });
+      queryClient.setQueryData([base, updated.id], updated);
     },
   });
 }
 
 export function useUpdateCaseStatus() {
   const queryClient = useQueryClient();
+  const base = casesBasePath();
   return useMutation({
     mutationFn: async ({
       id,
@@ -131,39 +145,42 @@ export function useUpdateCaseStatus() {
       status: CaseStatus;
       resolutionAction?: string;
       resolutionNotes?: string;
-    }) => (await api.patch<Case>(`/cases/${id}/status`, { status, resolutionAction, resolutionNotes })).data,
+    }) => (await api.patch<Case>(`${base}/${id}/status`, { status, resolutionAction, resolutionNotes })).data,
     onSuccess: (updated) => {
-      queryClient.invalidateQueries({ queryKey: ['cases'] });
-      queryClient.setQueryData(['cases', updated.id], updated);
+      queryClient.invalidateQueries({ queryKey: [base] });
+      queryClient.setQueryData([base, updated.id], updated);
     },
   });
 }
 
 export function useUpdateCasePriority() {
   const queryClient = useQueryClient();
+  const base = casesBasePath();
   return useMutation({
     mutationFn: async ({ id, priority }: { id: string; priority: CasePriority }) =>
-      (await api.patch<Case>(`/cases/${id}/priority`, { priority })).data,
+      (await api.patch<Case>(`${base}/${id}/priority`, { priority })).data,
     onSuccess: (updated) => {
-      queryClient.invalidateQueries({ queryKey: ['cases'] });
-      queryClient.setQueryData(['cases', updated.id], updated);
+      queryClient.invalidateQueries({ queryKey: [base] });
+      queryClient.setQueryData([base, updated.id], updated);
     },
   });
 }
 
 export function useAddCaseNote() {
   const queryClient = useQueryClient();
+  const base = casesBasePath();
   return useMutation({
     mutationFn: async ({ id, text }: { id: string; text: string }) =>
-      (await api.post(`/cases/${id}/notes`, { text })).data,
+      (await api.post(`${base}/${id}/notes`, { text })).data,
     onSuccess: (_note, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['cases', variables.id] });
+      queryClient.invalidateQueries({ queryKey: [base, variables.id] });
     },
   });
 }
 
 export function useUploadCasePhoto() {
   const queryClient = useQueryClient();
+  const base = casesBasePath();
   return useMutation({
     mutationFn: async ({
       id,
@@ -193,10 +210,10 @@ export function useUploadCasePhoto() {
       // networking layer set multipart/form-data with the right boundary
       // automatically from the FormData body — setting it ourselves
       // without a boundary breaks the request.
-      return (await api.post<CasePhoto>(`/cases/${id}/photos`, formData)).data;
+      return (await api.post<CasePhoto>(`${base}/${id}/photos`, formData)).data;
     },
     onSuccess: (_photo, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['cases', variables.id] });
+      queryClient.invalidateQueries({ queryKey: [base, variables.id] });
     },
   });
 }
@@ -235,11 +252,12 @@ export function useDeleteUser() {
 
 export function useDeleteCasePhoto() {
   const queryClient = useQueryClient();
+  const base = casesBasePath();
   return useMutation({
     mutationFn: async ({ id, photoId }: { id: string; photoId: string }) =>
-      api.delete(`/cases/${id}/photos/${photoId}`),
+      api.delete(`${base}/${id}/photos/${photoId}`),
     onSuccess: (_res, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['cases', variables.id] });
+      queryClient.invalidateQueries({ queryKey: [base, variables.id] });
     },
   });
 }
