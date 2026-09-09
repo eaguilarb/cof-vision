@@ -258,7 +258,8 @@ export default function NewCaseScreen() {
       {useFixedCategories && (
         <>
           <Text style={styles.hint}>
-            Encuadra bien de cerca solo la patente (no el bus completo) para que la detecte mejor.
+            Mejor resultado con una foto de atrás o de costado donde se vea el número de flota
+            pintado en grande (ej. "SP BG 27"). Evita fondos con otros buses o estructuras detrás.
           </Text>
           <View style={styles.scanRow}>
             <Pressable
