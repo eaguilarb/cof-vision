@@ -18,7 +18,7 @@ export default function TabsLayout() {
   }
 
   const isAdmin = user?.role === 'admin';
-  const canSeeReports = (user?.role === 'admin' || user?.role === 'operator') && module === 'tech';
+  const canSeeReports = user?.role === 'admin' || user?.role === 'operator';
 
   return (
     <Tabs

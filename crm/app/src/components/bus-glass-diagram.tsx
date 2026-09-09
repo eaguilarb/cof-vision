@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '@/constants/colors';
 
 export type BusBodyType = 'estandar' | 'articulado';
@@ -10,37 +10,42 @@ export interface GlassZone {
   label: string;
 }
 
-interface ZoneSpec extends GlassZone {
-  kind: 'windshield' | 'window' | 'door' | 'rear' | 'joint';
-  flex: number;
+interface ZoneRect extends GlassZone {
+  left: number;
+  width: number;
 }
 
-const STANDARD_ZONES: ZoneSpec[] = [
-  { id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas delantero', kind: 'windshield', flex: 1.1 },
-  { id: 'puerta1', categoria: 'vidrio_puertas', label: 'Vidrio puerta delantera', kind: 'door', flex: 0.6 },
-  { id: 'lateral1', categoria: 'vidrio_lateral', label: 'Vidrio lateral delantero', kind: 'window', flex: 1.3 },
-  { id: 'lateral2', categoria: 'vidrio_lateral', label: 'Vidrio lateral medio', kind: 'window', flex: 1.3 },
-  { id: 'puerta2', categoria: 'vidrio_puertas', label: 'Vidrio puerta trasera', kind: 'door', flex: 0.6 },
-  { id: 'lateral3', categoria: 'vidrio_lateral', label: 'Vidrio lateral trasero', kind: 'window', flex: 1.3 },
-  { id: 'luna_trasera', categoria: 'luna_trasera', label: 'Luna trasera', kind: 'rear', flex: 0.9 },
+// Posiciones en % sobre la ficha técnica oficial (RED Metropolitana de
+// Movilidad) — imágenes reales recortadas, no un dibujo aproximado. Las
+// franjas cubren el área de ventanas/puertas de cada imagen; la PPU
+// impresa en la imagen ("FL XV 13") se tapa y se reemplaza por la patente
+// real del bus seleccionado.
+const WINDOW_BAND = { top: 10, height: 48 };
+
+const STANDARD_ZONES: ZoneRect[] = [
+  { id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas delantero', left: 0, width: 9 },
+  { id: 'lateral1', categoria: 'vidrio_lateral', label: 'Vidrio lateral delantero', left: 9, width: 14 },
+  { id: 'puerta1', categoria: 'vidrio_puertas', label: 'Vidrio puerta delantera', left: 23, width: 7 },
+  { id: 'lateral2', categoria: 'vidrio_lateral', label: 'Vidrio lateral medio', left: 30, width: 40 },
+  { id: 'puerta2', categoria: 'vidrio_puertas', label: 'Vidrio puerta trasera', left: 70, width: 22 },
 ];
 
-const ARTICULATED_ZONES: ZoneSpec[] = [
-  { id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas delantero', kind: 'windshield', flex: 1.0 },
-  { id: 'puerta1', categoria: 'vidrio_puertas', label: 'Vidrio puerta delantera', kind: 'door', flex: 0.55 },
-  { id: 'lateral1', categoria: 'vidrio_lateral', label: 'Vidrio lateral delantero', kind: 'window', flex: 1.05 },
-  { id: 'lateral2', categoria: 'vidrio_lateral', label: 'Vidrio lateral medio (1er cuerpo)', kind: 'window', flex: 1.05 },
-  { id: 'puerta2', categoria: 'vidrio_puertas', label: 'Vidrio puerta media', kind: 'door', flex: 0.55 },
-  { id: 'fuelle', categoria: 'otro', label: 'Fuelle (no es vidrio)', kind: 'joint', flex: 0.55 },
-  { id: 'lateral3', categoria: 'vidrio_lateral', label: 'Vidrio lateral medio (2do cuerpo)', kind: 'window', flex: 1.05 },
-  { id: 'puerta3', categoria: 'vidrio_puertas', label: 'Vidrio puerta trasera', kind: 'door', flex: 0.55 },
-  { id: 'lateral4', categoria: 'vidrio_lateral', label: 'Vidrio lateral trasero', kind: 'window', flex: 1.05 },
-  { id: 'luna_trasera', categoria: 'luna_trasera', label: 'Luna trasera', kind: 'rear', flex: 0.8 },
+const ARTICULATED_ZONES: ZoneRect[] = [
+  { id: 'lateral1', categoria: 'vidrio_lateral', label: 'Vidrio lateral delantero (1er cuerpo)', left: 0, width: 20 },
+  { id: 'puerta1', categoria: 'vidrio_puertas', label: 'Vidrio puerta delantera', left: 20, width: 8 },
+  { id: 'lateral2', categoria: 'vidrio_lateral', label: 'Vidrio lateral medio (1er cuerpo)', left: 37, width: 23 },
+  { id: 'lateral3', categoria: 'vidrio_lateral', label: 'Vidrio lateral medio (2do cuerpo)', left: 60, width: 23 },
+  { id: 'puerta2', categoria: 'vidrio_puertas', label: 'Vidrio puerta trasera', left: 83, width: 15 },
 ];
 
-const WHEEL_OFFSETS: Record<BusBodyType, `${number}%`[]> = {
-  estandar: ['14%', '80%'],
-  articulado: ['10%', '46%', '86%'],
+const PPU_MASK: Record<BusBodyType, { left: number; top: number; width: number; height: number }> = {
+  estandar: { left: 5, top: 64, width: 23, height: 10 },
+  articulado: { left: 29.5, top: 61, width: 10, height: 10.5 },
+};
+
+const IMAGES: Record<BusBodyType, { source: number; aspectRatio: number }> = {
+  estandar: { source: require('../../assets/images/bus-diagrams/bus-standard.png'), aspectRatio: 769 / 202 },
+  articulado: { source: require('../../assets/images/bus-diagrams/bus-articulated.png'), aspectRatio: 1118 / 190 },
 };
 
 export function BusGlassDiagram({
@@ -54,9 +59,10 @@ export function BusGlassDiagram({
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const zones = busType === 'articulado' ? ARTICULATED_ZONES : STANDARD_ZONES;
+  const image = IMAGES[busType];
+  const mask = PPU_MASK[busType];
 
-  function handlePress(zone: ZoneSpec) {
-    if (zone.kind === 'joint') return;
+  function handlePress(zone: ZoneRect) {
     setSelectedId(zone.id);
     onSelectZone({ id: zone.id, categoria: zone.categoria, label: zone.label });
   }
@@ -80,51 +86,44 @@ export function BusGlassDiagram({
         ))}
       </View>
 
-      <View style={styles.busShell}>
-        <View style={styles.roofCap} />
+      <View style={[styles.busShell, { aspectRatio: image.aspectRatio }]}>
+        <Image
+          source={image.source}
+          style={[StyleSheet.absoluteFill, { width: '100%', height: '100%' }]}
+          resizeMode="contain"
+        />
 
-        <View style={styles.windowBand}>
-          {zones.map((zone) => (
-            <Pressable
-              key={zone.id}
-              disabled={zone.kind === 'joint'}
-              onPress={() => handlePress(zone)}
-              style={[
-                styles.segment,
-                { flex: zone.flex },
-                zone.kind === 'windshield' && styles.windshieldSegment,
-                zone.kind === 'rear' && styles.rearSegment,
-                zone.kind === 'door' && styles.doorSegment,
-                zone.kind === 'window' && styles.windowSegment,
-                zone.kind === 'joint' && styles.jointSegment,
-                selectedId === zone.id && styles.segmentSelected,
-              ]}
-            >
-              {zone.kind === 'door' && <View style={styles.doorSeam} />}
-              {zone.kind === 'joint' && (
-                <>
-                  <View style={styles.fuelleStripe} />
-                  <View style={styles.fuelleStripe} />
-                  <View style={styles.fuelleStripe} />
-                  <View style={styles.fuelleStripe} />
-                </>
-              )}
-            </Pressable>
-          ))}
-        </View>
+        {zones.map((zone) => (
+          <Pressable
+            key={zone.id}
+            onPress={() => handlePress(zone)}
+            style={[
+              styles.zone,
+              {
+                left: `${zone.left}%`,
+                width: `${zone.width}%`,
+                top: `${WINDOW_BAND.top}%`,
+                height: `${WINDOW_BAND.height}%`,
+              },
+              selectedId === zone.id && styles.zoneSelected,
+            ]}
+          />
+        ))}
 
-        <View style={styles.lowerBody}>
-          <Text style={styles.ppuText} numberOfLines={1}>
-            {ppu || '— selecciona un bus —'}
+        <View
+          style={[
+            styles.ppuMask,
+            {
+              left: `${mask.left}%`,
+              top: `${mask.top}%`,
+              width: `${mask.width}%`,
+              height: `${mask.height}%`,
+            },
+          ]}
+        >
+          <Text style={styles.ppuText} numberOfLines={1} adjustsFontSizeToFit>
+            {ppu || '—'}
           </Text>
-        </View>
-
-        <View style={styles.wheelRow}>
-          {WHEEL_OFFSETS[busType].map((left, i) => (
-            <View key={i} style={[styles.wheel, { left }]}>
-              <View style={styles.wheelHub} />
-            </View>
-          ))}
         </View>
       </View>
 
@@ -143,7 +142,7 @@ export function BusGlassDiagram({
   );
 }
 
-const RED = '#d0192b';
+const PLATE_RED = '#bc2c34';
 
 const styles = StyleSheet.create({
   wrap: { gap: 8 },
@@ -160,70 +159,21 @@ const styles = StyleSheet.create({
   typeChipText: { fontSize: 12, color: colors.text, fontWeight: '600' },
   typeChipTextActive: { color: colors.primaryText },
   busShell: {
-    backgroundColor: colors.surface,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingBottom: 20,
-    paddingHorizontal: 10,
-    paddingTop: 10,
-    overflow: 'visible',
-  },
-  roofCap: {
-    height: 8,
-    borderTopLeftRadius: 10,
-    borderTopRightRadius: 10,
-    backgroundColor: RED,
-  },
-  windowBand: {
-    flexDirection: 'row',
-    height: 58,
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 10,
     overflow: 'hidden',
-    backgroundColor: '#15181c',
   },
-  segment: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRightWidth: 1,
-    borderRightColor: '#000',
-  },
-  windshieldSegment: { backgroundColor: '#33393f' },
-  rearSegment: { backgroundColor: '#33393f', borderRightWidth: 0 },
-  windowSegment: { backgroundColor: '#33393f' },
-  doorSegment: { backgroundColor: '#4a5157' },
-  jointSegment: {
-    backgroundColor: '#8a8f96',
-    flexDirection: 'row',
-    justifyContent: 'space-evenly',
-    paddingHorizontal: 2,
-  },
-  fuelleStripe: { width: 3, height: '92%', backgroundColor: '#4a4f55', borderRadius: 1 },
-  doorSeam: { width: 2, height: '75%', backgroundColor: '#2b2f33' },
-  segmentSelected: { backgroundColor: colors.primary, opacity: 0.9 },
-  lowerBody: {
-    height: 34,
-    backgroundColor: '#eceef0',
-    borderBottomLeftRadius: 10,
-    borderBottomRightRadius: 10,
-    justifyContent: 'center',
-    paddingHorizontal: 14,
-    borderWidth: 1,
-    borderTopWidth: 0,
-    borderColor: '#c7cbd1',
-  },
-  ppuText: { color: RED, fontWeight: '800', fontSize: 15, letterSpacing: 1 },
-  wheelRow: { height: 0 },
-  wheel: {
+  zone: { position: 'absolute' },
+  zoneSelected: { backgroundColor: 'rgba(37, 99, 235, 0.45)', borderRadius: 4 },
+  ppuMask: {
     position: 'absolute',
-    bottom: -12,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#111',
+    backgroundColor: PLATE_RED,
     alignItems: 'center',
     justifyContent: 'center',
+    borderRadius: 2,
   },
-  wheelHub: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#9aa0a6' },
+  ppuText: { color: '#fff', fontWeight: '800', letterSpacing: 0.5 },
   hint: { fontSize: 11, color: colors.textMuted },
   selectedBadge: {
     alignSelf: 'flex-start',

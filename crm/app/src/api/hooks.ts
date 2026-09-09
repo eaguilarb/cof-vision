@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Platform } from 'react-native';
-import { api, casesBasePath } from './client';
+import { api, casesBasePath, getModule } from './client';
 import type {
   AppConfig,
   AppUser,
@@ -219,10 +219,11 @@ export function useUploadCasePhoto() {
 }
 
 export function useReportSummary(days?: number) {
+  const module = getModule();
   return useQuery({
-    queryKey: ['reports', 'summary', days],
+    queryKey: ['reports', 'summary', module, days],
     queryFn: async () =>
-      (await api.get<ReportSummary>('/reports/summary', { params: { days } })).data,
+      (await api.get<ReportSummary>('/reports/summary', { params: { days, module } })).data,
   });
 }
 

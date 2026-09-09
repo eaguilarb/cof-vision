@@ -5,6 +5,7 @@ import { apiErrorMessage } from '@/api/client';
 import { colors, statusColors } from '@/constants/colors';
 import { STATUS_LABELS, type CaseStatus } from '@/api/types';
 import { downloadExport } from '@/utils/download-export';
+import { useAuth } from '@/state/auth-context';
 
 const STATUS_ORDER = Object.keys(STATUS_LABELS) as CaseStatus[];
 const TERMINAL_ACCENTS = ['#0ea5e9', '#f97316', '#22c55e', '#a855f7', '#ec4899', '#14b8a6', '#eab308', '#ef4444'];
@@ -17,6 +18,8 @@ const RANGE_OPTIONS: { label: string; days: number | undefined }[] = [
 ];
 
 export default function ReportsScreen() {
+  const { module } = useAuth();
+  const partsLabel = module === 'glass' ? 'Vidrios reemplazados/reparados' : 'Repuestos y piezas utilizadas';
   const [days, setDays] = useState<number | undefined>(undefined);
   const summaryQuery = useReportSummary(days);
   const [exporting, setExporting] = useState<'xlsx' | 'pdf' | null>(null);
@@ -36,6 +39,7 @@ export default function ReportsScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <Text style={styles.pageTitle}>{module === 'glass' ? 'Reportes de Vidrios' : 'Reportes técnicos'}</Text>
       <View style={styles.rangeRow}>
         {RANGE_OPTIONS.map((opt) => (
           <Pressable
@@ -53,7 +57,7 @@ export default function ReportsScreen() {
       {summaryQuery.isLoading || !summaryQuery.data ? (
         <ActivityIndicator style={{ marginTop: 40 }} color={colors.primary} />
       ) : (
-        <ReportBody data={summaryQuery.data} />
+        <ReportBody data={summaryQuery.data} partsLabel={partsLabel} />
       )}
 
       <Text style={styles.sectionTitle}>Exportar</Text>
@@ -86,7 +90,13 @@ export default function ReportsScreen() {
   );
 }
 
-function ReportBody({ data }: { data: NonNullable<ReturnType<typeof useReportSummary>['data']> }) {
+function ReportBody({
+  data,
+  partsLabel,
+}: {
+  data: NonNullable<ReturnType<typeof useReportSummary>['data']>;
+  partsLabel: string;
+}) {
   const maxStatusCount = Math.max(1, ...STATUS_ORDER.map((s) => data.byStatus[s]));
   const maxTerminalTotal = Math.max(1, ...data.byTerminal.map((t) => t.total));
   const maxTechAssigned = Math.max(1, ...data.byTechnician.map((t) => t.assigned));
@@ -183,7 +193,7 @@ function ReportBody({ data }: { data: NonNullable<ReturnType<typeof useReportSum
         )}
       </View>
 
-      <Text style={styles.sectionTitle}>Repuestos y piezas utilizadas</Text>
+      <Text style={styles.sectionTitle}>{partsLabel}</Text>
       <View style={styles.card}>
         {data.partsUsage.length === 0 ? (
           <Text style={styles.totalHint}>Aún no hay casos cerrados con detalle de reparación.</Text>
@@ -217,6 +227,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background },
   content: { padding: 16, paddingBottom: 40, gap: 4 },
+  pageTitle: { fontSize: 18, fontWeight: '800', color: colors.text, marginBottom: 10 },
   rangeRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
   rangeChip: {
     paddingHorizontal: 14,

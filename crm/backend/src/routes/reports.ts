@@ -3,9 +3,25 @@ import ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import { loadDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { getAllCases } from '../services/case-service.js';
+import { getAllCases, withLocalAge } from '../services/case-service.js';
 import { CATEGORIA_LABELS, resolutionActionLabel } from '../intranet.js';
-import type { CaseStatus, CaseWithAge } from '../types.js';
+import { GLASS_CATEGORIA_LABELS, glassResolutionActionLabel } from '../glass.js';
+import type { CaseStatus, CaseWithAge, DbShape } from '../types.js';
+
+async function casesForModule(db: DbShape, module: string | undefined): Promise<CaseWithAge[]> {
+  if (module === 'glass') return db.glassCases.map(withLocalAge);
+  return getAllCases(db);
+}
+
+function categoriaLabel(module: string | undefined, categoria: string): string {
+  if (module === 'glass') return GLASS_CATEGORIA_LABELS[categoria] ?? categoria;
+  return CATEGORIA_LABELS[categoria] ?? categoria;
+}
+
+function actionLabel(module: string | undefined, categoria: string | null, action: string | null): string | null {
+  if (module === 'glass') return glassResolutionActionLabel(action);
+  return resolutionActionLabel(categoria, action);
+}
 
 export const reportsRouter = Router();
 
@@ -41,7 +57,8 @@ function applyFilters(
 reportsRouter.get('/summary', async (req, res) => {
   try {
     const db = loadDb();
-    let cases = await getAllCases(db);
+    const module = req.query.module as string | undefined;
+    let cases = await casesForModule(db, module);
 
     const days = Number(req.query.days);
     if (Number.isFinite(days) && days > 0) {
@@ -96,8 +113,8 @@ reportsRouter.get('/summary', async (req, res) => {
       if (c.status === 'resolved' && c.resolutionAction) {
         const groupKey = `${c.categoria ?? 'general'}::${c.resolutionAction}`;
         const label = c.categoria
-          ? `${CATEGORIA_LABELS[c.categoria] ?? c.categoria} — ${resolutionActionLabel(c.categoria, c.resolutionAction)}`
-          : (resolutionActionLabel(null, c.resolutionAction) ?? c.resolutionAction);
+          ? `${categoriaLabel(module, c.categoria)} — ${actionLabel(module, c.categoria, c.resolutionAction)}`
+          : (actionLabel(module, null, c.resolutionAction) ?? c.resolutionAction);
         const p = parts.get(groupKey) ?? { label, count: 0 };
         p.count += 1;
         parts.set(groupKey, p);
@@ -150,7 +167,8 @@ reportsRouter.get('/export', async (req, res) => {
 
   try {
     const db = loadDb();
-    let cases = await getAllCases(db);
+    const module = req.query.module as string | undefined;
+    let cases = await casesForModule(db, module);
     cases = applyFilters(cases, req.query as { status?: string; technicianId?: string; mine?: string }, req.auth);
     cases.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
@@ -188,7 +206,7 @@ reportsRouter.get('/export', async (req, res) => {
           technician: technicianName(c.assignedTechnicianId),
           daysOpen: c.status === 'resolved' ? '' : c.daysOpen,
           resolvedInDays: c.resolvedInDays ?? '',
-          resolutionAction: resolutionActionLabel(c.categoria, c.resolutionAction) ?? '',
+          resolutionAction: actionLabel(module, c.categoria, c.resolutionAction) ?? '',
           createdAt: new Date(c.createdAt).toLocaleString('es-CL'),
           updatedAt: new Date(c.updatedAt).toLocaleString('es-CL'),
           description: c.description,

@@ -21,3 +21,8 @@ export const GLASS_RESOLUTION_ACTIONS: { value: string; label: string }[] = [
   { value: 'vidrio_reparado', label: 'Vidrio reparado/sellado' },
   { value: 'otro', label: 'Otro' },
 ];
+
+export function glassResolutionActionLabel(action: string | null): string | null {
+  if (!action) return null;
+  return GLASS_RESOLUTION_ACTIONS.find((a) => a.value === action)?.label ?? action;
+}
