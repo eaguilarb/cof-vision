@@ -18,6 +18,12 @@ export interface Technician {
   phone?: string;
   specialty?: string;
   active: boolean;
+  /**
+   * Terminales que puede ver/procesar este técnico u "operador" (vidriero
+   * incluido). Vacío o ausente = sin restricción (ve todos los terminales,
+   * comportamiento anterior por compatibilidad con técnicos ya creados).
+   */
+  assignedTerminals?: string[];
 }
 
 export interface Equipment {
@@ -33,6 +39,12 @@ export interface Equipment {
   createdAt: string;
   /** Estándar del bus (solo modo intranet): "RED" tiene wifi/cámaras, "TS" no. */
   estandar?: 'RED' | 'TS';
+  /**
+   * Si el bus tiene algún caso (técnico o de vidrios) abierto/asignado/en
+   * proceso, queda "no operativo" hasta que ese caso se resuelva. Se
+   * calcula al vuelo, no se guarda.
+   */
+  operational?: boolean;
 }
 
 export type CaseStatus = 'open' | 'assigned' | 'in_progress' | 'resolved';

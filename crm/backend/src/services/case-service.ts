@@ -85,3 +85,22 @@ export async function getAllCases(db: DbShape): Promise<CaseWithAge[]> {
   }
   return db.cases.map(withLocalAge);
 }
+
+const OPEN_STATUSES = new Set(['open', 'assigned', 'in_progress']);
+
+/**
+ * IDs de equipo (patente) con al menos un caso abierto/asignado/en proceso,
+ * considerando tanto casos técnicos como de vidrios — un bus se considera
+ * "no operativo" mientras tenga cualquiera de los dos sin resolver.
+ */
+export async function getNonOperationalEquipmentIds(db: DbShape): Promise<Set<string>> {
+  const [techCases, glassCases] = await Promise.all([
+    getAllCases(db),
+    Promise.resolve(db.glassCases.map(withLocalAge)),
+  ]);
+  const nonOperational = new Set<string>();
+  for (const c of [...techCases, ...glassCases]) {
+    if (OPEN_STATUSES.has(c.status)) nonOperational.add(c.equipmentId);
+  }
+  return nonOperational;
+}

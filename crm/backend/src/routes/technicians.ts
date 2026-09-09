@@ -66,16 +66,23 @@ techniciansRouter.patch('/:id', requireRole('admin'), (req, res) => {
     res.status(404).json({ error: 'Técnico no encontrado' });
     return;
   }
-  const { name, phone, specialty, active } = req.body as Partial<{
+  const { name, phone, specialty, active, assignedTerminals, password } = req.body as Partial<{
     name: string;
     phone: string;
     specialty: string;
     active: boolean;
+    assignedTerminals: string[];
+    password: string;
   }>;
   if (name !== undefined) technician.name = name;
   if (phone !== undefined) technician.phone = phone;
   if (specialty !== undefined) technician.specialty = specialty;
   if (active !== undefined) technician.active = active;
+  if (assignedTerminals !== undefined) technician.assignedTerminals = assignedTerminals;
+  if (password) {
+    const user = db.users.find((u) => u.id === technician.userId);
+    if (user) user.passwordHash = bcrypt.hashSync(password, 10);
+  }
   saveDb(db);
   res.json(technician);
 });

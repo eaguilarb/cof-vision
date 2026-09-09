@@ -250,6 +250,41 @@ export function useDeleteUser() {
   });
 }
 
+export function useUpdateUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      ...input
+    }: {
+      id: string;
+      name?: string;
+      role?: Role;
+      password?: string;
+    }) => (await api.patch<AppUser>(`/users/${id}`, input)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
+  });
+}
+
+export function useUpdateTechnician() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      id,
+      ...input
+    }: {
+      id: string;
+      name?: string;
+      phone?: string;
+      specialty?: string;
+      active?: boolean;
+      assignedTerminals?: string[];
+      password?: string;
+    }) => (await api.patch<Technician>(`/technicians/${id}`, input)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['technicians'] }),
+  });
+}
+
 export function useDeleteCasePhoto() {
   const queryClient = useQueryClient();
   const base = casesBasePath();

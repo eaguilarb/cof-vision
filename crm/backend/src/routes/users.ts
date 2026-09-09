@@ -57,6 +57,37 @@ usersRouter.post('/', (req, res) => {
   res.status(201).json(toPublicUser(user));
 });
 
+usersRouter.patch('/:id', (req, res) => {
+  const db = loadDb();
+  const user = db.users.find((u) => u.id === req.params.id);
+  if (!user) {
+    res.status(404).json({ error: 'Usuario no encontrado' });
+    return;
+  }
+  if (user.role === 'technician') {
+    res.status(400).json({ error: 'Para técnicos, edítalos desde la pestaña Técnicos' });
+    return;
+  }
+
+  const { name, role, password } = req.body as Partial<{ name: string; role: Role; password: string }>;
+  if (role !== undefined) {
+    if (role !== 'admin' && role !== 'operator') {
+      res.status(400).json({ error: 'role debe ser admin u operator' });
+      return;
+    }
+    if (user.id === req.auth!.sub && role !== 'admin') {
+      res.status(400).json({ error: 'No puedes quitarte tu propio rol de administrador' });
+      return;
+    }
+    user.role = role;
+  }
+  if (name !== undefined) user.name = name;
+  if (password) user.passwordHash = bcrypt.hashSync(password, 10);
+
+  saveDb(db);
+  res.json(toPublicUser(user));
+});
+
 usersRouter.delete('/:id', (req, res) => {
   if (req.auth!.sub === req.params.id) {
     res.status(400).json({ error: 'No puedes eliminar tu propia cuenta' });

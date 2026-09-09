@@ -6,6 +6,7 @@ import { v4 as uuid } from 'uuid';
 import { getUploadsDir, loadDb, saveDb } from '../db.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { withLocalAge } from '../services/case-service.js';
+import { allowedTerminalsFor } from '../services/terminal-access.js';
 import { GLASS_RESOLUTION_ACTIONS } from '../glass.js';
 import { fetchFlota, isIntranetEnabled } from '../intranet.js';
 import type { Case, CasePhoto, CasePriority, CaseStatus } from '../types.js';
@@ -27,8 +28,12 @@ function applyFilters(
   cases: Case[],
   query: { status?: string; technicianId?: string; mine?: string },
   auth?: { technicianId?: string },
+  allowedTerminals?: string[] | null,
 ): Case[] {
   let result = cases;
+  if (allowedTerminals) {
+    result = result.filter((c) => allowedTerminals.includes(c.clientName));
+  }
   if (query.mine === 'true' && auth?.technicianId) {
     result = result.filter((c) => c.assignedTechnicianId === auth.technicianId);
   } else if (query.technicianId) {
@@ -52,7 +57,8 @@ function mkdirSyncFor(caseId: string) {
 glassCasesRouter.get('/', (req, res) => {
   const query = req.query as { status?: string; technicianId?: string; mine?: string };
   const db = loadDb();
-  let cases = applyFilters(db.glassCases, query, req.auth);
+  const allowedTerminals = allowedTerminalsFor(db, req.auth);
+  let cases = applyFilters(db.glassCases, query, req.auth, allowedTerminals);
   cases = [...cases].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json(cases.map(withLocalAge));
 });
@@ -62,6 +68,11 @@ glassCasesRouter.get('/:id', (req, res) => {
   const found = db.glassCases.find((c) => c.id === req.params.id);
   if (!found) {
     res.status(404).json({ error: 'Caso no encontrado' });
+    return;
+  }
+  const allowedTerminals = allowedTerminalsFor(db, req.auth);
+  if (allowedTerminals && !allowedTerminals.includes(found.clientName)) {
+    res.status(403).json({ error: 'No tienes acceso a ese terminal' });
     return;
   }
   res.json(withLocalAge(found));
@@ -83,6 +94,7 @@ glassCasesRouter.post('/', async (req, res) => {
   }
 
   const db = loadDb();
+  const allowedTerminals = allowedTerminalsFor(db, req.auth);
 
   let terminal = clientName || '—';
   if (isIntranetEnabled()) {
@@ -98,6 +110,11 @@ glassCasesRouter.post('/', async (req, res) => {
       res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
       return;
     }
+  }
+
+  if (allowedTerminals && !allowedTerminals.includes(terminal)) {
+    res.status(403).json({ error: 'No puedes crear casos fuera de tu terminal asignado' });
+    return;
   }
 
   const resolvedPriority: CasePriority = VALID_PRIORITIES.includes(priority as CasePriority)

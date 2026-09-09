@@ -3,6 +3,8 @@ import { v4 as uuid } from 'uuid';
 import { loadDb, saveDb } from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
 import { fetchFlota, isIntranetEnabled, type IntranetBus } from '../intranet.js';
+import { getNonOperationalEquipmentIds } from '../services/case-service.js';
+import { allowedTerminalsFor } from '../services/terminal-access.js';
 import type { Equipment } from '../types.js';
 
 export const equipmentRouter = Router();
@@ -24,19 +26,26 @@ function toEquipment(bus: IntranetBus): Equipment {
   };
 }
 
-equipmentRouter.get('/', async (_req, res) => {
+equipmentRouter.get('/', async (req, res) => {
+  const db = loadDb();
+  const nonOperational = await getNonOperationalEquipmentIds(db);
+  const allowedTerminals = allowedTerminalsFor(db, req.auth);
+
   if (isIntranetEnabled()) {
     try {
       const flota = await fetchFlota();
-      res.json(flota.map(toEquipment));
+      let list = flota.map(toEquipment);
+      if (allowedTerminals) list = list.filter((eq) => allowedTerminals.includes(eq.clientName));
+      res.json(list.map((eq) => ({ ...eq, operational: !nonOperational.has(eq.id) })));
     } catch (err) {
       res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
     }
     return;
   }
 
-  const db = loadDb();
-  res.json(db.equipment);
+  let list = db.equipment;
+  if (allowedTerminals) list = list.filter((eq) => allowedTerminals.includes(eq.clientName));
+  res.json(list.map((eq) => ({ ...eq, operational: !nonOperational.has(eq.id) })));
 });
 
 equipmentRouter.post('/', (req, res) => {

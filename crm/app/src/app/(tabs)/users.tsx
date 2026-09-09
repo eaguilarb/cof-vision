@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
-import { useCreateUser, useDeleteUser, useUsers } from '@/api/hooks';
+import { useCreateUser, useDeleteUser, useUpdateUser, useUsers } from '@/api/hooks';
 import { apiErrorMessage } from '@/api/client';
 import { colors } from '@/constants/colors';
-import { ROLE_LABELS, type Role } from '@/api/types';
+import { ROLE_LABELS, type AppUser, type Role } from '@/api/types';
 import { useAuth } from '@/state/auth-context';
 
 const CREATABLE_ROLES: Role[] = ['operator', 'admin'];
@@ -13,6 +13,7 @@ export default function UsersScreen() {
   const usersQuery = useUsers();
   const createUser = useCreateUser();
   const deleteUser = useDeleteUser();
+  const updateUser = useUpdateUser();
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
@@ -20,6 +21,12 @@ export default function UsersScreen() {
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<Role>('operator');
   const [error, setError] = useState<string | null>(null);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editRole, setEditRole] = useState<Role>('operator');
+  const [editPassword, setEditPassword] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
 
   async function handleCreate() {
     setError(null);
@@ -45,6 +52,30 @@ export default function UsersScreen() {
       await deleteUser.mutateAsync(id);
     } catch (err) {
       setError(apiErrorMessage(err));
+    }
+  }
+
+  function startEdit(user: AppUser) {
+    setEditingId(user.id);
+    setEditName(user.name);
+    setEditRole(user.role);
+    setEditPassword('');
+    setEditError(null);
+  }
+
+  async function handleSaveEdit() {
+    if (!editingId) return;
+    setEditError(null);
+    try {
+      await updateUser.mutateAsync({
+        id: editingId,
+        name: editName,
+        role: editRole,
+        ...(editPassword.trim() ? { password: editPassword.trim() } : {}),
+      });
+      setEditingId(null);
+    } catch (err) {
+      setEditError(apiErrorMessage(err));
     }
   }
 
@@ -86,7 +117,8 @@ export default function UsersScreen() {
             ))}
           </View>
           <Text style={styles.hint}>
-            Operador: puede ver todo y cerrar casos, sin administrar usuarios ni técnicos.
+            Supervisor: ve todos los terminales y reportes, sin administrar usuarios ni técnicos. Para
+            cuentas de técnicos/vidrieros (rol Operador, limitado a su terminal), usa la pestaña Técnicos.
           </Text>
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Pressable style={styles.saveButton} onPress={handleCreate} disabled={createUser.isPending}>
@@ -105,20 +137,67 @@ export default function UsersScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={<Text style={styles.empty}>Aún no hay usuarios.</Text>}
-          renderItem={({ item }) => (
-            <View style={styles.card}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.cardTitle}>{item.name}</Text>
-                <Text style={styles.cardSubtitle}>{item.email}</Text>
-                <Text style={styles.cardMeta}>{ROLE_LABELS[item.role]}</Text>
+          renderItem={({ item }) =>
+            editingId === item.id ? (
+              <View style={styles.form}>
+                <TextInput style={styles.input} placeholder="Nombre" value={editName} onChangeText={setEditName} />
+                <View style={styles.chipRow}>
+                  {CREATABLE_ROLES.map((r) => (
+                    <Pressable
+                      key={r}
+                      style={[styles.chip, editRole === r && styles.chipActive]}
+                      onPress={() => setEditRole(r)}
+                    >
+                      <Text style={[styles.chipText, editRole === r && styles.chipTextActive]}>
+                        {ROLE_LABELS[r]}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Nueva contraseña (dejar vacío para no cambiar)"
+                  value={editPassword}
+                  onChangeText={setEditPassword}
+                  secureTextEntry
+                />
+                {editError ? <Text style={styles.error}>{editError}</Text> : null}
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <Pressable
+                    style={[styles.saveButton, { flex: 1, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }]}
+                    onPress={() => setEditingId(null)}
+                  >
+                    <Text style={[styles.saveButtonText, { color: colors.text }]}>Cancelar</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.saveButton, { flex: 1 }]}
+                    onPress={handleSaveEdit}
+                    disabled={updateUser.isPending}
+                  >
+                    <Text style={styles.saveButtonText}>{updateUser.isPending ? 'Guardando…' : 'Guardar'}</Text>
+                  </Pressable>
+                </View>
               </View>
-              {item.role !== 'technician' && item.id !== currentUser?.id && (
-                <Pressable style={styles.deleteButton} onPress={() => handleDelete(item.id)}>
-                  <Text style={styles.deleteButtonText}>Eliminar</Text>
-                </Pressable>
-              )}
-            </View>
-          )}
+            ) : (
+              <View style={styles.card}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{item.name}</Text>
+                  <Text style={styles.cardSubtitle}>{item.email}</Text>
+                  <Text style={styles.cardMeta}>{ROLE_LABELS[item.role]}</Text>
+                </View>
+                {item.role !== 'technician' && (
+                  <Pressable style={styles.editButton} onPress={() => startEdit(item)}>
+                    <Text style={styles.editButtonText}>Editar</Text>
+                  </Pressable>
+                )}
+                {item.role !== 'technician' && item.id !== currentUser?.id && (
+                  <Pressable style={styles.deleteButton} onPress={() => handleDelete(item.id)}>
+                    <Text style={styles.deleteButtonText}>Eliminar</Text>
+                  </Pressable>
+                )}
+              </View>
+            )
+          }
         />
       )}
     </View>
@@ -205,4 +284,12 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   deleteButtonText: { color: colors.danger, fontSize: 12, fontWeight: '700' },
+  editButton: {
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  editButtonText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
 });

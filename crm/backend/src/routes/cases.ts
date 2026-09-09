@@ -7,6 +7,7 @@ import { getUploadsDir, loadDb, saveDb } from '../db.js';
 import { notifyIntranetCaso, notifyLocalCase } from '../notifications.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { getOverlay, toCase, withLocalAge } from '../services/case-service.js';
+import { allowedTerminalsFor } from '../services/terminal-access.js';
 import type { Case, CasePhoto, CasePriority, CaseStatus, CaseWithAge } from '../types.js';
 import {
   GENERIC_RESOLUTION_ACTIONS,
@@ -15,8 +16,8 @@ import {
   createCaso,
   deleteCaso,
   fetchCasos,
+  fetchFlota,
   isIntranetEnabled,
-  isValidPpu,
   updateEstadoCaso,
 } from '../intranet.js';
 
@@ -36,8 +37,12 @@ function applyFilters<T extends Case>(
   cases: T[],
   query: { status?: string; technicianId?: string; mine?: string },
   auth?: { technicianId?: string },
+  allowedTerminals?: string[] | null,
 ): T[] {
   let result = cases;
+  if (allowedTerminals) {
+    result = result.filter((c) => allowedTerminals.includes(c.clientName));
+  }
   if (query.mine === 'true' && auth?.technicianId) {
     result = result.filter((c) => c.assignedTechnicianId === auth.technicianId);
   } else if (query.technicianId) {
@@ -56,9 +61,10 @@ casesRouter.get('/', async (req, res) => {
   if (isIntranetEnabled()) {
     try {
       const db = loadDb();
+      const allowedTerminals = allowedTerminalsFor(db, req.auth);
       const casos = await fetchCasos();
       let cases = casos.map((c) => toCase(c, db));
-      cases = applyFilters(cases, query, req.auth);
+      cases = applyFilters(cases, query, req.auth, allowedTerminals);
       cases.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       res.json(cases);
     } catch (err) {
@@ -68,7 +74,8 @@ casesRouter.get('/', async (req, res) => {
   }
 
   const db = loadDb();
-  let cases = applyFilters(db.cases, query, req.auth);
+  const allowedTerminals = allowedTerminalsFor(db, req.auth);
+  let cases = applyFilters(db.cases, query, req.auth, allowedTerminals);
   cases = [...cases].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json(cases.map(withLocalAge));
 });
@@ -83,7 +90,13 @@ casesRouter.get('/:id', async (req, res) => {
         res.status(404).json({ error: 'Caso no encontrado' });
         return;
       }
-      res.json(toCase(raw, db));
+      const found = toCase(raw, db);
+      const allowedTerminals = allowedTerminalsFor(db, req.auth);
+      if (allowedTerminals && !allowedTerminals.includes(found.clientName)) {
+        res.status(403).json({ error: 'No tienes acceso a ese terminal' });
+        return;
+      }
+      res.json(found);
     } catch (err) {
       res.status(502).json({ error: err instanceof Error ? err.message : 'Error al conectar con la intranet' });
     }
@@ -94,6 +107,11 @@ casesRouter.get('/:id', async (req, res) => {
   const found = db.cases.find((c) => c.id === req.params.id);
   if (!found) {
     res.status(404).json({ error: 'Caso no encontrado' });
+    return;
+  }
+  const allowedTerminals = allowedTerminalsFor(db, req.auth);
+  if (allowedTerminals && !allowedTerminals.includes(found.clientName)) {
+    res.status(403).json({ error: 'No tienes acceso a ese terminal' });
     return;
   }
   res.json(withLocalAge(found));
@@ -118,12 +136,19 @@ casesRouter.post('/', async (req, res) => {
       return;
     }
     try {
-      if (!(await isValidPpu(equipmentId))) {
+      const flota = await fetchFlota();
+      const bus = flota.find((b) => b.ppu === equipmentId);
+      if (!bus) {
         res.status(400).json({ error: `La patente ${equipmentId} no existe en la flota` });
         return;
       }
-      const created = await createCaso({ ppu: equipmentId, categoria, descripcion: description });
       const db = loadDb();
+      const allowedTerminals = allowedTerminalsFor(db, req.auth);
+      if (allowedTerminals && !allowedTerminals.includes(bus.terminal)) {
+        res.status(403).json({ error: 'No puedes crear casos fuera de tu terminal asignado' });
+        return;
+      }
+      const created = await createCaso({ ppu: equipmentId, categoria, descripcion: description });
       const now = new Date().toISOString();
       const status: CaseStatus = assignedTechnicianId ? 'assigned' : 'open';
       db.caseOverlays[String(created.id)] = {
@@ -158,6 +183,11 @@ casesRouter.post('/', async (req, res) => {
   const equipment = db.equipment.find((e) => e.id === equipmentId);
   if (!equipment) {
     res.status(400).json({ error: 'El equipo indicado no existe' });
+    return;
+  }
+  const allowedTerminals = allowedTerminalsFor(db, req.auth);
+  if (allowedTerminals && !allowedTerminals.includes(clientName)) {
+    res.status(403).json({ error: 'No puedes crear casos fuera de tu terminal asignado' });
     return;
   }
 

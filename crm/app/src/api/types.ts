@@ -1,9 +1,13 @@
 export type Role = 'admin' | 'technician' | 'operator';
 
+// Nombres internos sin cambiar (technician/operator ya existen en producción);
+// solo cambian las etiquetas: "operator" ahora se muestra como Supervisor
+// (ve todos los terminales) y "technician" como Operador (técnico o
+// vidriero, limitado a procesar/cerrar casos de su terminal asignado).
 export const ROLE_LABELS: Record<Role, string> = {
   admin: 'Administrador',
-  technician: 'Técnico',
-  operator: 'Operador',
+  technician: 'Operador',
+  operator: 'Supervisor',
 };
 
 export interface AuthUser {
@@ -30,6 +34,8 @@ export interface Technician {
   phone?: string;
   specialty?: string;
   active: boolean;
+  /** Terminales que puede ver/procesar. Vacío = sin restricción (ve todos). */
+  assignedTerminals?: string[];
 }
 
 export interface Equipment {
@@ -45,6 +51,8 @@ export interface Equipment {
   createdAt: string;
   /** Estándar del bus (solo modo intranet): "RED" tiene wifi/cámaras, "TS" no. */
   estandar?: 'RED' | 'TS';
+  /** false si tiene un caso (técnico o de vidrios) abierto/asignado/en proceso. */
+  operational?: boolean;
 }
 
 export type CaseStatus = 'open' | 'assigned' | 'in_progress' | 'resolved';

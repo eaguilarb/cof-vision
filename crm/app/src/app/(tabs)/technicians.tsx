@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -11,13 +11,14 @@ import {
   View,
 } from 'react-native';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useDeleteTechnician, useTechnicians } from '@/api/hooks';
+import { useDeleteTechnician, useEquipment, useTechnicians, useUpdateTechnician } from '@/api/hooks';
 import { api, apiErrorMessage } from '@/api/client';
 import { colors } from '@/constants/colors';
 import type { Technician } from '@/api/types';
 
 export default function TechniciansScreen() {
   const techniciansQuery = useTechnicians();
+  const equipmentQuery = useEquipment();
   const queryClient = useQueryClient();
   const createTechnician = useMutation({
     mutationFn: async (input: { name: string; email: string; password: string; specialty?: string }) =>
@@ -25,6 +26,13 @@ export default function TechniciansScreen() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['technicians'] }),
   });
   const deleteTechnician = useDeleteTechnician();
+  const updateTechnician = useUpdateTechnician();
+
+  const terminals = useMemo(() => {
+    const set = new Set<string>();
+    for (const eq of equipmentQuery.data ?? []) set.add(eq.clientName);
+    return Array.from(set).sort();
+  }, [equipmentQuery.data]);
 
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
@@ -32,6 +40,11 @@ export default function TechniciansScreen() {
   const [password, setPassword] = useState('');
   const [specialty, setSpecialty] = useState('');
   const [error, setError] = useState<string | null>(null);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTerminals, setEditTerminals] = useState<string[]>([]);
+  const [editPassword, setEditPassword] = useState('');
+  const [editError, setEditError] = useState<string | null>(null);
 
   async function handleCreate() {
     setError(null);
@@ -48,6 +61,34 @@ export default function TechniciansScreen() {
       setShowForm(false);
     } catch (err) {
       setError(apiErrorMessage(err));
+    }
+  }
+
+  function startEdit(technician: Technician) {
+    setEditingId(technician.id);
+    setEditTerminals(technician.assignedTerminals ?? []);
+    setEditPassword('');
+    setEditError(null);
+  }
+
+  function toggleEditTerminal(terminal: string) {
+    setEditTerminals((prev) =>
+      prev.includes(terminal) ? prev.filter((t) => t !== terminal) : [...prev, terminal],
+    );
+  }
+
+  async function handleSaveEdit() {
+    if (!editingId) return;
+    setEditError(null);
+    try {
+      await updateTechnician.mutateAsync({
+        id: editingId,
+        assignedTerminals: editTerminals,
+        ...(editPassword.trim() ? { password: editPassword.trim() } : {}),
+      });
+      setEditingId(null);
+    } catch (err) {
+      setEditError(apiErrorMessage(err));
     }
   }
 
@@ -121,26 +162,88 @@ export default function TechniciansScreen() {
           keyExtractor={(item) => item.id}
           contentContainerStyle={styles.listContent}
           ListEmptyComponent={<Text style={styles.empty}>Aún no hay técnicos registrados.</Text>}
-          renderItem={({ item }) => (
-            <View style={[styles.card, styles.cardRow]}>
-              <View style={{ flex: 1 }}>
+          renderItem={({ item }) =>
+            editingId === item.id ? (
+              <View style={styles.form}>
                 <Text style={styles.cardTitle}>{item.name}</Text>
-                <Text style={styles.cardSubtitle}>{item.email}</Text>
-                {item.specialty ? <Text style={styles.cardMeta}>{item.specialty}</Text> : null}
-                {item.phone ? <Text style={styles.cardMeta}>{item.phone}</Text> : null}
-                <Text style={[styles.cardMeta, { color: item.active ? colors.success : colors.danger }]}>
-                  {item.active ? 'Activo' : 'Inactivo'}
+                <Text style={styles.hint}>
+                  Terminales que puede ver y procesar. Sin selección = sin restricción (ve todos).
                 </Text>
+                <View style={styles.chipRow}>
+                  {terminals.map((t) => (
+                    <Pressable
+                      key={t}
+                      style={[styles.terminalChip, editTerminals.includes(t) && styles.terminalChipActive]}
+                      onPress={() => toggleEditTerminal(t)}
+                    >
+                      <Text
+                        style={[
+                          styles.terminalChipText,
+                          editTerminals.includes(t) && styles.terminalChipTextActive,
+                        ]}
+                      >
+                        {t}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Nueva contraseña (dejar vacío para no cambiar)"
+                  value={editPassword}
+                  onChangeText={setEditPassword}
+                  secureTextEntry
+                />
+                {editError ? <Text style={styles.error}>{editError}</Text> : null}
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <Pressable
+                    style={[styles.saveButton, { flex: 1, backgroundColor: colors.background, borderWidth: 1, borderColor: colors.border }]}
+                    onPress={() => setEditingId(null)}
+                  >
+                    <Text style={[styles.saveButtonText, { color: colors.text }]}>Cancelar</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[styles.saveButton, { flex: 1 }]}
+                    onPress={handleSaveEdit}
+                    disabled={updateTechnician.isPending}
+                  >
+                    <Text style={styles.saveButtonText}>
+                      {updateTechnician.isPending ? 'Guardando…' : 'Guardar'}
+                    </Text>
+                  </Pressable>
+                </View>
               </View>
-              <Pressable
-                style={styles.deleteButton}
-                onPress={() => handleDelete(item)}
-                disabled={deleteTechnician.isPending}
-              >
-                <Text style={styles.deleteButtonText}>Eliminar</Text>
-              </Pressable>
-            </View>
-          )}
+            ) : (
+              <View style={[styles.card, styles.cardRow]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.cardTitle}>{item.name}</Text>
+                  <Text style={styles.cardSubtitle}>{item.email}</Text>
+                  {item.specialty ? <Text style={styles.cardMeta}>{item.specialty}</Text> : null}
+                  {item.phone ? <Text style={styles.cardMeta}>{item.phone}</Text> : null}
+                  <Text style={[styles.cardMeta, { color: item.active ? colors.success : colors.danger }]}>
+                    {item.active ? 'Activo' : 'Inactivo'}
+                  </Text>
+                  <Text style={styles.cardMeta}>
+                    {item.assignedTerminals && item.assignedTerminals.length > 0
+                      ? `Terminales: ${item.assignedTerminals.join(', ')}`
+                      : 'Sin restricción de terminal'}
+                  </Text>
+                </View>
+                <View style={{ gap: 6 }}>
+                  <Pressable style={styles.editButton} onPress={() => startEdit(item)}>
+                    <Text style={styles.editButtonText}>Editar</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.deleteButton}
+                    onPress={() => handleDelete(item)}
+                    disabled={deleteTechnician.isPending}
+                  >
+                    <Text style={styles.deleteButtonText}>Eliminar</Text>
+                  </Pressable>
+                </View>
+              </View>
+            )
+          }
         />
       )}
     </View>
@@ -213,4 +316,25 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   deleteButtonText: { color: colors.danger, fontSize: 12, fontWeight: '700' },
+  editButton: {
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  editButtonText: { color: colors.primary, fontSize: 12, fontWeight: '700' },
+  hint: { fontSize: 11, color: colors.textMuted },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  terminalChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  terminalChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  terminalChipText: { fontSize: 12, color: colors.text, fontWeight: '600' },
+  terminalChipTextActive: { color: colors.primaryText },
 });

@@ -27,6 +27,8 @@ interface TerminalGroup {
   statusCounts: Record<CaseStatus, number>;
   totalCases: number;
   resolvedPct: number;
+  operationalCount: number;
+  nonOperationalCount: number;
 }
 
 export default function EquipmentScreen() {
@@ -75,10 +77,14 @@ export default function EquipmentScreen() {
           statusCounts: { open: 0, assigned: 0, in_progress: 0, resolved: 0 },
           totalCases: 0,
           resolvedPct: 0,
+          operationalCount: 0,
+          nonOperationalCount: 0,
         });
       }
       const group = groups.get(terminal)!;
       group.equipment.push(eq);
+      if (eq.operational === false) group.nonOperationalCount += 1;
+      else group.operationalCount += 1;
       for (const status of casesByEquipmentId.get(eq.id) ?? []) {
         group.statusCounts[status] += 1;
         group.totalCases += 1;
@@ -117,6 +123,12 @@ export default function EquipmentScreen() {
   const isSearching = search.trim().length > 0;
   const isLoading = equipmentQuery.isLoading || casesQuery.isLoading;
 
+  const fleetStatus = useMemo(() => {
+    const list = equipmentQuery.data ?? [];
+    const nonOperational = list.filter((eq) => eq.operational === false).length;
+    return { total: list.length, operational: list.length - nonOperational, nonOperational };
+  }, [equipmentQuery.data]);
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -135,6 +147,19 @@ export default function EquipmentScreen() {
           </Pressable>
         )}
       </View>
+
+      {!isLoading && fleetStatus.total > 0 && (
+        <View style={styles.fleetStatusRow}>
+          <View style={[styles.fleetStatusCard, { borderColor: colors.success }]}>
+            <Text style={[styles.fleetStatusCount, { color: colors.success }]}>{fleetStatus.operational}</Text>
+            <Text style={styles.fleetStatusLabel}>Operativos</Text>
+          </View>
+          <View style={[styles.fleetStatusCard, { borderColor: colors.danger }]}>
+            <Text style={[styles.fleetStatusCount, { color: colors.danger }]}>{fleetStatus.nonOperational}</Text>
+            <Text style={styles.fleetStatusLabel}>No operativos</Text>
+          </View>
+        </View>
+      )}
 
       <View style={styles.searchWrap}>
         <TextInput
@@ -224,6 +249,9 @@ function TerminalCard({
           <Text style={styles.terminalMeta}>
             {group.equipment.length} {group.equipment.length === 1 ? unitLabel.singular : unitLabel.plural}
             {group.totalCases > 0 ? ` · ${group.totalCases} caso${group.totalCases === 1 ? '' : 's'}` : ''}
+            {group.nonOperationalCount > 0
+              ? ` · ${group.nonOperationalCount} no operativo${group.nonOperationalCount === 1 ? '' : 's'}`
+              : ''}
           </Text>
         </View>
         <View style={styles.expandButton}>
@@ -263,9 +291,10 @@ function TerminalCard({
         <View style={styles.busList}>
           {group.equipment.map((eq) => (
             <View key={eq.id} style={styles.busRow}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 <Text style={styles.busName}>{eq.name}</Text>
                 {eq.estandar && <Badge label={eq.estandar} color={eq.estandar === 'TS' ? '#f97316' : '#0ea5e9'} />}
+                {eq.operational === false && <Badge label="No operativo" color={colors.danger} />}
               </View>
               <Text style={styles.busMeta}>
                 {eq.type}
@@ -313,6 +342,17 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   addButtonText: { color: colors.primaryText, fontWeight: '600', fontSize: 13 },
+  fleetStatusRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 14, paddingBottom: 10 },
+  fleetStatusCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  fleetStatusCount: { fontSize: 20, fontWeight: '800' },
+  fleetStatusLabel: { fontSize: 11, color: colors.textMuted, fontWeight: '600', marginTop: 2 },
   searchWrap: { paddingHorizontal: 14, paddingBottom: 10 },
   searchInput: {
     borderWidth: 1,
