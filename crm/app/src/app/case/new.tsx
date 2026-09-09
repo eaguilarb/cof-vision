@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,15 +9,23 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
-import { useConfig, useCreateCase, useEquipment, useTechnicians } from '@/api/hooks';
+import { useConfig, useCreateCase, useEquipment, useTechnicians, useUploadCasePhoto } from '@/api/hooks';
 import { apiErrorMessage } from '@/api/client';
 import { PRIORITY_LABELS, type CasePriority } from '@/api/types';
 import { useAuth } from '@/state/auth-context';
 import { colors } from '@/constants/colors';
+import { BusGlassDiagram, type GlassZone } from '@/components/bus-glass-diagram';
 
 const PRIORITIES = Object.keys(PRIORITY_LABELS) as CasePriority[];
 const MAX_EQUIPMENT_RESULTS = 25;
+
+interface PendingPhoto {
+  uri: string;
+  fileName: string;
+  mimeType: string;
+}
 
 export default function NewCaseScreen() {
   const router = useRouter();
@@ -25,6 +34,7 @@ export default function NewCaseScreen() {
   const equipmentQuery = useEquipment();
   const techniciansQuery = useTechnicians();
   const createCase = useCreateCase();
+  const uploadPhoto = useUploadCasePhoto();
 
   const intranetEnabled = configQuery.data?.intranetEnabled ?? false;
   // El módulo Vidrios siempre usa categoría fija + patente (no hay modo
@@ -41,6 +51,7 @@ export default function NewCaseScreen() {
   const [equipmentSearch, setEquipmentSearch] = useState('');
   const [equipmentId, setEquipmentId] = useState<string | null>(null);
   const [technicianId, setTechnicianId] = useState<string | null>(null);
+  const [photos, setPhotos] = useState<PendingPhoto[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const requiresFleetEquipment = module === 'tech' && (categoria === 'wifi' || categoria === 'camaras');
@@ -58,6 +69,36 @@ export default function NewCaseScreen() {
     () => equipmentQuery.data?.find((eq) => eq.id === equipmentId),
     [equipmentQuery.data, equipmentId],
   );
+
+  function handleSelectZone(zone: GlassZone) {
+    setCategoria(zone.categoria);
+    setDescription((prev) => (prev.trim() ? prev : `${zone.label}: `));
+  }
+
+  async function handlePickPhoto(source: 'camera' | 'library') {
+    setError(null);
+    const permission =
+      source === 'camera'
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      setError(source === 'camera' ? 'Necesitamos permiso para usar la cámara.' : 'Necesitamos permiso para ver tus fotos.');
+      return;
+    }
+    const options: ImagePicker.ImagePickerOptions = { mediaTypes: ['images'], quality: 0.6 };
+    const result =
+      source === 'camera' ? await ImagePicker.launchCameraAsync(options) : await ImagePicker.launchImageLibraryAsync(options);
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+    setPhotos((prev) => [
+      ...prev,
+      { uri: asset.uri, fileName: asset.fileName || `foto-${Date.now()}.jpg`, mimeType: asset.mimeType || 'image/jpeg' },
+    ]);
+  }
+
+  function handleRemovePhoto(index: number) {
+    setPhotos((prev) => prev.filter((_, i) => i !== index));
+  }
 
   async function handleSubmit() {
     setError(null);
@@ -82,6 +123,13 @@ export default function NewCaseScreen() {
         assignedTechnicianId: technicianId,
         ...(useFixedCategories ? { categoria: categoria! } : { title, clientName }),
       });
+      for (const photo of photos) {
+        try {
+          await uploadPhoto.mutateAsync({ id: created.id, ...photo });
+        } catch {
+          // El caso ya se creó; si una foto falla al subir, se puede reintentar desde el detalle.
+        }
+      }
       router.replace(`/case/${created.id}`);
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -94,6 +142,13 @@ export default function NewCaseScreen() {
         <>
           <Text style={styles.label}>Título</Text>
           <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholder="Resumen del problema" />
+        </>
+      )}
+
+      {module === 'glass' && (
+        <>
+          <Text style={styles.label}>Diagrama del bus</Text>
+          <BusGlassDiagram onSelectZone={handleSelectZone} />
         </>
       )}
 
@@ -197,6 +252,24 @@ export default function NewCaseScreen() {
         </Text>
       )}
 
+      <Text style={styles.label}>Fotos</Text>
+      <View style={styles.photoRow}>
+        {photos.map((photo, index) => (
+          <View key={photo.uri} style={styles.photoThumbWrap}>
+            <Image source={{ uri: photo.uri }} style={styles.photoThumb} />
+            <Pressable style={styles.photoRemoveButton} onPress={() => handleRemovePhoto(index)}>
+              <Text style={styles.photoRemoveButtonText}>✕</Text>
+            </Pressable>
+          </View>
+        ))}
+        <Pressable style={styles.photoAddButton} onPress={() => handlePickPhoto('camera')}>
+          <Text style={styles.photoAddButtonText}>📷{'\n'}Cámara</Text>
+        </Pressable>
+        <Pressable style={styles.photoAddButton} onPress={() => handlePickPhoto('library')}>
+          <Text style={styles.photoAddButtonText}>🖼️{'\n'}Galería</Text>
+        </Pressable>
+      </View>
+
       <Text style={styles.label}>Técnico asignado (opcional)</Text>
       <View style={styles.chipRow}>
         <Pressable
@@ -261,6 +334,32 @@ const styles = StyleSheet.create({
   chipTextActive: { color: colors.primaryText },
   hint: { fontSize: 12, color: colors.textMuted },
   error: { color: colors.danger, marginTop: 14, fontSize: 13 },
+  photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  photoThumbWrap: { position: 'relative' },
+  photoThumb: { width: 64, height: 64, borderRadius: 10, backgroundColor: colors.border },
+  photoRemoveButton: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoRemoveButtonText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  photoAddButton: {
+    width: 64,
+    height: 64,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoAddButtonText: { fontSize: 11, color: colors.textMuted, textAlign: 'center', fontWeight: '600' },
   submitButton: {
     marginTop: 24,
     backgroundColor: colors.primary,
