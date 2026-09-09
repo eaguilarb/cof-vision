@@ -43,7 +43,13 @@ const WHEEL_OFFSETS: Record<BusBodyType, `${number}%`[]> = {
   articulado: ['10%', '46%', '86%'],
 };
 
-export function BusGlassDiagram({ onSelectZone }: { onSelectZone: (zone: GlassZone) => void }) {
+export function BusGlassDiagram({
+  onSelectZone,
+  ppu,
+}: {
+  onSelectZone: (zone: GlassZone) => void;
+  ppu?: string | null;
+}) {
   const [busType, setBusType] = useState<BusBodyType>('estandar');
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -75,8 +81,9 @@ export function BusGlassDiagram({ onSelectZone }: { onSelectZone: (zone: GlassZo
       </View>
 
       <View style={styles.busShell}>
-        <View style={styles.roofLine} />
-        <View style={styles.body}>
+        <View style={styles.roofCap} />
+
+        <View style={styles.windowBand}>
           {zones.map((zone) => (
             <Pressable
               key={zone.id}
@@ -93,9 +100,10 @@ export function BusGlassDiagram({ onSelectZone }: { onSelectZone: (zone: GlassZo
                 selectedId === zone.id && styles.segmentSelected,
               ]}
             >
-              {zone.kind === 'door' && <View style={styles.doorHandle} />}
+              {zone.kind === 'door' && <View style={styles.doorSeam} />}
               {zone.kind === 'joint' && (
                 <>
+                  <View style={styles.fuelleStripe} />
                   <View style={styles.fuelleStripe} />
                   <View style={styles.fuelleStripe} />
                   <View style={styles.fuelleStripe} />
@@ -104,9 +112,18 @@ export function BusGlassDiagram({ onSelectZone }: { onSelectZone: (zone: GlassZo
             </Pressable>
           ))}
         </View>
+
+        <View style={styles.lowerBody}>
+          <Text style={styles.ppuText} numberOfLines={1}>
+            {ppu || '— selecciona un bus —'}
+          </Text>
+        </View>
+
         <View style={styles.wheelRow}>
           {WHEEL_OFFSETS[busType].map((left, i) => (
-            <View key={i} style={[styles.wheel, { left }]} />
+            <View key={i} style={[styles.wheel, { left }]}>
+              <View style={styles.wheelHub} />
+            </View>
           ))}
         </View>
       </View>
@@ -125,6 +142,8 @@ export function BusGlassDiagram({ onSelectZone }: { onSelectZone: (zone: GlassZo
     </View>
   );
 }
+
+const RED = '#d0192b';
 
 const styles = StyleSheet.create({
   wrap: { gap: 8 },
@@ -145,56 +164,66 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.border,
-    paddingTop: 14,
-    paddingBottom: 22,
+    paddingBottom: 20,
     paddingHorizontal: 10,
+    paddingTop: 10,
+    overflow: 'visible',
   },
-  roofLine: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#94a3b8',
-    marginBottom: 6,
-    marginHorizontal: 4,
+  roofCap: {
+    height: 8,
+    borderTopLeftRadius: 10,
+    borderTopRightRadius: 10,
+    backgroundColor: RED,
   },
-  body: {
+  windowBand: {
     flexDirection: 'row',
-    height: 76,
-    borderRadius: 10,
+    height: 58,
     overflow: 'hidden',
-    borderWidth: 2,
-    borderColor: '#475569',
-    backgroundColor: '#e2e8f0',
+    backgroundColor: '#15181c',
   },
   segment: {
     alignItems: 'center',
     justifyContent: 'center',
     borderRightWidth: 1,
-    borderRightColor: '#475569',
+    borderRightColor: '#000',
   },
-  windshieldSegment: { backgroundColor: '#bfe3f5', borderTopLeftRadius: 8, borderBottomLeftRadius: 8 },
-  rearSegment: { backgroundColor: '#bfe3f5', borderTopRightRadius: 8, borderBottomRightRadius: 8, borderRightWidth: 0 },
-  windowSegment: { backgroundColor: '#bfe3f5' },
-  doorSegment: { backgroundColor: '#cbd5e1' },
+  windshieldSegment: { backgroundColor: '#33393f' },
+  rearSegment: { backgroundColor: '#33393f', borderRightWidth: 0 },
+  windowSegment: { backgroundColor: '#33393f' },
+  doorSegment: { backgroundColor: '#4a5157' },
   jointSegment: {
-    backgroundColor: '#334155',
+    backgroundColor: '#8a8f96',
     flexDirection: 'row',
     justifyContent: 'space-evenly',
-    paddingHorizontal: 4,
+    paddingHorizontal: 2,
   },
-  fuelleStripe: { width: 3, height: '70%', backgroundColor: '#64748b', borderRadius: 2 },
-  doorHandle: { width: 3, height: 22, borderRadius: 2, backgroundColor: '#64748b' },
-  segmentSelected: { backgroundColor: colors.primary, opacity: 0.85 },
+  fuelleStripe: { width: 3, height: '92%', backgroundColor: '#4a4f55', borderRadius: 1 },
+  doorSeam: { width: 2, height: '75%', backgroundColor: '#2b2f33' },
+  segmentSelected: { backgroundColor: colors.primary, opacity: 0.9 },
+  lowerBody: {
+    height: 34,
+    backgroundColor: '#eceef0',
+    borderBottomLeftRadius: 10,
+    borderBottomRightRadius: 10,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    borderWidth: 1,
+    borderTopWidth: 0,
+    borderColor: '#c7cbd1',
+  },
+  ppuText: { color: RED, fontWeight: '800', fontSize: 15, letterSpacing: 1 },
   wheelRow: { height: 0 },
   wheel: {
     position: 'absolute',
-    bottom: -14,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#1e293b',
-    borderWidth: 2,
-    borderColor: '#94a3b8',
+    bottom: -12,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#111',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
+  wheelHub: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#9aa0a6' },
   hint: { fontSize: 11, color: colors.textMuted },
   selectedBadge: {
     alignSelf: 'flex-start',

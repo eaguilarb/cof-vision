@@ -190,7 +190,7 @@ export default function NewCaseScreen() {
       {module === 'glass' && (
         <>
           <Text style={styles.label}>Diagrama del bus</Text>
-          <BusGlassDiagram onSelectZone={handleSelectZone} />
+          <BusGlassDiagram onSelectZone={handleSelectZone} ppu={selectedEquipment?.name} />
         </>
       )}
 
