@@ -1,11 +1,20 @@
-# COF Vision — Escáner automotriz profesional OBD-II
+# COF Vision
 
-Aplicación web (React + TypeScript + Vite) para diagnóstico automotriz OBD-II
-mediante adaptadores ELM327, sin necesidad de instalar nada: corre directamente
-en Chrome o Edge y se conecta al adaptador por **Bluetooth (Web Bluetooth)** o
-por **puerto serie (Web Serial)**.
+Aplicación web (React + TypeScript + Vite) con dos herramientas independientes,
+accesibles desde las pestañas superiores:
 
-## Funciones
+- **Escáner OBD-II**: diagnóstico automotriz mediante adaptadores ELM327.
+- **Análisis de video**: reproduce un video, describe automáticamente lo que va
+  pasando en escena y ubica en un mapa las coordenadas GPS que traiga embebidas
+  el archivo.
+
+## Escáner automotriz OBD-II
+
+Diagnóstico automotriz OBD-II mediante adaptadores ELM327, sin necesidad de
+instalar nada: corre directamente en Chrome o Edge y se conecta al adaptador
+por **Bluetooth (Web Bluetooth)** o por **puerto serie (Web Serial)**.
+
+### Funciones
 
 - **Lectura de códigos de falla (DTC)**: almacenados, pendientes y permanentes,
   con descripción de cada código.
@@ -38,6 +47,20 @@ todos los protocolos OBD-II — el tipo más común del mercado.
 Requiere Chrome o Edge (de escritorio o Android) — son los únicos navegadores
 con soporte para Web Bluetooth y Web Serial.
 
+## Análisis de video
+
+Sube un video (por ejemplo, grabado con el celular o una dashcam) y la app:
+
+- **Describe la escena** cada pocos segundos mientras se reproduce, usando un
+  modelo de descripción de imágenes (`Xenova/vit-gpt2-image-captioning`) que
+  corre 100% en el navegador vía [transformers.js](https://github.com/huggingface/transformers.js).
+  El video nunca sale de tu equipo, no requiere API key y solo se descarga el
+  modelo una vez (queda cacheado por el navegador).
+- **Ubica el video en un mapa** si el archivo trae coordenadas GPS embebidas
+  (metadato estándar que graban los celulares o herramientas como ffmpeg en
+  MP4/MOV — atom `udta/©xyz`, o el sistema `meta`/`keys`/`ilst` que usa el
+  iPhone). Si el video no trae esa información, se avisa en pantalla.
+
 ## Desarrollo
 
 ```bash
@@ -61,6 +84,14 @@ src/
     vehicleInfo.ts         # VIN y datos del vehículo (Modo 09)
   state/obdContext.tsx    # estado global de la conexión y los datos
   components/              # UI (conexión, tablero, DTC, freeze frame, reporte)
+  features/video/
+    lib/
+      mp4Boxes.ts           # lector de cajas ISO BMFF/QuickTime
+      mp4Gps.ts             # ubica y decodifica el metadato de ubicación
+      iso6709.ts            # parseo de coordenadas ISO 6709
+      captioner.ts           # pipeline de descripción de imágenes (transformers.js)
+    components/LocationMap.tsx  # mapa Leaflet con la coordenada extraída
+    VideoAnalysisPage.tsx        # página principal (subida, reproductor, feed)
 ```
 
 ## Aviso

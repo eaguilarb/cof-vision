@@ -8,6 +8,9 @@ import { FreezeFramePanel } from './components/FreezeFramePanel'
 import { VehicleInfoPanel } from './components/VehicleInfoPanel'
 import { ReportPanel } from './components/ReportPanel'
 import { ThrottleBodyPanel } from './components/ThrottleBodyPanel'
+import { VideoAnalysisPage } from './features/video/VideoAnalysisPage'
+
+type AppMode = 'obd' | 'video'
 
 type Tab = 'connection' | 'dashboard' | 'dtc' | 'freeze' | 'vehicle' | 'service' | 'report'
 
@@ -21,28 +24,24 @@ const TABS: { id: Tab; label: string; requiresConnection: boolean }[] = [
   { id: 'report', label: 'Reporte', requiresConnection: true },
 ]
 
-function Shell() {
+const MODES: { id: AppMode; label: string; icon: string }[] = [
+  { id: 'obd', label: 'Escáner OBD-II', icon: '⛽' },
+  { id: 'video', label: 'Análisis de video', icon: '🎥' },
+]
+
+function ObdShell() {
   const { status } = useObd()
   const [tab, setTab] = useState<Tab>('connection')
   const connected = status === 'connected'
 
   return (
-    <div className="app-shell">
-      <header className="app-header">
-        <div className="app-header__brand">
-          <span className="app-header__logo">⛽</span>
-          <div>
-            <h1>COF Vision</h1>
-            <p className="muted">Escáner automotriz profesional OBD-II</p>
-          </div>
-        </div>
-        <div className={`status-pill status-pill--${status}`}>
-          {status === 'connected' && 'Conectado'}
-          {status === 'connecting' && 'Conectando…'}
-          {status === 'disconnected' && 'Sin conexión'}
-          {status === 'error' && 'Error de conexión'}
-        </div>
-      </header>
+    <>
+      <div className={`status-pill status-pill--${status}`}>
+        {status === 'connected' && 'Conectado'}
+        {status === 'connecting' && 'Conectando…'}
+        {status === 'disconnected' && 'Sin conexión'}
+        {status === 'error' && 'Error de conexión'}
+      </div>
 
       <nav className="app-tabs">
         {TABS.map((t) => (
@@ -76,14 +75,46 @@ function Shell() {
         Compatible con adaptadores ELM327 v1.5 (todos los protocolos OBD-II) · Uso diagnóstico, no reemplaza
         el escáner de concesionario para procedimientos de programación.
       </footer>
-    </div>
+    </>
   )
 }
 
 function App() {
+  const [mode, setMode] = useState<AppMode>('obd')
+  const activeMode = MODES.find((m) => m.id === mode)!
+
   return (
     <ObdProvider>
-      <Shell />
+      <div className="app-shell">
+        <header className="app-header">
+          <div className="app-header__brand">
+            <span className="app-header__logo">{activeMode.icon}</span>
+            <div>
+              <h1>COF Vision</h1>
+              <p className="muted">{activeMode.label}</p>
+            </div>
+          </div>
+        </header>
+
+        <nav className="app-tabs">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              className={`app-tabs__item ${mode === m.id ? 'app-tabs__item--active' : ''}`}
+              onClick={() => setMode(m.id)}
+            >
+              {m.icon} {m.label}
+            </button>
+          ))}
+        </nav>
+
+        {mode === 'obd' && <ObdShell />}
+        {mode === 'video' && (
+          <main className="app-main">
+            <VideoAnalysisPage />
+          </main>
+        )}
+      </div>
     </ObdProvider>
   )
 }
