@@ -223,11 +223,12 @@ const MB_O500U_1930: BusModelConfig = {
 };
 
 /**
- * Mercedes-Benz O500UA 2836 (articulado) — ficha sin numeración impresa,
- * así que se agrupan las ventanas por cuerpo en vez de vidrio por vidrio
- * (a diferencia del Foton U12): cada tramo entre puertas es una sola zona
- * "vidrio lateral". Las puertas sí quedan individuales por letra. Mismo
- * frontal/trasero que el O500U (misma cabina).
+ * Mercedes-Benz O500UA 2836 (articulado) — la ficha no trae números
+ * impresos, pero igual se numera vidrio por vidrio (no por tramo) para
+ * poder identificar y llevar stock de cada uno, igual que el Foton U12:
+ * vidrio lateral derecho 1-8, izquierdo 9-20, puertas A-F (3 puertas de
+ * un solo panel cada lado, no 2x2). Mismo frontal/trasero que el O500U
+ * (misma cabina).
  */
 const MB_O500UA_2836: BusModelConfig = {
   id: 'mb_o500ua_2836',
@@ -239,16 +240,20 @@ const MB_O500UA_2836: BusModelConfig = {
       aspectRatio: 1179 / 251,
       ppuMask: { left: 48, top: 88, width: 15, height: 9 },
       zones: [
-        lateral('lat_trasero_c1', 'derecho', 1, { left: 2, top: 32, width: 25, height: 32 }),
+        lateral('lat_8', 'derecho', 8, { left: 2.1, top: 33, width: 5.2, height: 30 }),
+        lateral('lat_7', 'derecho', 7, { left: 7.7, top: 33, width: 6.0, height: 30 }),
+        lateral('lat_6', 'derecho', 6, { left: 14.2, top: 33, width: 6.1, height: 30 }),
+        lateral('lat_5', 'derecho', 5, { left: 20.6, top: 33, width: 6.1, height: 30 }),
         puerta('puerta_f', 'F', { left: 28.6, top: 35, width: 2.1, height: 30 }),
         puerta('puerta_e', 'E', { left: 31.9, top: 35, width: 2.1, height: 30 }),
-        lateral('lat_delantero_c2a', 'derecho', 2, { left: 45.0, top: 32, width: 12.3, height: 32 }),
+        lateral('lat_4', 'derecho', 4, { left: 45.0, top: 33, width: 5.3, height: 30 }),
+        lateral('lat_3', 'derecho', 3, { left: 50.9, top: 33, width: 6.4, height: 30 }),
         puerta('puerta_d', 'D', { left: 57.8, top: 35, width: 3.0, height: 30 }),
         puerta('puerta_c', 'C', { left: 62.3, top: 35, width: 2.0, height: 30 }),
-        lateral('lat_delantero_c2b', 'derecho', 3, { left: 65.6, top: 32, width: 6.7, height: 32 }),
-        lateral('lat_delantero_c2c', 'derecho', 4, { left: 72.4, top: 32, width: 13.9, height: 32 }),
-        puerta('puerta_b', 'B', { left: 88.9, top: 35, width: 2.1, height: 30 }),
-        puerta('puerta_a', 'A', { left: 92.2, top: 35, width: 2.1, height: 30 }),
+        lateral('lat_2', 'derecho', 2, { left: 69.3, top: 33, width: 3.0, height: 30 }),
+        lateral('lat_1', 'derecho', 1, { left: 73.0, top: 33, width: 13.3, height: 30 }),
+        puerta('puerta_a', 'A', { left: 88.9, top: 35, width: 2.1, height: 30 }),
+        puerta('puerta_b', 'B', { left: 92.2, top: 35, width: 2.1, height: 30 }),
       ],
     },
     izquierdo: {
@@ -256,8 +261,18 @@ const MB_O500UA_2836: BusModelConfig = {
       aspectRatio: 1134 / 201,
       ppuMask: { left: 48, top: 82, width: 15, height: 11 },
       zones: [
-        lateral('lat_c1', 'izquierdo', 1, { left: 3, top: 20, width: 53, height: 40 }),
-        lateral('lat_c2', 'izquierdo', 2, { left: 64, top: 20, width: 33, height: 40 }),
+        lateral('lat_20', 'izquierdo', 20, { left: 2.5, top: 22, width: 5.4, height: 30 }),
+        lateral('lat_19', 'izquierdo', 19, { left: 10.3, top: 22, width: 4.3, height: 30 }),
+        lateral('lat_18', 'izquierdo', 18, { left: 18.1, top: 22, width: 7.1, height: 30 }),
+        lateral('lat_17', 'izquierdo', 17, { left: 25.7, top: 22, width: 7.2, height: 30 }),
+        lateral('lat_16', 'izquierdo', 16, { left: 33.3, top: 22, width: 7.1, height: 30 }),
+        lateral('lat_15', 'izquierdo', 15, { left: 40.7, top: 22, width: 7.1, height: 30 }),
+        lateral('lat_14', 'izquierdo', 14, { left: 48.1, top: 22, width: 6.1, height: 30 }),
+        lateral('lat_13', 'izquierdo', 13, { left: 64.2, top: 22, width: 9.3, height: 30 }),
+        lateral('lat_12', 'izquierdo', 12, { left: 73.9, top: 22, width: 6.3, height: 30 }),
+        lateral('lat_11', 'izquierdo', 11, { left: 80.5, top: 22, width: 6.5, height: 30 }),
+        lateral('lat_10', 'izquierdo', 10, { left: 87.3, top: 22, width: 6.3, height: 30 }),
+        lateral('lat_9', 'izquierdo', 9, { left: 94.2, top: 22, width: 3.9, height: 30 }),
       ],
     },
     frontal: {
@@ -279,10 +294,12 @@ const MB_O500UA_2836: BusModelConfig = {
 };
 
 /**
- * Foton U10 — al igual que el O500UA, la ficha no trae numeración
- * impresa, así que se agrupan las ventanas por tramo en vez de vidrio
- * por vidrio. Luneta trasera de ancho completo (a diferencia de los
- * otros modelos, que la tienen como ventana pequeña).
+ * Foton U10 — la ficha no trae números impresos, pero igual se numera
+ * vidrio por vidrio (no por tramo) para poder identificar y llevar stock
+ * de cada uno, igual que el Foton U12: vidrio lateral derecho 1-5,
+ * izquierdo 6-13, puertas A-D (2 puertas de un solo panel cada lado).
+ * Luneta trasera de ancho completo (a diferencia de los otros modelos,
+ * que la tienen como ventana pequeña).
  */
 const FOTON_U10: BusModelConfig = {
   id: 'foton_u10',
@@ -294,19 +311,31 @@ const FOTON_U10: BusModelConfig = {
       aspectRatio: 787 / 280,
       ppuMask: { left: 42, top: 62, width: 16, height: 12 },
       zones: [
-        lateral('lat_trasero', 'derecho', 1, { left: 5, top: 22, width: 20, height: 32 }),
-        puerta('puerta_d', 'D', { left: 33, top: 22, width: 4, height: 32 }),
-        puerta('puerta_c', 'C', { left: 38, top: 22, width: 4, height: 32 }),
-        lateral('lat_medio', 'derecho', 2, { left: 44, top: 22, width: 32, height: 32 }),
-        puerta('puerta_b', 'B', { left: 78, top: 22, width: 4, height: 32 }),
-        puerta('puerta_a', 'A', { left: 83, top: 22, width: 4, height: 32 }),
+        lateral('lat_5', 'derecho', 5, { left: 11.4, top: 22, width: 8.7, height: 32 }),
+        lateral('lat_4', 'derecho', 4, { left: 22.9, top: 22, width: 8.7, height: 32 }),
+        puerta('puerta_d', 'D', { left: 34.1, top: 22, width: 3.3, height: 32 }),
+        puerta('puerta_c', 'C', { left: 39.3, top: 22, width: 3.3, height: 32 }),
+        lateral('lat_3', 'derecho', 3, { left: 44.7, top: 22, width: 8.7, height: 32 }),
+        lateral('lat_2', 'derecho', 2, { left: 55.0, top: 22, width: 8.8, height: 32 }),
+        lateral('lat_1', 'derecho', 1, { left: 65.2, top: 22, width: 4.6, height: 32 }),
+        puerta('puerta_b', 'B', { left: 77.3, top: 22, width: 3.3, height: 32 }),
+        puerta('puerta_a', 'A', { left: 82.5, top: 22, width: 3.3, height: 32 }),
       ],
     },
     izquierdo: {
       source: require('../../assets/images/bus-diagrams/foton-u10/izquierdo.png'),
       aspectRatio: 889 / 265,
       ppuMask: { left: 42, top: 62, width: 16, height: 12 },
-      zones: [lateral('lat_izq', 'izquierdo', 3, { left: 10, top: 22, width: 78, height: 32 })],
+      zones: [
+        lateral('lat_13', 'izquierdo', 13, { left: 0, top: 22, width: 12.4, height: 32 }),
+        lateral('lat_12', 'izquierdo', 12, { left: 15.1, top: 22, width: 6.3, height: 32 }),
+        lateral('lat_11', 'izquierdo', 11, { left: 24.7, top: 22, width: 7.8, height: 32 }),
+        lateral('lat_10', 'izquierdo', 10, { left: 33.7, top: 22, width: 7.8, height: 32 }),
+        lateral('lat_9', 'izquierdo', 9, { left: 43.0, top: 22, width: 7.7, height: 32 }),
+        lateral('lat_8', 'izquierdo', 8, { left: 52.3, top: 22, width: 7.7, height: 32 }),
+        lateral('lat_7', 'izquierdo', 7, { left: 62.3, top: 22, width: 7.7, height: 32 }),
+        lateral('lat_6', 'izquierdo', 6, { left: 72.4, top: 22, width: 7.7, height: 32 }),
+      ],
     },
     frontal: {
       source: require('../../assets/images/bus-diagrams/foton-u10/frontal.png'),
