@@ -89,14 +89,20 @@ export async function getAllCases(db: DbShape): Promise<CaseWithAge[]> {
 const OPEN_STATUSES = new Set(['open', 'assigned', 'in_progress']);
 
 /**
- * IDs de equipo (patente) con al menos un caso abierto/asignado/en proceso,
- * considerando tanto casos técnicos como de vidrios — un bus se considera
- * "no operativo" mientras tenga cualquiera de los dos sin resolver.
+ * IDs de equipo (patente) con al menos un caso abierto/asignado/en proceso.
+ * Por defecto considera casos técnicos y de vidrios juntos (un bus queda
+ * "no operativo" mientras tenga cualquiera de los dos sin resolver). Si se
+ * indica `module`, sólo cuenta los casos de ese módulo — así cada módulo
+ * ve su propio estado operativo/no operativo para su reportería diaria,
+ * sin mezclar el estado del otro módulo.
  */
-export async function getNonOperationalEquipmentIds(db: DbShape): Promise<Set<string>> {
+export async function getNonOperationalEquipmentIds(
+  db: DbShape,
+  module?: 'tech' | 'glass',
+): Promise<Set<string>> {
   const [techCases, glassCases] = await Promise.all([
-    getAllCases(db),
-    Promise.resolve(db.glassCases.map(withLocalAge)),
+    module === 'glass' ? Promise.resolve([]) : getAllCases(db),
+    module === 'tech' ? Promise.resolve([]) : Promise.resolve(db.glassCases.map(withLocalAge)),
   ]);
   const nonOperational = new Set<string>();
   for (const c of [...techCases, ...glassCases]) {

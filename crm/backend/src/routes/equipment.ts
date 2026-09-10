@@ -28,7 +28,8 @@ function toEquipment(bus: IntranetBus): Equipment {
 
 equipmentRouter.get('/', async (req, res) => {
   const db = loadDb();
-  const nonOperational = await getNonOperationalEquipmentIds(db);
+  const module = req.query.module === 'glass' || req.query.module === 'tech' ? req.query.module : undefined;
+  const nonOperational = await getNonOperationalEquipmentIds(db, module);
   const allowedTerminals = allowedTerminalsFor(db, req.auth);
 
   if (isIntranetEnabled()) {

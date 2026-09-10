@@ -38,9 +38,10 @@ export function useDeleteTechnician() {
 }
 
 export function useEquipment() {
+  const module = getModule();
   return useQuery({
-    queryKey: ['equipment'],
-    queryFn: async () => (await api.get<Equipment[]>('/equipment')).data,
+    queryKey: ['equipment', module],
+    queryFn: async () => (await api.get<Equipment[]>('/equipment', { params: { module } })).data,
   });
 }
 

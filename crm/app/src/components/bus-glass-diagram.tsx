@@ -3,6 +3,7 @@ import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '@/constants/colors';
 
 export type BusBodyType = 'estandar' | 'articulado';
+type ViewSide = 'derecho' | 'izquierdo' | 'frontal' | 'trasero';
 
 export interface GlassZone {
   id: string;
@@ -12,40 +13,122 @@ export interface GlassZone {
 
 interface ZoneRect extends GlassZone {
   left: number;
+  top: number;
   width: number;
+  height: number;
+}
+
+interface ViewConfig {
+  source: number;
+  aspectRatio: number;
+  zones: ZoneRect[];
+  ppuMask: { left: number; top: number; width: number; height: number };
 }
 
 // Posiciones en % sobre la ficha técnica oficial (RED Metropolitana de
-// Movilidad) — imágenes reales recortadas, no un dibujo aproximado. Las
-// franjas cubren el área de ventanas/puertas de cada imagen; la PPU
-// impresa en la imagen ("FL XV 13") se tapa y se reemplaza por la patente
-// real del bus seleccionado.
-const WINDOW_BAND = { top: 10, height: 48 };
-
-const STANDARD_ZONES: ZoneRect[] = [
-  { id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas delantero', left: 0, width: 9 },
-  { id: 'lateral1', categoria: 'vidrio_lateral', label: 'Vidrio lateral delantero', left: 9, width: 14 },
-  { id: 'puerta1', categoria: 'vidrio_puertas', label: 'Vidrio puerta delantera', left: 23, width: 7 },
-  { id: 'lateral2', categoria: 'vidrio_lateral', label: 'Vidrio lateral medio', left: 30, width: 40 },
-  { id: 'puerta2', categoria: 'vidrio_puertas', label: 'Vidrio puerta trasera', left: 70, width: 22 },
+// Movilidad) — imágenes reales recortadas, no un dibujo aproximado. Cada
+// lado/vista tiene su propia imagen y sus propias zonas; el lado
+// izquierdo se obtiene reflejando las coordenadas del derecho porque el
+// diseño oficial es simétrico. La PPU impresa en la imagen se tapa y se
+// reemplaza por la patente real del bus seleccionado.
+const STD_WINDOW_BAND_RIGHT = { top: 10, height: 48 };
+const STD_ZONES_RIGHT: Omit<ZoneRect, 'top' | 'height'>[] = [
+  { id: 'lateral_trasero', categoria: 'vidrio_lateral', label: 'Vidrio lateral trasero', left: 4.9, width: 27.6 },
+  { id: 'puerta_trasera', categoria: 'vidrio_puertas', label: 'Vidrio puerta trasera', left: 36.9, width: 4.1 },
+  { id: 'lateral_medio', categoria: 'vidrio_lateral', label: 'Vidrio lateral medio', left: 41.0, width: 28.5 },
+  { id: 'puerta_delantera', categoria: 'vidrio_puertas', label: 'Vidrio puerta delantera', left: 69.6, width: 10.3 },
+  { id: 'lateral_delantero', categoria: 'vidrio_lateral', label: 'Vidrio lateral delantero', left: 80.0, width: 14.0 },
+  { id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas (lateral)', left: 94.2, width: 5.8 },
 ];
 
-const ARTICULATED_ZONES: ZoneRect[] = [
-  { id: 'lateral1', categoria: 'vidrio_lateral', label: 'Vidrio lateral delantero (1er cuerpo)', left: 0, width: 20 },
-  { id: 'puerta1', categoria: 'vidrio_puertas', label: 'Vidrio puerta delantera', left: 20, width: 8 },
-  { id: 'lateral2', categoria: 'vidrio_lateral', label: 'Vidrio lateral medio (1er cuerpo)', left: 37, width: 23 },
-  { id: 'lateral3', categoria: 'vidrio_lateral', label: 'Vidrio lateral medio (2do cuerpo)', left: 60, width: 23 },
-  { id: 'puerta2', categoria: 'vidrio_puertas', label: 'Vidrio puerta trasera', left: 83, width: 15 },
+const ART_WINDOW_BAND_RIGHT = { top: 12, height: 46 };
+const ART_ZONES_RIGHT: Omit<ZoneRect, 'top' | 'height'>[] = [
+  { id: 'lateral_trasero1', categoria: 'vidrio_lateral', label: 'Vidrio lateral trasero (1er cuerpo)', left: 4.1, width: 24.4 },
+  { id: 'puerta_trasera1', categoria: 'vidrio_puertas', label: 'Vidrio puerta trasera (1er cuerpo)', left: 28.6, width: 9.8 },
+  { id: 'lateral_trasero2', categoria: 'vidrio_lateral', label: 'Vidrio lateral trasero (2do cuerpo)', left: 50.1, width: 14.4 },
+  { id: 'puerta_delantera2', categoria: 'vidrio_puertas', label: 'Vidrio puerta delantera (2do cuerpo)', left: 70.0, width: 4.8 },
+  { id: 'lateral_delantero2', categoria: 'vidrio_lateral', label: 'Vidrio lateral delantero (2do cuerpo)', left: 74.8, width: 8.4 },
+  { id: 'lateral_frontal', categoria: 'vidrio_lateral', label: 'Vidrio lateral frontal', left: 91.2, width: 5.8 },
+  { id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas (lateral)', left: 97.0, width: 3.0 },
 ];
 
-const PPU_MASK: Record<BusBodyType, { left: number; top: number; width: number; height: number }> = {
-  estandar: { left: 5, top: 64, width: 23, height: 10 },
-  articulado: { left: 29.5, top: 61, width: 10, height: 10.5 },
+function mirrorZones(zones: Omit<ZoneRect, 'top' | 'height'>[], band: { top: number; height: number }): ZoneRect[] {
+  return zones.map((z) => ({
+    ...z,
+    left: 100 - z.left - z.width,
+    top: band.top,
+    height: band.height,
+  }));
+}
+
+function withBand(zones: Omit<ZoneRect, 'top' | 'height'>[], band: { top: number; height: number }): ZoneRect[] {
+  return zones.map((z) => ({ ...z, top: band.top, height: band.height }));
+}
+
+const STD_WINDOW_BAND_LEFT = { top: 20, height: 36 };
+const ART_WINDOW_BAND_LEFT = { top: 26, height: 34 };
+
+const CONFIGS: Record<BusBodyType, Record<ViewSide, ViewConfig>> = {
+  estandar: {
+    derecho: {
+      source: require('../../assets/images/bus-diagrams/bus-standard.png'),
+      aspectRatio: 769 / 202,
+      zones: withBand(STD_ZONES_RIGHT, STD_WINDOW_BAND_RIGHT),
+      ppuMask: { left: 5, top: 64, width: 23, height: 10 },
+    },
+    izquierdo: {
+      source: require('../../assets/images/bus-diagrams/bus-standard-left.png'),
+      aspectRatio: 810 / 165,
+      zones: mirrorZones(STD_ZONES_RIGHT, STD_WINDOW_BAND_LEFT),
+      ppuMask: { left: 72, top: 64, width: 23, height: 10 },
+    },
+    frontal: {
+      source: require('../../assets/images/bus-diagrams/bus-front.png'),
+      aspectRatio: 260 / 225,
+      zones: [{ id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas delantero', left: 15, top: 33, width: 59, height: 35 }],
+      ppuMask: { left: 32, top: 88, width: 36, height: 10 },
+    },
+    trasero: {
+      source: require('../../assets/images/bus-diagrams/bus-rear.png'),
+      aspectRatio: 190 / 225,
+      zones: [{ id: 'luna_trasera', categoria: 'luna_trasera', label: 'Luna trasera', left: 13, top: 12, width: 78, height: 30 }],
+      ppuMask: { left: 32, top: 44, width: 36, height: 10 },
+    },
+  },
+  articulado: {
+    derecho: {
+      source: require('../../assets/images/bus-diagrams/bus-articulated.png'),
+      aspectRatio: 1118 / 190,
+      zones: withBand(ART_ZONES_RIGHT, ART_WINDOW_BAND_RIGHT),
+      ppuMask: { left: 29.5, top: 61, width: 10, height: 10.5 },
+    },
+    izquierdo: {
+      source: require('../../assets/images/bus-diagrams/bus-articulated-left.png'),
+      aspectRatio: 1150 / 220,
+      zones: mirrorZones(ART_ZONES_RIGHT, ART_WINDOW_BAND_LEFT),
+      ppuMask: { left: 60.5, top: 61, width: 10, height: 10.5 },
+    },
+    frontal: {
+      source: require('../../assets/images/bus-diagrams/bus-front.png'),
+      aspectRatio: 260 / 225,
+      zones: [{ id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas delantero', left: 15, top: 33, width: 59, height: 35 }],
+      ppuMask: { left: 32, top: 88, width: 36, height: 10 },
+    },
+    trasero: {
+      source: require('../../assets/images/bus-diagrams/bus-rear.png'),
+      aspectRatio: 190 / 225,
+      zones: [{ id: 'luna_trasera', categoria: 'luna_trasera', label: 'Luna trasera', left: 13, top: 12, width: 78, height: 30 }],
+      ppuMask: { left: 32, top: 44, width: 36, height: 10 },
+    },
+  },
 };
 
-const IMAGES: Record<BusBodyType, { source: number; aspectRatio: number }> = {
-  estandar: { source: require('../../assets/images/bus-diagrams/bus-standard.png'), aspectRatio: 769 / 202 },
-  articulado: { source: require('../../assets/images/bus-diagrams/bus-articulated.png'), aspectRatio: 1118 / 190 },
+const VIEW_ORDER: ViewSide[] = ['derecho', 'frontal', 'izquierdo', 'trasero'];
+const VIEW_LABELS: Record<ViewSide, string> = {
+  derecho: 'Costado derecho',
+  izquierdo: 'Costado izquierdo',
+  frontal: 'Frontal',
+  trasero: 'Trasero',
 };
 
 export function BusGlassDiagram({
@@ -56,11 +139,16 @@ export function BusGlassDiagram({
   ppu?: string | null;
 }) {
   const [busType, setBusType] = useState<BusBodyType>('estandar');
+  const [viewIndex, setViewIndex] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const zones = busType === 'articulado' ? ARTICULATED_ZONES : STANDARD_ZONES;
-  const image = IMAGES[busType];
-  const mask = PPU_MASK[busType];
+  const view = VIEW_ORDER[viewIndex];
+  const config = CONFIGS[busType][view];
+
+  function rotate(dir: 1 | -1) {
+    setViewIndex((i) => (i + dir + VIEW_ORDER.length) % VIEW_ORDER.length);
+    setSelectedId(null);
+  }
 
   function handlePress(zone: ZoneRect) {
     setSelectedId(zone.id);
@@ -86,14 +174,24 @@ export function BusGlassDiagram({
         ))}
       </View>
 
-      <View style={[styles.busShell, { aspectRatio: image.aspectRatio }]}>
+      <View style={styles.rotateRow}>
+        <Pressable style={styles.rotateBtn} onPress={() => rotate(-1)} hitSlop={8}>
+          <Text style={styles.rotateBtnText}>‹</Text>
+        </Pressable>
+        <Text style={styles.viewLabel}>{VIEW_LABELS[view]}</Text>
+        <Pressable style={styles.rotateBtn} onPress={() => rotate(1)} hitSlop={8}>
+          <Text style={styles.rotateBtnText}>›</Text>
+        </Pressable>
+      </View>
+
+      <View style={[styles.busShell, { aspectRatio: config.aspectRatio }]}>
         <Image
-          source={image.source}
+          source={config.source}
           style={[StyleSheet.absoluteFill, { width: '100%', height: '100%' }]}
           resizeMode="contain"
         />
 
-        {zones.map((zone) => (
+        {config.zones.map((zone) => (
           <Pressable
             key={zone.id}
             onPress={() => handlePress(zone)}
@@ -102,8 +200,8 @@ export function BusGlassDiagram({
               {
                 left: `${zone.left}%`,
                 width: `${zone.width}%`,
-                top: `${WINDOW_BAND.top}%`,
-                height: `${WINDOW_BAND.height}%`,
+                top: `${zone.top}%`,
+                height: `${zone.height}%`,
               },
               selectedId === zone.id && styles.zoneSelected,
             ]}
@@ -114,10 +212,10 @@ export function BusGlassDiagram({
           style={[
             styles.ppuMask,
             {
-              left: `${mask.left}%`,
-              top: `${mask.top}%`,
-              width: `${mask.width}%`,
-              height: `${mask.height}%`,
+              left: `${config.ppuMask.left}%`,
+              top: `${config.ppuMask.top}%`,
+              width: `${config.ppuMask.width}%`,
+              height: `${config.ppuMask.height}%`,
             },
           ]}
         >
@@ -128,13 +226,14 @@ export function BusGlassDiagram({
       </View>
 
       <Text style={styles.hint}>
-        Toca el vidrio dañado en el dibujo — se completa la categoría y la zona automáticamente.
+        Usa ‹ › para girar el bus y ver el otro costado, el frente o la parte trasera. Toca el vidrio dañado — se
+        completa la categoría automáticamente.
       </Text>
 
       {selectedId && (
         <View style={styles.selectedBadge}>
           <Text style={styles.selectedBadgeText}>
-            Zona elegida: {zones.find((z) => z.id === selectedId)?.label}
+            Zona elegida: {config.zones.find((z) => z.id === selectedId)?.label}
           </Text>
         </View>
       )}
@@ -158,6 +257,19 @@ const styles = StyleSheet.create({
   typeChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   typeChipText: { fontSize: 12, color: colors.text, fontWeight: '600' },
   typeChipTextActive: { color: colors.primaryText },
+  rotateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14 },
+  rotateBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.surface,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rotateBtnText: { fontSize: 20, fontWeight: '800', color: colors.primary, lineHeight: 22 },
+  viewLabel: { fontSize: 13, fontWeight: '800', color: colors.text, minWidth: 130, textAlign: 'center' },
   busShell: {
     width: '100%',
     backgroundColor: '#fff',
