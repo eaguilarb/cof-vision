@@ -6,6 +6,7 @@
  */
 export const GLASS_CATEGORIAS: { value: string; label: string }[] = [
   { value: 'vidrio_lateral', label: 'Vidrio lateral' },
+  { value: 'vidrio_corredera', label: 'Vidrio corredera' },
   { value: 'parabrisas', label: 'Parabrisas' },
   { value: 'vidrio_puertas', label: 'Vidrio de puertas' },
   { value: 'luna_trasera', label: 'Luna trasera' },

@@ -1,29 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '@/constants/colors';
+import { findBusModel, type GlassZone, type ViewConfig, type ViewSide, type ZoneRect } from '@/data/bus-models';
 
 export type BusBodyType = 'estandar' | 'articulado';
-type ViewSide = 'derecho' | 'izquierdo' | 'frontal' | 'trasero';
-
-export interface GlassZone {
-  id: string;
-  categoria: string;
-  label: string;
-}
-
-interface ZoneRect extends GlassZone {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
-interface ViewConfig {
-  source: number;
-  aspectRatio: number;
-  zones: ZoneRect[];
-  ppuMask: { left: number; top: number; width: number; height: number };
-}
+export type { GlassZone };
 
 // Posiciones en % sobre la ficha técnica oficial (RED Metropolitana de
 // Movilidad) — imágenes reales recortadas, no un dibujo aproximado. Cada
@@ -134,16 +115,27 @@ const VIEW_LABELS: Record<ViewSide, string> = {
 export function BusGlassDiagram({
   onSelectZone,
   ppu,
+  busModel,
 }: {
   onSelectZone: (zone: GlassZone) => void;
   ppu?: string | null;
+  /** Equipment.model del bus seleccionado — si matchea un modelo cargado
+   * en bus-models.ts, se usa su diagrama con numeración específica en vez
+   * del genérico estándar/articulado. */
+  busModel?: string | null;
 }) {
   const [busType, setBusType] = useState<BusBodyType>('estandar');
   const [viewIndex, setViewIndex] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
+  const matchedModel = findBusModel(busModel);
+
+  useEffect(() => {
+    setSelectedId(null);
+  }, [busModel]);
+
   const view = VIEW_ORDER[viewIndex];
-  const config = CONFIGS[busType][view];
+  const config = matchedModel ? matchedModel.views[view] : CONFIGS[busType][view];
 
   function rotate(dir: 1 | -1) {
     setViewIndex((i) => (i + dir + VIEW_ORDER.length) % VIEW_ORDER.length);
@@ -157,22 +149,26 @@ export function BusGlassDiagram({
 
   return (
     <View style={styles.wrap}>
-      <View style={styles.typeToggle}>
-        {(['estandar', 'articulado'] as BusBodyType[]).map((t) => (
-          <Pressable
-            key={t}
-            style={[styles.typeChip, busType === t && styles.typeChipActive]}
-            onPress={() => {
-              setBusType(t);
-              setSelectedId(null);
-            }}
-          >
-            <Text style={[styles.typeChipText, busType === t && styles.typeChipTextActive]}>
-              {t === 'estandar' ? 'Bus estándar' : 'Bus articulado'}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+      {matchedModel ? (
+        <Text style={styles.modelBadge}>Modelo detectado: {matchedModel.displayName}</Text>
+      ) : (
+        <View style={styles.typeToggle}>
+          {(['estandar', 'articulado'] as BusBodyType[]).map((t) => (
+            <Pressable
+              key={t}
+              style={[styles.typeChip, busType === t && styles.typeChipActive]}
+              onPress={() => {
+                setBusType(t);
+                setSelectedId(null);
+              }}
+            >
+              <Text style={[styles.typeChipText, busType === t && styles.typeChipTextActive]}>
+                {t === 'estandar' ? 'Bus estándar' : 'Bus articulado'}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
 
       <View style={styles.rotateRow}>
         <Pressable style={styles.rotateBtn} onPress={() => rotate(-1)} hitSlop={8}>
@@ -257,6 +253,7 @@ const styles = StyleSheet.create({
   typeChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   typeChipText: { fontSize: 12, color: colors.text, fontWeight: '600' },
   typeChipTextActive: { color: colors.primaryText },
+  modelBadge: { fontSize: 12, fontWeight: '700', color: colors.primary },
   rotateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 14 },
   rotateBtn: {
     width: 34,

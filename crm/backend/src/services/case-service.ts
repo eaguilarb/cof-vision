@@ -89,12 +89,21 @@ export async function getAllCases(db: DbShape): Promise<CaseWithAge[]> {
 const OPEN_STATUSES = new Set(['open', 'assigned', 'in_progress']);
 
 /**
- * IDs de equipo (patente) con al menos un caso abierto/asignado/en proceso.
- * Por defecto considera casos técnicos y de vidrios juntos (un bus queda
- * "no operativo" mientras tenga cualquiera de los dos sin resolver). Si se
- * indica `module`, sólo cuenta los casos de ese módulo — así cada módulo
- * ve su propio estado operativo/no operativo para su reportería diaria,
- * sin mezclar el estado del otro módulo.
+ * Categorías técnicas que NO dejan el bus fuera de servicio: el bus sigue
+ * operando con normalidad mientras se resuelve (cámaras, disco duro y DVR
+ * son solo de respaldo/registro, no afectan la operación de la ruta).
+ * Todo lo demás (GPS, wifi/router, consola de validación, validador,
+ * otro) sí lo deja no operativo — igual que cualquier caso de Vidrios.
+ */
+const TECH_CATEGORIAS_SIN_IMPACTO_OPERATIVO = new Set(['camaras', 'disco_duro', 'dvr']);
+
+/**
+ * IDs de equipo (patente) con al menos un caso abierto/asignado/en proceso
+ * que sí afecta su operación. Por defecto considera casos técnicos y de
+ * vidrios juntos (un bus queda "no operativo" mientras tenga cualquiera de
+ * los dos sin resolver). Si se indica `module`, sólo cuenta los casos de
+ * ese módulo — así cada módulo ve su propio estado operativo/no operativo
+ * para su reportería diaria, sin mezclar el estado del otro módulo.
  */
 export async function getNonOperationalEquipmentIds(
   db: DbShape,
@@ -105,7 +114,12 @@ export async function getNonOperationalEquipmentIds(
     module === 'tech' ? Promise.resolve([]) : Promise.resolve(db.glassCases.map(withLocalAge)),
   ]);
   const nonOperational = new Set<string>();
-  for (const c of [...techCases, ...glassCases]) {
+  for (const c of techCases) {
+    if (!OPEN_STATUSES.has(c.status)) continue;
+    if (c.categoria && TECH_CATEGORIAS_SIN_IMPACTO_OPERATIVO.has(c.categoria)) continue;
+    nonOperational.add(c.equipmentId);
+  }
+  for (const c of glassCases) {
     if (OPEN_STATUSES.has(c.status)) nonOperational.add(c.equipmentId);
   }
   return nonOperational;
