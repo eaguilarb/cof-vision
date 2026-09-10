@@ -1,46 +1,66 @@
-import {
-  env,
-  pipeline,
-  RawImage,
-  type ImageToTextPipeline,
-  type ProgressInfo,
-} from '@huggingface/transformers'
+import Anthropic from '@anthropic-ai/sdk'
 
-// Todo corre localmente en el navegador: no se sube ningún fotograma a ningún
-// servidor y no se necesita API key ni conexión luego de la primera carga.
-env.allowLocalModels = false
+// claude-haiku-4-5: el modelo más rápido y barato de Anthropic, ideal para
+// describir fotogramas de video cada pocos segundos sin costar mucho.
+const MODEL_ID = 'claude-haiku-4-5'
+const MAX_FRAME_WIDTH = 640
 
-const MODEL_ID = 'Xenova/vit-gpt2-image-captioning'
-
-export type CaptionModelStatus = 'idle' | 'loading' | 'ready' | 'error'
-
-export interface CaptionLoadProgress {
-  loaded: number
-  total: number
-  progress: number
+export function createCaptionClient(apiKey: string): Anthropic {
+  // dangerouslyAllowBrowser: esta app no tiene backend, la llamada sale
+  // directo del navegador con la API key que el usuario pega localmente.
+  return new Anthropic({ apiKey, dangerouslyAllowBrowser: true })
 }
 
-let pipelinePromise: Promise<ImageToTextPipeline> | null = null
+/** Dibuja el fotograma actual del video en un canvas, reducido de tamaño para gastar menos. */
+export function drawFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement): boolean {
+  if (video.videoWidth === 0) return false
+  const scale = Math.min(1, MAX_FRAME_WIDTH / video.videoWidth)
+  canvas.width = Math.round(video.videoWidth * scale)
+  canvas.height = Math.round(video.videoHeight * scale)
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return false
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+  return true
+}
 
-/** Carga (una sola vez) el modelo de descripción de imágenes, en cuantización q8 para pesar menos. */
-export function loadCaptioner(onProgress?: (info: CaptionLoadProgress) => void): Promise<ImageToTextPipeline> {
-  if (!pipelinePromise) {
-    pipelinePromise = pipeline('image-to-text', MODEL_ID, {
-      dtype: 'q8',
-      progress_callback: (info: ProgressInfo) => {
-        if (info.status === 'progress_total') {
-          onProgress?.({ loaded: info.loaded, total: info.total, progress: info.progress })
-        }
+function canvasToJpegBase64(canvas: HTMLCanvasElement): string {
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+  return dataUrl.slice(dataUrl.indexOf(',') + 1)
+}
+
+/** Describe en una frase corta lo que se ve en el fotograma, usando visión de Claude. */
+export async function captionFrame(client: Anthropic, canvas: HTMLCanvasElement): Promise<string> {
+  const base64 = canvasToJpegBase64(canvas)
+  const response = await client.messages.create({
+    model: MODEL_ID,
+    max_tokens: 100,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: base64 } },
+          {
+            type: 'text',
+            text: 'Describe en una sola frase corta y natural, en español, qué está pasando en esta escena de video.',
+          },
+        ],
       },
-    }) as Promise<ImageToTextPipeline>
-  }
-  return pipelinePromise
+    ],
+  })
+
+  const textBlock = response.content.find((block) => block.type === 'text')
+  return textBlock?.text.trim() ?? ''
 }
 
-/** Genera una descripción en texto de un fotograma capturado en un <canvas>. */
-export async function captionFrame(captioner: ImageToTextPipeline, canvas: HTMLCanvasElement): Promise<string> {
-  const image = RawImage.fromCanvas(canvas)
-  const output = await captioner(image, { max_new_tokens: 40 })
-  const [first] = Array.isArray(output) ? output : [output]
-  return (first?.generated_text ?? '').trim()
+export function describeCaptionError(err: unknown): string {
+  if (err instanceof Anthropic.AuthenticationError) {
+    return 'La API key no es válida. Revísala en console.anthropic.com.'
+  }
+  if (err instanceof Anthropic.RateLimitError) {
+    return 'Se alcanzó el límite de uso de la API. Intenta de nuevo en un momento.'
+  }
+  if (err instanceof Anthropic.APIError) {
+    return `Error de la API (${err.status}): ${err.message}`
+  }
+  return err instanceof Error ? err.message : 'Error desconocido al describir el video.'
 }
