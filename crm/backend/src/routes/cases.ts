@@ -7,7 +7,7 @@ import { getUploadsDir, loadDb, saveDb } from '../db.js';
 import { notifyIntranetCaso, notifyLocalCase } from '../notifications.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { getOverlay, toCase, withLocalAge } from '../services/case-service.js';
-import { allowedTerminalsFor } from '../services/terminal-access.js';
+import { allowedTerminalsFor, requireModuleAccess } from '../services/terminal-access.js';
 import type { Case, CasePhoto, CasePriority, CaseStatus, CaseWithAge } from '../types.js';
 import {
   GENERIC_RESOLUTION_ACTIONS,
@@ -29,6 +29,7 @@ function validResolutionActionValues(categoria: string | null): string[] {
 export const casesRouter = Router();
 
 casesRouter.use(requireAuth);
+casesRouter.use(requireModuleAccess('tech'));
 
 const VALID_STATUSES: CaseStatus[] = ['open', 'assigned', 'in_progress', 'resolved'];
 const VALID_PRIORITIES: CasePriority[] = ['low', 'medium', 'high', 'urgent'];

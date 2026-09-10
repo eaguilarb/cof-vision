@@ -16,6 +16,8 @@ export interface AuthUser {
   email: string;
   role: Role;
   technicianId: string | null;
+  /** Módulo al que queda restringido este operador, o null si ve ambos. */
+  assignedModule: 'tech' | 'glass' | null;
 }
 
 export interface AppUser {
@@ -36,6 +38,8 @@ export interface Technician {
   active: boolean;
   /** Terminales que puede ver/procesar. Vacío = sin restricción (ve todos). */
   assignedTerminals?: string[];
+  /** Módulo al que queda restringido: "tech", "glass", o sin restricción. */
+  assignedModule?: 'tech' | 'glass';
 }
 
 export interface Equipment {

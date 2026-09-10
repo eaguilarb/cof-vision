@@ -96,7 +96,10 @@ export function useDeleteCase() {
   const base = casesBasePath();
   return useMutation({
     mutationFn: async (id: string) => api.delete(`${base}/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: [base] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [base] });
+      queryClient.invalidateQueries({ queryKey: ['equipment'] });
+    },
   });
 }
 
@@ -115,7 +118,10 @@ export function useCreateCase() {
       title?: string;
       clientName?: string;
     }) => (await api.post<Case>(base, input)).data,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: [base] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [base] });
+      queryClient.invalidateQueries({ queryKey: ['equipment'] });
+    },
   });
 }
 
@@ -149,6 +155,7 @@ export function useUpdateCaseStatus() {
     }) => (await api.patch<Case>(`${base}/${id}/status`, { status, resolutionAction, resolutionNotes })).data,
     onSuccess: (updated) => {
       queryClient.invalidateQueries({ queryKey: [base] });
+      queryClient.invalidateQueries({ queryKey: ['equipment'] });
       queryClient.setQueryData([base, updated.id], updated);
     },
   });
@@ -281,6 +288,7 @@ export function useUpdateTechnician() {
       specialty?: string;
       active?: boolean;
       assignedTerminals?: string[];
+      assignedModule?: 'tech' | 'glass' | null;
       password?: string;
     }) => (await api.patch<Technician>(`/technicians/${id}`, input)).data,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['technicians'] }),

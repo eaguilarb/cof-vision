@@ -6,7 +6,7 @@ import { v4 as uuid } from 'uuid';
 import { getUploadsDir, loadDb, saveDb } from '../db.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { withLocalAge } from '../services/case-service.js';
-import { allowedTerminalsFor } from '../services/terminal-access.js';
+import { allowedTerminalsFor, requireModuleAccess } from '../services/terminal-access.js';
 import { GLASS_RESOLUTION_ACTIONS } from '../glass.js';
 import { fetchFlota, isIntranetEnabled } from '../intranet.js';
 import type { Case, CasePhoto, CasePriority, CaseStatus } from '../types.js';
@@ -19,6 +19,7 @@ import type { Case, CasePhoto, CasePriority, CaseStatus } from '../types.js';
 export const glassCasesRouter = Router();
 
 glassCasesRouter.use(requireAuth);
+glassCasesRouter.use(requireModuleAccess('glass'));
 
 const VALID_STATUSES: CaseStatus[] = ['open', 'assigned', 'in_progress', 'resolved'];
 const VALID_PRIORITIES: CasePriority[] = ['low', 'medium', 'high', 'urgent'];

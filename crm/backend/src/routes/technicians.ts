@@ -14,15 +14,20 @@ techniciansRouter.get('/', (_req, res) => {
 });
 
 techniciansRouter.post('/', requireRole('admin'), (req, res) => {
-  const { name, email, phone, specialty, password } = req.body as {
+  const { name, email, phone, specialty, password, assignedModule } = req.body as {
     name?: string;
     email?: string;
     phone?: string;
     specialty?: string;
     password?: string;
+    assignedModule?: 'tech' | 'glass';
   };
   if (!name || !email || !password) {
     res.status(400).json({ error: 'name, email y password son requeridos' });
+    return;
+  }
+  if (assignedModule !== undefined && assignedModule !== 'tech' && assignedModule !== 'glass') {
+    res.status(400).json({ error: 'assignedModule debe ser "tech" o "glass"' });
     return;
   }
 
@@ -43,6 +48,7 @@ techniciansRouter.post('/', requireRole('admin'), (req, res) => {
     phone,
     specialty,
     active: true,
+    assignedModule,
   });
 
   db.users.push({
@@ -66,19 +72,25 @@ techniciansRouter.patch('/:id', requireRole('admin'), (req, res) => {
     res.status(404).json({ error: 'Técnico no encontrado' });
     return;
   }
-  const { name, phone, specialty, active, assignedTerminals, password } = req.body as Partial<{
+  const { name, phone, specialty, active, assignedTerminals, assignedModule, password } = req.body as Partial<{
     name: string;
     phone: string;
     specialty: string;
     active: boolean;
     assignedTerminals: string[];
+    assignedModule: 'tech' | 'glass' | null;
     password: string;
   }>;
+  if (assignedModule !== undefined && assignedModule !== null && assignedModule !== 'tech' && assignedModule !== 'glass') {
+    res.status(400).json({ error: 'assignedModule debe ser "tech", "glass" o null' });
+    return;
+  }
   if (name !== undefined) technician.name = name;
   if (phone !== undefined) technician.phone = phone;
   if (specialty !== undefined) technician.specialty = specialty;
   if (active !== undefined) technician.active = active;
   if (assignedTerminals !== undefined) technician.assignedTerminals = assignedTerminals;
+  if (assignedModule !== undefined) technician.assignedModule = assignedModule ?? undefined;
   if (password) {
     const user = db.users.find((u) => u.id === technician.userId);
     if (user) user.passwordHash = bcrypt.hashSync(password, 10);

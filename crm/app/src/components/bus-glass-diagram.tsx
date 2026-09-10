@@ -65,9 +65,6 @@ function withBand(zones: Omit<ZoneRect, 'top' | 'height'>[], band: { top: number
   return zones.map((z) => ({ ...z, top: band.top, height: band.height }));
 }
 
-const STD_WINDOW_BAND_LEFT = { top: 20, height: 36 };
-const ART_WINDOW_BAND_LEFT = { top: 26, height: 34 };
-
 const CONFIGS: Record<BusBodyType, Record<ViewSide, ViewConfig>> = {
   estandar: {
     derecho: {
@@ -77,9 +74,12 @@ const CONFIGS: Record<BusBodyType, Record<ViewSide, ViewConfig>> = {
       ppuMask: { left: 5, top: 64, width: 23, height: 10 },
     },
     izquierdo: {
+      // Volteo horizontal exacto de la imagen del costado derecho — mismo
+      // dibujo, mismas proporciones verticales, así que la franja de
+      // ventanas y la máscara de PPU quedan igual, solo el eje X se refleja.
       source: require('../../assets/images/bus-diagrams/bus-standard-left.png'),
-      aspectRatio: 810 / 165,
-      zones: mirrorZones(STD_ZONES_RIGHT, STD_WINDOW_BAND_LEFT),
+      aspectRatio: 769 / 202,
+      zones: mirrorZones(STD_ZONES_RIGHT, STD_WINDOW_BAND_RIGHT),
       ppuMask: { left: 72, top: 64, width: 23, height: 10 },
     },
     frontal: {
@@ -104,8 +104,8 @@ const CONFIGS: Record<BusBodyType, Record<ViewSide, ViewConfig>> = {
     },
     izquierdo: {
       source: require('../../assets/images/bus-diagrams/bus-articulated-left.png'),
-      aspectRatio: 1150 / 220,
-      zones: mirrorZones(ART_ZONES_RIGHT, ART_WINDOW_BAND_LEFT),
+      aspectRatio: 1118 / 190,
+      zones: mirrorZones(ART_ZONES_RIGHT, ART_WINDOW_BAND_RIGHT),
       ppuMask: { left: 60.5, top: 61, width: 10, height: 10.5 },
     },
     frontal: {

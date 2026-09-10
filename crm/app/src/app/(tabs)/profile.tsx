@@ -56,9 +56,13 @@ export default function ProfileScreen() {
       <View style={styles.card}>
         <Text style={styles.sectionTitle}>Módulo</Text>
         <Text style={styles.mono}>{module ? MODULE_LABELS[module] : '—'}</Text>
-        <Pressable style={styles.linkButton} onPress={handleChangeModule}>
-          <Text style={styles.linkButtonText}>Cambiar módulo</Text>
-        </Pressable>
+        {user?.assignedModule ? (
+          <Text style={styles.hintText}>Tu cuenta está asignada solo a este módulo.</Text>
+        ) : (
+          <Pressable style={styles.linkButton} onPress={handleChangeModule}>
+            <Text style={styles.linkButtonText}>Cambiar módulo</Text>
+          </Pressable>
+        )}
       </View>
 
       <View style={styles.card}>

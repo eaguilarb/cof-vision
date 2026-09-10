@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -17,8 +17,6 @@ import { PRIORITY_LABELS, type CasePriority } from '@/api/types';
 import { useAuth } from '@/state/auth-context';
 import { colors } from '@/constants/colors';
 import { BusGlassDiagram, type GlassZone } from '@/components/bus-glass-diagram';
-import { PlateOcrRunner, type PlateOcrHandle } from '@/components/plate-ocr';
-import { matchPlate } from '@/utils/plate-match';
 
 const PRIORITIES = Object.keys(PRIORITY_LABELS) as CasePriority[];
 const MAX_EQUIPMENT_RESULTS = 25;
@@ -55,9 +53,6 @@ export default function NewCaseScreen() {
   const [technicianId, setTechnicianId] = useState<string | null>(null);
   const [photos, setPhotos] = useState<PendingPhoto[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [isScanningPlate, setIsScanningPlate] = useState(false);
-  const [plateScanMessage, setPlateScanMessage] = useState<string | null>(null);
-  const ocrRef = useRef<PlateOcrHandle>(null);
 
   const requiresFleetEquipment = module === 'tech' && (categoria === 'wifi' || categoria === 'camaras');
 
@@ -78,42 +73,6 @@ export default function NewCaseScreen() {
   function handleSelectZone(zone: GlassZone) {
     setCategoria(zone.categoria);
     setDescription((prev) => (prev.trim() ? prev : `${zone.label}: `));
-  }
-
-  async function handleScanPlate(source: 'camera' | 'library') {
-    setPlateScanMessage(null);
-    setError(null);
-    const permission =
-      source === 'camera'
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!permission.granted) {
-      setError(source === 'camera' ? 'Necesitamos permiso para usar la cámara.' : 'Necesitamos permiso para ver tus fotos.');
-      return;
-    }
-    const options: ImagePicker.ImagePickerOptions = { mediaTypes: ['images'], quality: 0.5, base64: true };
-    const result =
-      source === 'camera' ? await ImagePicker.launchCameraAsync(options) : await ImagePicker.launchImageLibraryAsync(options);
-    if (result.canceled || !result.assets[0]?.base64) return;
-
-    setIsScanningPlate(true);
-    try {
-      const text = await ocrRef.current?.recognize(result.assets[0].base64);
-      const known = equipmentQuery.data ?? [];
-      const match = text ? matchPlate(text, known.map((eq) => eq.name)) : null;
-      const matchedEquipment = match ? known.find((eq) => eq.name === match) : undefined;
-      if (matchedEquipment) {
-        setEquipmentId(matchedEquipment.id);
-        setEquipmentSearch(matchedEquipment.name);
-        setPlateScanMessage(`Detectamos la patente ${matchedEquipment.name} — verifica que sea la correcta abajo.`);
-      } else {
-        setPlateScanMessage('No pudimos reconocer la patente en la foto. Complétala manualmente abajo.');
-      }
-    } catch {
-      setPlateScanMessage('No pudimos leer la foto. Complétala manualmente abajo.');
-    } finally {
-      setIsScanningPlate(false);
-    }
   }
 
   async function handlePickPhoto(source: 'camera' | 'library') {
@@ -179,7 +138,6 @@ export default function NewCaseScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <PlateOcrRunner ref={ocrRef} />
       {!useFixedCategories && (
         <>
           <Text style={styles.label}>Título</Text>
@@ -256,37 +214,13 @@ export default function NewCaseScreen() {
         </Text>
       )}
       {useFixedCategories && (
-        <>
-          <Text style={styles.hint}>
-            Mejor resultado con una foto de atrás o de costado donde se vea el número de flota
-            pintado en grande (ej. "SP BG 27"). Evita fondos con otros buses o estructuras detrás.
-          </Text>
-          <View style={styles.scanRow}>
-            <Pressable
-              style={styles.scanButton}
-              onPress={() => handleScanPlate('camera')}
-              disabled={isScanningPlate}
-            >
-              <Text style={styles.scanButtonText}>📷 Escanear patente</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.scanButton, styles.scanButtonSecondary]}
-              onPress={() => handleScanPlate('library')}
-              disabled={isScanningPlate}
-            >
-              <Text style={[styles.scanButtonText, styles.scanButtonTextSecondary]}>🖼️ Desde galería</Text>
-            </Pressable>
-            {isScanningPlate && <ActivityIndicator color={colors.primary} />}
-          </View>
-          {plateScanMessage && <Text style={styles.hint}>{plateScanMessage}</Text>}
-          <TextInput
-            style={[styles.input, { marginBottom: 8, marginTop: 8 }]}
-            value={equipmentSearch}
-            onChangeText={setEquipmentSearch}
-            placeholder="O busca por patente, ej. SPBP91"
-            autoCapitalize="characters"
-          />
-        </>
+        <TextInput
+          style={[styles.input, { marginBottom: 8, marginTop: 4 }]}
+          value={equipmentSearch}
+          onChangeText={setEquipmentSearch}
+          placeholder="Busca por patente, ej. SPBP91"
+          autoCapitalize="characters"
+        />
       )}
       {equipmentQuery.isLoading ? (
         <ActivityIndicator color={colors.primary} />
@@ -400,16 +334,6 @@ const styles = StyleSheet.create({
   chipTextActive: { color: colors.primaryText },
   hint: { fontSize: 12, color: colors.textMuted },
   error: { color: colors.danger, marginTop: 14, fontSize: 13 },
-  scanRow: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  scanButton: {
-    backgroundColor: colors.primary,
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  scanButtonSecondary: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
-  scanButtonText: { color: colors.primaryText, fontSize: 13, fontWeight: '700' },
-  scanButtonTextSecondary: { color: colors.text },
   photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   photoThumbWrap: { position: 'relative' },
   photoThumb: { width: 64, height: 64, borderRadius: 10, backgroundColor: colors.border },

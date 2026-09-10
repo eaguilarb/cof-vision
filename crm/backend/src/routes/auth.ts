@@ -26,6 +26,8 @@ authRouter.post('/login', (req, res) => {
     name: user.name,
   });
 
+  const technician = user.technicianId ? db.technicians.find((t) => t.id === user.technicianId) : undefined;
+
   res.json({
     token,
     user: {
@@ -34,6 +36,7 @@ authRouter.post('/login', (req, res) => {
       email: user.email,
       role: user.role,
       technicianId: user.technicianId ?? null,
+      assignedModule: technician?.assignedModule ?? null,
     },
   });
 });

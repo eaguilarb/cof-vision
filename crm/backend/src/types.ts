@@ -24,6 +24,13 @@ export interface Technician {
    * comportamiento anterior por compatibilidad con técnicos ya creados).
    */
   assignedTerminals?: string[];
+  /**
+   * Módulo al que queda restringido este operador: un técnico solo ve/crea
+   * casos de "tech", un vidriero solo de "glass". Ausente = sin
+   * restricción (comportamiento anterior, ve ambos módulos) — solo se usa
+   * así para cuentas que todavía no se han separado explícitamente.
+   */
+  assignedModule?: 'tech' | 'glass';
 }
 
 export interface Equipment {

@@ -41,13 +41,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         await loadStoredApiBaseUrl();
         await loadStoredModule();
-        setModuleState(getModule());
         const raw = await AsyncStorage.getItem(STORAGE_KEY);
         if (raw) {
           const stored = JSON.parse(raw) as StoredAuth;
           setAuthToken(stored.token);
           setUser(stored.user);
+          if (stored.user.assignedModule && getModule() !== stored.user.assignedModule) {
+            await setModule(stored.user.assignedModule);
+          }
         }
+        setModuleState(getModule());
       } finally {
         setIsLoading(false);
       }
@@ -68,6 +71,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             STORAGE_KEY,
             JSON.stringify({ token: data.token, user: data.user } satisfies StoredAuth),
           );
+          // Un técnico o vidriero con módulo fijo no elige módulo: queda
+          // directo en el suyo, sin pasar por la pantalla de selección.
+          if (data.user.assignedModule) {
+            await setModule(data.user.assignedModule);
+            setModuleState(data.user.assignedModule);
+          }
         } catch (error) {
           throw new Error(apiErrorMessage(error, 'No se pudo iniciar sesión'));
         }
@@ -78,10 +87,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await AsyncStorage.removeItem(STORAGE_KEY);
       },
       async chooseModule(next: AppModule) {
+        if (user?.assignedModule) return;
         await setModule(next);
         setModuleState(next);
       },
       async resetModule() {
+        if (user?.assignedModule) return;
         await setModule(null);
         setModuleState(null);
       },

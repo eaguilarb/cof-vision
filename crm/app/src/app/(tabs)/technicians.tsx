@@ -21,8 +21,13 @@ export default function TechniciansScreen() {
   const equipmentQuery = useEquipment();
   const queryClient = useQueryClient();
   const createTechnician = useMutation({
-    mutationFn: async (input: { name: string; email: string; password: string; specialty?: string }) =>
-      (await api.post<Technician>('/technicians', input)).data,
+    mutationFn: async (input: {
+      name: string;
+      email: string;
+      password: string;
+      specialty?: string;
+      assignedModule?: 'tech' | 'glass';
+    }) => (await api.post<Technician>('/technicians', input)).data,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['technicians'] }),
   });
   const deleteTechnician = useDeleteTechnician();
@@ -39,10 +44,12 @@ export default function TechniciansScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [specialty, setSpecialty] = useState('');
+  const [module, setModule] = useState<'tech' | 'glass' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTerminals, setEditTerminals] = useState<string[]>([]);
+  const [editModule, setEditModule] = useState<'tech' | 'glass' | null>(null);
   const [editPassword, setEditPassword] = useState('');
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -53,11 +60,18 @@ export default function TechniciansScreen() {
       return;
     }
     try {
-      await createTechnician.mutateAsync({ name, email, password, specialty: specialty || undefined });
+      await createTechnician.mutateAsync({
+        name,
+        email,
+        password,
+        specialty: specialty || undefined,
+        assignedModule: module ?? undefined,
+      });
       setName('');
       setEmail('');
       setPassword('');
       setSpecialty('');
+      setModule(null);
       setShowForm(false);
     } catch (err) {
       setError(apiErrorMessage(err));
@@ -67,6 +81,7 @@ export default function TechniciansScreen() {
   function startEdit(technician: Technician) {
     setEditingId(technician.id);
     setEditTerminals(technician.assignedTerminals ?? []);
+    setEditModule(technician.assignedModule ?? null);
     setEditPassword('');
     setEditError(null);
   }
@@ -84,6 +99,7 @@ export default function TechniciansScreen() {
       await updateTechnician.mutateAsync({
         id: editingId,
         assignedTerminals: editTerminals,
+        assignedModule: editModule,
         ...(editPassword.trim() ? { password: editPassword.trim() } : {}),
       });
       setEditingId(null);
@@ -145,6 +161,23 @@ export default function TechniciansScreen() {
             value={specialty}
             onChangeText={setSpecialty}
           />
+          <Text style={styles.hint}>
+            Módulo al que queda restringido — un técnico no debe ver Vidrios, ni un vidriero
+            Tecnológico. Sin selección = ve ambos (no recomendado salvo admin/supervisor).
+          </Text>
+          <View style={styles.chipRow}>
+            {(['tech', 'glass'] as const).map((m) => (
+              <Pressable
+                key={m}
+                style={[styles.terminalChip, module === m && styles.terminalChipActive]}
+                onPress={() => setModule((prev) => (prev === m ? null : m))}
+              >
+                <Text style={[styles.terminalChipText, module === m && styles.terminalChipTextActive]}>
+                  {m === 'tech' ? 'Tecnológico' : 'Vidrios'}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <Pressable style={styles.saveButton} onPress={handleCreate} disabled={createTechnician.isPending}>
             <Text style={styles.saveButtonText}>
@@ -166,6 +199,25 @@ export default function TechniciansScreen() {
             editingId === item.id ? (
               <View style={styles.form}>
                 <Text style={styles.cardTitle}>{item.name}</Text>
+                <Text style={styles.hint}>
+                  Módulo al que queda restringido — un técnico no debe ver Vidrios, ni un vidriero
+                  Tecnológico.
+                </Text>
+                <View style={styles.chipRow}>
+                  {(['tech', 'glass'] as const).map((m) => (
+                    <Pressable
+                      key={m}
+                      style={[styles.terminalChip, editModule === m && styles.terminalChipActive]}
+                      onPress={() => setEditModule((prev) => (prev === m ? null : m))}
+                    >
+                      <Text
+                        style={[styles.terminalChipText, editModule === m && styles.terminalChipTextActive]}
+                      >
+                        {m === 'tech' ? 'Tecnológico' : 'Vidrios'}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
                 <Text style={styles.hint}>
                   Terminales que puede ver y procesar. Sin selección = sin restricción (ve todos).
                 </Text>
@@ -222,6 +274,11 @@ export default function TechniciansScreen() {
                   {item.phone ? <Text style={styles.cardMeta}>{item.phone}</Text> : null}
                   <Text style={[styles.cardMeta, { color: item.active ? colors.success : colors.danger }]}>
                     {item.active ? 'Activo' : 'Inactivo'}
+                  </Text>
+                  <Text style={[styles.cardMeta, !item.assignedModule && { color: colors.danger }]}>
+                    {item.assignedModule
+                      ? `Módulo: ${item.assignedModule === 'tech' ? 'Tecnológico' : 'Vidrios'}`
+                      : 'Sin módulo asignado (ve ambos)'}
                   </Text>
                   <Text style={styles.cardMeta}>
                     {item.assignedTerminals && item.assignedTerminals.length > 0
