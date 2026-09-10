@@ -111,20 +111,24 @@
   font-size: 0.9rem;
 }
 
-.video-page .field {
-  max-width: none;
+.model-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
 }
 
-.field input[type='password'],
-.field input[type='text'] {
+.model-progress__bar {
+  height: 6px;
+  border-radius: 999px;
   background: var(--bg-elevated);
+  overflow: hidden;
   border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
 }
 
-.field a {
-  color: var(--accent);
+.model-progress__fill {
+  height: 100%;
+  background: var(--accent-strong);
+  transition: width 0.2s ease;
 }
