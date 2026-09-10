@@ -26,8 +26,13 @@ export interface BusModelConfig {
   id: string;
   /** Nombre mostrado en el selector cuando hay más de un modelo cargado. */
   displayName: string;
-  /** Compara contra Equipment.model (el string libre que trae la flota real). */
-  matches: (modelo: string) => boolean;
+  /**
+   * Recibe Equipment.model ya en mayúsculas y SIN ningún espacio/guión
+   * (ver `compact` más abajo) — comparar así es inmune a que la intranet
+   * mande el código con espacios sueltos ("O 500 UA") o sin ellos
+   * ("O500UA"), y no depende de que incluya el fabricante (nunca lo hace).
+   */
+  matches: (modeloCompacto: string) => boolean;
   views: Record<ViewSide, ViewConfig>;
 }
 
@@ -79,7 +84,7 @@ const lunaTrasera = (rect: Omit<ZoneRect, 'id' | 'categoria' | 'label'>): ZoneRe
 const FOTON_U12: BusModelConfig = {
   id: 'foton_ebus_u12_sc',
   displayName: 'Foton eBus U12 SC',
-  matches: (m) => m.includes('FOTON') && (m.includes('U12') || m.includes('EBUS U12')),
+  matches: (m) => m.includes('U12'),
   views: {
     derecho: {
       source: require('../../assets/images/bus-diagrams/foton-u12/derecho.png'),
@@ -161,11 +166,17 @@ const FOTON_U12: BusModelConfig = {
  * solo tiene vidrio lateral (numerado 1-6 derecho, 7-15 izquierdo) y
  * puertas A-D/E-H de un solo panel (no 2x2 como el Foton). Comparte el
  * mismo frontal/trasero que el O500UA (misma cabina Mercedes).
+ *
+ * `matches` acepta cualquier "O500U" que no sea articulado (UA) sin
+ * exigir el "1930": la flota real trae el mismo código con distintos
+ * números de correlativo/lote después ("O500U 1930", "O500U 1826 59",
+ * etc.) para lo que es la misma carrocería — exigir el sufijo exacto
+ * dejaría la mayoría de esos buses sin diagrama.
  */
 const MB_O500U_1930: BusModelConfig = {
   id: 'mb_o500u_1930',
   displayName: 'Mercedes-Benz O500U 1930',
-  matches: (m) => m.includes('MERCEDES') && m.includes('O500U') && !m.includes('O500UA') && !m.includes('UA'),
+  matches: (m) => m.includes('O500U') && !m.includes('UA'),
   views: {
     derecho: {
       source: require('../../assets/images/bus-diagrams/mb-o500u-1930/derecho.png'),
@@ -233,7 +244,7 @@ const MB_O500U_1930: BusModelConfig = {
 const MB_O500UA_2836: BusModelConfig = {
   id: 'mb_o500ua_2836',
   displayName: 'Mercedes-Benz O500UA 2836 (articulado)',
-  matches: (m) => m.includes('MERCEDES') && (m.includes('O500UA') || m.includes('2836') || (m.includes('O500U') && m.includes('UA'))),
+  matches: (m) => m.includes('O500UA') || m.includes('2836') || (m.includes('O500U') && m.includes('UA')),
   views: {
     derecho: {
       source: require('../../assets/images/bus-diagrams/mb-o500ua-2836/derecho.png'),
@@ -304,7 +315,7 @@ const MB_O500UA_2836: BusModelConfig = {
 const FOTON_U10: BusModelConfig = {
   id: 'foton_u10',
   displayName: 'Foton U10',
-  matches: (m) => m.includes('FOTON') && m.includes('U10'),
+  matches: (m) => m.includes('U10'),
   views: {
     derecho: {
       source: require('../../assets/images/bus-diagrams/foton-u10/derecho.png'),
@@ -357,17 +368,22 @@ const FOTON_U10: BusModelConfig = {
 
 export const BUS_MODELS: BusModelConfig[] = [FOTON_U12, MB_O500U_1930, MB_O500UA_2836, FOTON_U10];
 
-function normalize(s: string): string {
+// La flota real (ver Equipment.model) no trae el fabricante — el campo
+// "modelo" que devuelve la intranet es solo el código, ej. "EBUS U12 SC",
+// "U12", "O 500 UA 2836 E6", "U 10" (a veces con espacios sueltos entre
+// letras y números). Por eso `matches` recibe la versión "compacta" (sin
+// ningún espacio) del código: comparar por substring ahí es inmune a que
+// el código venga con o sin espacios, con o sin sufijos de fabricante.
+function compact(s: string): string {
   return s
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, ' ')
-    .trim();
+    .replace(/[^A-Z0-9]/g, '');
 }
 
 export function findBusModel(modelo?: string | null): BusModelConfig | null {
   if (!modelo) return null;
-  const norm = normalize(modelo);
-  return BUS_MODELS.find((m) => m.matches(norm)) ?? null;
+  const c = compact(modelo);
+  return BUS_MODELS.find((m) => m.matches(c)) ?? null;
 }
