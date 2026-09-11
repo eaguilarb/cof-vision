@@ -15,6 +15,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/state/auth-context';
 import { colors } from '@/constants/colors';
+import { fontFamily } from '@/constants/typography';
 import { AnimatedBusScene } from '@/components/animated-bus-scene';
 
 export default function LoginScreen() {
@@ -84,7 +85,11 @@ export default function LoginScreen() {
             {error ? <Text style={styles.error}>{error}</Text> : null}
 
             <Pressable
-              style={({ pressed }) => [styles.button, pressed && styles.buttonPressed, isSubmitting && styles.buttonDisabled]}
+              style={({ pressed }) => [
+                styles.button,
+                pressed && styles.buttonPressed,
+                isSubmitting && styles.buttonDisabled,
+              ]}
               onPress={handleSubmit}
               disabled={isSubmitting}
             >
@@ -122,32 +127,32 @@ const styles = StyleSheet.create({
     maxWidth: 400,
     marginTop: -28,
     backgroundColor: colors.surface,
-    borderRadius: 18,
-    padding: 24,
+    borderRadius: 20,
+    padding: 26,
     gap: 4,
-    borderWidth: 1,
-    borderColor: colors.border,
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    elevation: 6,
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.16,
+    shadowRadius: 28,
+    elevation: 8,
   },
   title: {
-    fontSize: 26,
-    fontWeight: '800',
+    fontSize: 28,
+    fontFamily: fontFamily.extrabold,
     color: colors.text,
     textAlign: 'center',
+    letterSpacing: -0.5,
   },
   subtitle: {
     fontSize: 13,
+    fontFamily: fontFamily.medium,
     color: colors.textMuted,
     textAlign: 'center',
     marginBottom: 20,
   },
   label: {
     fontSize: 13,
-    fontWeight: '600',
+    fontFamily: fontFamily.semibold,
     color: colors.text,
     marginTop: 10,
     marginBottom: 4,
@@ -159,6 +164,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 15,
+    fontFamily: fontFamily.regular,
     color: colors.text,
     backgroundColor: colors.background,
   },
@@ -166,6 +172,7 @@ const styles = StyleSheet.create({
     color: colors.danger,
     marginTop: 12,
     fontSize: 13,
+    fontFamily: fontFamily.medium,
   },
   button: {
     marginTop: 20,
@@ -174,13 +181,13 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: 'center',
   },
-  buttonPressed: { opacity: 0.85 },
+  buttonPressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
   buttonDisabled: {
     opacity: 0.7,
   },
   buttonText: {
     color: colors.primaryText,
-    fontWeight: '700',
+    fontFamily: fontFamily.bold,
     fontSize: 15,
   },
 });
