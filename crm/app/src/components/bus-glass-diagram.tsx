@@ -237,10 +237,8 @@ export function BusGlassDiagram({
   );
 }
 
-const PLATE_RED = '#bc2c34';
-
 const styles = StyleSheet.create({
-  wrap: { gap: 8 },
+  wrap: { gap: 8, width: '100%', maxWidth: 460, alignSelf: 'center' },
   typeToggle: { flexDirection: 'row', gap: 8 },
   typeChip: {
     paddingHorizontal: 12,
@@ -277,12 +275,20 @@ const styles = StyleSheet.create({
   zoneSelected: { backgroundColor: 'rgba(37, 99, 235, 0.45)', borderRadius: 4 },
   ppuMask: {
     position: 'absolute',
-    backgroundColor: PLATE_RED,
+    backgroundColor: '#f4f4f0',
+    borderWidth: 1.5,
+    borderColor: '#1c1c1c',
+    borderRadius: 4,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 2,
+    paddingHorizontal: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.3,
+    shadowRadius: 2,
+    elevation: 2,
   },
-  ppuText: { color: '#fff', fontWeight: '800', letterSpacing: 0.5 },
+  ppuText: { color: '#111', fontWeight: '800', letterSpacing: 0.5 },
   hint: { fontSize: 11, color: colors.textMuted },
   selectedBadge: {
     alignSelf: 'flex-start',
