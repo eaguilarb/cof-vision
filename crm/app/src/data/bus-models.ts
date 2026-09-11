@@ -16,7 +16,10 @@ export interface ZoneRect extends GlassZone {
 }
 
 export interface ViewConfig {
-  source: ImageSourcePropType;
+  /** Ausente cuando la vista usa un dibujo vectorial (`vector`) en vez de una imagen. */
+  source?: ImageSourcePropType;
+  /** Vista genérica dibujada en código (sin foto) — ver generic-bus-illustration.tsx. */
+  vector?: 'front' | 'rear';
   aspectRatio: number;
   zones: ZoneRect[];
   ppuMask: { left: number; top: number; width: number; height: number };

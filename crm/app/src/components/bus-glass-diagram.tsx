@@ -2,6 +2,12 @@ import { useEffect, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors } from '@/constants/colors';
 import { findBusModel, type GlassZone, type ViewConfig, type ViewSide, type ZoneRect } from '@/data/bus-models';
+import {
+  GenericBusFront,
+  GenericBusRear,
+  GENERIC_FRONT_ASPECT_RATIO,
+  GENERIC_REAR_ASPECT_RATIO,
+} from './generic-bus-illustration';
 
 export type BusBodyType = 'estandar' | 'articulado';
 export type { GlassZone };
@@ -64,16 +70,16 @@ const CONFIGS: Record<BusBodyType, Record<ViewSide, ViewConfig>> = {
       ppuMask: { left: 72, top: 64, width: 23, height: 10 },
     },
     frontal: {
-      source: require('../../assets/images/bus-diagrams/bus-front.png'),
-      aspectRatio: 260 / 225,
-      zones: [{ id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas delantero', left: 15, top: 33, width: 59, height: 35 }],
-      ppuMask: { left: 32, top: 88, width: 36, height: 10 },
+      vector: 'front',
+      aspectRatio: GENERIC_FRONT_ASPECT_RATIO,
+      zones: [{ id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas delantero', left: 17, top: 31, width: 66, height: 41 }],
+      ppuMask: { left: 27, top: 79, width: 46, height: 11 },
     },
     trasero: {
-      source: require('../../assets/images/bus-diagrams/bus-rear.png'),
-      aspectRatio: 190 / 225,
-      zones: [{ id: 'luna_trasera', categoria: 'luna_trasera', label: 'Luna trasera', left: 13, top: 12, width: 78, height: 30 }],
-      ppuMask: { left: 32, top: 44, width: 36, height: 10 },
+      vector: 'rear',
+      aspectRatio: GENERIC_REAR_ASPECT_RATIO,
+      zones: [{ id: 'luna_trasera', categoria: 'luna_trasera', label: 'Luna trasera', left: 21, top: 28, width: 58, height: 28 }],
+      ppuMask: { left: 18, top: 79, width: 63, height: 11 },
     },
   },
   articulado: {
@@ -90,16 +96,16 @@ const CONFIGS: Record<BusBodyType, Record<ViewSide, ViewConfig>> = {
       ppuMask: { left: 60.5, top: 61, width: 10, height: 10.5 },
     },
     frontal: {
-      source: require('../../assets/images/bus-diagrams/bus-front.png'),
-      aspectRatio: 260 / 225,
-      zones: [{ id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas delantero', left: 15, top: 33, width: 59, height: 35 }],
-      ppuMask: { left: 32, top: 88, width: 36, height: 10 },
+      vector: 'front',
+      aspectRatio: GENERIC_FRONT_ASPECT_RATIO,
+      zones: [{ id: 'parabrisas', categoria: 'parabrisas', label: 'Parabrisas delantero', left: 17, top: 31, width: 66, height: 41 }],
+      ppuMask: { left: 27, top: 79, width: 46, height: 11 },
     },
     trasero: {
-      source: require('../../assets/images/bus-diagrams/bus-rear.png'),
-      aspectRatio: 190 / 225,
-      zones: [{ id: 'luna_trasera', categoria: 'luna_trasera', label: 'Luna trasera', left: 13, top: 12, width: 78, height: 30 }],
-      ppuMask: { left: 32, top: 44, width: 36, height: 10 },
+      vector: 'rear',
+      aspectRatio: GENERIC_REAR_ASPECT_RATIO,
+      zones: [{ id: 'luna_trasera', categoria: 'luna_trasera', label: 'Luna trasera', left: 21, top: 28, width: 58, height: 28 }],
+      ppuMask: { left: 18, top: 79, width: 63, height: 11 },
     },
   },
 };
@@ -127,6 +133,7 @@ export function BusGlassDiagram({
   const [busType, setBusType] = useState<BusBodyType>('estandar');
   const [viewIndex, setViewIndex] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [shellWidth, setShellWidth] = useState(0);
 
   const matchedModel = findBusModel(busModel);
 
@@ -180,12 +187,25 @@ export function BusGlassDiagram({
         </Pressable>
       </View>
 
-      <View style={[styles.busShell, { aspectRatio: config.aspectRatio }]}>
-        <Image
-          source={config.source}
-          style={[StyleSheet.absoluteFill, { width: '100%', height: '100%' }]}
-          resizeMode="contain"
-        />
+      <View
+        style={[styles.busShell, { aspectRatio: config.aspectRatio }]}
+        onLayout={(e) => setShellWidth(e.nativeEvent.layout.width)}
+      >
+        {config.vector === 'front' ? (
+          <View style={StyleSheet.absoluteFill}>
+            <GenericBusFront width={shellWidth} />
+          </View>
+        ) : config.vector === 'rear' ? (
+          <View style={StyleSheet.absoluteFill}>
+            <GenericBusRear width={shellWidth} />
+          </View>
+        ) : (
+          <Image
+            source={config.source}
+            style={[StyleSheet.absoluteFill, { width: '100%', height: '100%' }]}
+            resizeMode="contain"
+          />
+        )}
 
         {config.zones.map((zone) => (
           <Pressable
@@ -204,21 +224,23 @@ export function BusGlassDiagram({
           />
         ))}
 
-        <View
-          style={[
-            styles.ppuMask,
-            {
-              left: `${config.ppuMask.left}%`,
-              top: `${config.ppuMask.top}%`,
-              width: `${config.ppuMask.width}%`,
-              height: `${config.ppuMask.height}%`,
-            },
-          ]}
-        >
-          <Text style={styles.ppuText} numberOfLines={1} adjustsFontSizeToFit>
-            {ppu || '—'}
-          </Text>
-        </View>
+        {ppu ? (
+          <View
+            style={[
+              styles.ppuMask,
+              {
+                left: `${config.ppuMask.left}%`,
+                top: `${config.ppuMask.top}%`,
+                width: `${config.ppuMask.width}%`,
+                height: `${config.ppuMask.height}%`,
+              },
+            ]}
+          >
+            <Text style={styles.ppuText} numberOfLines={1} adjustsFontSizeToFit>
+              {ppu}
+            </Text>
+          </View>
+        ) : null}
       </View>
 
       <Text style={styles.hint}>
