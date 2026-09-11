@@ -14,6 +14,7 @@ import { colors, statusColors } from '@/constants/colors';
 import { fontFamily } from '@/constants/typography';
 import { STATUS_LABELS, type CaseStatus, type Equipment } from '@/api/types';
 import { Badge } from '@/components/badge';
+import { StatusDonut } from '@/components/status-donut';
 
 const STATUS_ORDER = Object.keys(STATUS_LABELS) as CaseStatus[];
 
@@ -150,14 +151,25 @@ export default function EquipmentScreen() {
       </View>
 
       {!isLoading && fleetStatus.total > 0 && (
-        <View style={styles.fleetStatusRow}>
-          <View style={[styles.fleetStatusCard, { backgroundColor: `${colors.success}12` }]}>
-            <Text style={[styles.fleetStatusCount, { color: colors.success }]}>{fleetStatus.operational}</Text>
-            <Text style={styles.fleetStatusLabel}>Operativos</Text>
-          </View>
-          <View style={[styles.fleetStatusCard, { backgroundColor: `${colors.danger}12` }]}>
-            <Text style={[styles.fleetStatusCount, { color: colors.danger }]}>{fleetStatus.nonOperational}</Text>
-            <Text style={styles.fleetStatusLabel}>No operativos</Text>
+        <View style={styles.fleetStatusCard}>
+          <StatusDonut
+            total={fleetStatus.total}
+            segments={[
+              { key: 'operational', value: fleetStatus.operational, color: colors.success },
+              { key: 'nonOperational', value: fleetStatus.nonOperational, color: colors.danger },
+            ]}
+          />
+          <View style={styles.fleetLegend}>
+            <View style={styles.fleetLegendRow}>
+              <View style={[styles.heroDot, { backgroundColor: colors.success }]} />
+              <Text style={styles.heroLegendLabel}>Operativos</Text>
+              <Text style={[styles.heroLegendValue, { color: colors.success }]}>{fleetStatus.operational}</Text>
+            </View>
+            <View style={styles.fleetLegendRow}>
+              <View style={[styles.heroDot, { backgroundColor: colors.danger }]} />
+              <Text style={styles.heroLegendLabel}>No operativos</Text>
+              <Text style={[styles.heroLegendValue, { color: colors.danger }]}>{fleetStatus.nonOperational}</Text>
+            </View>
           </View>
         </View>
       )}
@@ -343,21 +355,26 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   addButtonText: { color: colors.primaryText, fontFamily: fontFamily.semibold, fontSize: 13 },
-  fleetStatusRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 14, paddingBottom: 10 },
   fleetStatusCard: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    paddingVertical: 14,
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 18,
+    backgroundColor: colors.surface,
+    marginHorizontal: 14,
+    marginBottom: 10,
+    padding: 18,
+    borderRadius: 20,
     shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.07,
+    shadowRadius: 16,
+    elevation: 3,
   },
-  fleetStatusCount: { fontSize: 22, fontFamily: fontFamily.extrabold },
-  fleetStatusLabel: { fontSize: 11, color: colors.textMuted, fontFamily: fontFamily.semibold, marginTop: 2 },
+  fleetLegend: { flex: 1, gap: 10 },
+  fleetLegendRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  heroDot: { width: 9, height: 9, borderRadius: 5 },
+  heroLegendLabel: { flex: 1, fontSize: 13, fontFamily: fontFamily.semibold, color: colors.text },
+  heroLegendValue: { fontSize: 14, fontFamily: fontFamily.extrabold },
   searchWrap: { paddingHorizontal: 14, paddingBottom: 10 },
   searchInput: {
     borderWidth: 1,

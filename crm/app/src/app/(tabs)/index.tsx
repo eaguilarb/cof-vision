@@ -1,6 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   FlatList,
   Pressable,
   RefreshControl,
@@ -17,6 +19,7 @@ import { colors, statusColors } from '@/constants/colors';
 import { fontFamily } from '@/constants/typography';
 import { CaseListItem } from '@/components/case-list-item';
 import { Badge } from '@/components/badge';
+import { StatusDonut } from '@/components/status-donut';
 
 const STATUS_ORDER = Object.keys(STATUS_LABELS) as CaseStatus[];
 const TERMINAL_ACCENTS = ['#0ea5e9', '#f97316', '#22c55e', '#a855f7', '#ec4899', '#14b8a6', '#eab308', '#ef4444'];
@@ -46,6 +49,28 @@ export default function CasesScreen() {
   const isLoading = casesQuery.isLoading || techniciansQuery.isLoading;
   const allCases = useMemo(() => casesQuery.data ?? [], [casesQuery.data]);
   const total = allCases.length;
+
+  const statusCounts = useMemo(() => {
+    const counts: Record<CaseStatus, number> = { open: 0, assigned: 0, in_progress: 0, resolved: 0 };
+    for (const c of allCases) counts[c.status] += 1;
+    return counts;
+  }, [allCases]);
+
+  const heroEnter = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!isLoading) {
+      Animated.timing(heroEnter, {
+        toValue: 1,
+        duration: 480,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [isLoading, heroEnter]);
+  const heroStyle = {
+    opacity: heroEnter,
+    transform: [{ translateY: heroEnter.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }],
+  };
 
   const searchResults = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -100,6 +125,24 @@ export default function CasesScreen() {
         )}
       </View>
 
+      {!isLoading && total > 0 && (
+        <Animated.View style={[styles.heroCard, heroStyle]}>
+          <StatusDonut
+            total={total}
+            segments={STATUS_ORDER.map((s) => ({ key: s, value: statusCounts[s], color: statusColors[s] }))}
+          />
+          <View style={styles.heroLegend}>
+            {STATUS_ORDER.map((s) => (
+              <View key={s} style={styles.heroLegendRow}>
+                <View style={[styles.heroDot, { backgroundColor: statusColors[s] }]} />
+                <Text style={styles.heroLegendLabel}>{STATUS_LABELS[s]}</Text>
+                <Text style={[styles.heroLegendValue, { color: statusColors[s] }]}>{statusCounts[s]}</Text>
+              </View>
+            ))}
+          </View>
+        </Animated.View>
+      )}
+
       <View style={styles.searchWrap}>
         <TextInput
           style={styles.searchInput}
@@ -142,8 +185,9 @@ export default function CasesScreen() {
             <RefreshControl refreshing={casesQuery.isFetching} onRefresh={casesQuery.refetch} />
           }
           ListEmptyComponent={<Text style={styles.empty}>Aún no hay casos.</Text>}
-          renderItem={({ item }) => (
+          renderItem={({ item, index }) => (
             <TerminalCasesCard
+              index={index}
               group={item}
               isExpanded={!!expanded[item.terminal]}
               onToggle={() => toggleExpanded(item.terminal)}
@@ -172,6 +216,7 @@ function TerminalCasesCard({
   filter,
   onFilterChange,
   technicians,
+  index,
 }: {
   group: TerminalGroup;
   isExpanded: boolean;
@@ -179,11 +224,27 @@ function TerminalCasesCard({
   filter: StatusFilter;
   onFilterChange: (v: StatusFilter) => void;
   technicians: Technician[];
+  index: number;
 }) {
   const filteredCases = filter === 'all' ? group.cases : group.cases.filter((c) => c.status === filter);
 
+  const enter = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(enter, {
+      toValue: 1,
+      duration: 380,
+      delay: Math.min(index, 6) * 55,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [enter, index]);
+  const enterStyle = {
+    opacity: enter,
+    transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
+  };
+
   return (
-    <View style={[styles.terminalCard, { borderLeftColor: group.accent }]}>
+    <Animated.View style={[styles.terminalCard, { borderLeftColor: group.accent }, enterStyle]}>
       <Pressable style={styles.terminalHeader} onPress={onToggle} hitSlop={6}>
         <View style={{ flex: 1 }}>
           <Text style={styles.terminalName}>{group.terminal}</Text>
@@ -241,7 +302,7 @@ function TerminalCasesCard({
           </View>
         </>
       )}
-    </View>
+    </Animated.View>
   );
 }
 
@@ -261,6 +322,27 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 20, fontFamily: fontFamily.extrabold, color: colors.text, letterSpacing: -0.3 },
   headerCount: { fontSize: 13, fontFamily: fontFamily.semibold, color: colors.textMuted },
+  heroCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 18,
+    backgroundColor: colors.surface,
+    marginHorizontal: 14,
+    marginTop: 4,
+    marginBottom: 4,
+    padding: 18,
+    borderRadius: 20,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.07,
+    shadowRadius: 16,
+    elevation: 3,
+  },
+  heroLegend: { flex: 1, gap: 9 },
+  heroLegendRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  heroDot: { width: 9, height: 9, borderRadius: 5 },
+  heroLegendLabel: { flex: 1, fontSize: 12.5, fontFamily: fontFamily.semibold, color: colors.text },
+  heroLegendValue: { fontSize: 13, fontFamily: fontFamily.extrabold },
   searchWrap: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4, backgroundColor: colors.surface },
   searchInput: {
     borderWidth: 1,
