@@ -1,9 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Animated, Easing, StyleSheet, View, useWindowDimensions } from 'react-native';
 import Svg, { Defs, LinearGradient, Rect, Stop } from 'react-native-svg';
-
-const BUS_SOURCE = require('../../assets/images/bus-diagrams/bus-articulated.png');
-const BUS_ASPECT_RATIO = 1118 / 190;
+import { RedBusIllustration, RED_BUS_ASPECT_RATIO } from '@/components/red-bus-illustration';
 
 /**
  * Escena decorativa para la pantalla de login: cielo con degradado, un
@@ -14,7 +12,7 @@ const BUS_ASPECT_RATIO = 1118 / 190;
 export function AnimatedBusScene({ height = 190 }: { height?: number }) {
   const { width } = useWindowDimensions();
   const busWidth = Math.min(width * 0.62, 420);
-  const busHeight = busWidth / BUS_ASPECT_RATIO;
+  const busHeight = busWidth / RED_BUS_ASPECT_RATIO;
 
   const drive = useRef(new Animated.Value(0)).current;
   const bounce = useRef(new Animated.Value(0)).current;
@@ -81,8 +79,7 @@ export function AnimatedBusScene({ height = 190 }: { height?: number }) {
         </View>
       </View>
 
-      <Animated.Image
-        source={BUS_SOURCE}
+      <Animated.View
         style={[
           styles.bus,
           {
@@ -92,8 +89,9 @@ export function AnimatedBusScene({ height = 190 }: { height?: number }) {
             transform: [{ translateX }, { translateY }],
           },
         ]}
-        resizeMode="contain"
-      />
+      >
+        <RedBusIllustration width={busWidth} />
+      </Animated.View>
     </View>
   );
 }
