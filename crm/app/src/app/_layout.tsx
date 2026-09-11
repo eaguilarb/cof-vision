@@ -2,14 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
-import {
-  PlusJakartaSans_400Regular,
-  PlusJakartaSans_500Medium,
-  PlusJakartaSans_600SemiBold,
-  PlusJakartaSans_700Bold,
-  PlusJakartaSans_800ExtraBold,
-  useFonts,
-} from '@expo-google-fonts/plus-jakarta-sans';
+import { useFonts } from 'expo-font';
 import { useEffect } from 'react';
 import { registerForPushNotifications } from '@/notifications';
 import { AuthProvider, useAuth } from '@/state/auth-context';
@@ -29,19 +22,23 @@ function PushNotificationsRegistrar() {
 }
 
 export default function RootLayout() {
-  const [fontsLoaded] = useFonts({
-    PlusJakartaSans_400Regular,
-    PlusJakartaSans_500Medium,
-    PlusJakartaSans_600SemiBold,
-    PlusJakartaSans_700Bold,
-    PlusJakartaSans_800ExtraBold,
+  const [fontsLoaded, fontError] = useFonts({
+    PlusJakartaSans_400Regular: require('../../assets/fonts/PlusJakartaSans-Regular.ttf'),
+    PlusJakartaSans_500Medium: require('../../assets/fonts/PlusJakartaSans-Medium.ttf'),
+    PlusJakartaSans_600SemiBold: require('../../assets/fonts/PlusJakartaSans-SemiBold.ttf'),
+    PlusJakartaSans_700Bold: require('../../assets/fonts/PlusJakartaSans-Bold.ttf'),
+    PlusJakartaSans_800ExtraBold: require('../../assets/fonts/PlusJakartaSans-ExtraBold.ttf'),
   });
 
   useEffect(() => {
-    if (fontsLoaded) SplashScreen.hideAsync().catch(() => {});
-  }, [fontsLoaded]);
+    if (fontsLoaded || fontError) SplashScreen.hideAsync().catch(() => {});
+  }, [fontsLoaded, fontError]);
 
-  if (!fontsLoaded) return null;
+  // Nunca bloquear el arranque de la app por la tipografía: si por
+  // cualquier motivo la fuente no carga (o falla), se sigue con la
+  // fuente del sistema en vez de dejar la pantalla en blanco para
+  // siempre — un fallo aquí no debe tumbar toda la app.
+  if (!fontsLoaded && !fontError) return null;
 
   return (
     <QueryClientProvider client={queryClient}>
