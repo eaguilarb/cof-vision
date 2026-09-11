@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -12,6 +15,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/state/auth-context';
 import { colors } from '@/constants/colors';
+import { AnimatedBusScene } from '@/components/animated-bus-scene';
 
 export default function LoginScreen() {
   const { login } = useAuth();
@@ -20,6 +24,20 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const enter = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(enter, {
+      toValue: 1,
+      duration: 520,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    }).start();
+  }, [enter]);
+  const cardStyle = {
+    opacity: enter,
+    transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }],
+  };
 
   async function handleSubmit() {
     setError(null);
@@ -35,47 +53,50 @@ export default function LoginScreen() {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <View style={styles.card}>
-        <Text style={styles.title}>COF CRM</Text>
-        <Text style={styles.subtitle}>Reparación de equipamiento tecnológico</Text>
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={styles.scroll} bounces={false}>
+        <AnimatedBusScene height={190} />
 
-        <Text style={styles.label}>Email</Text>
-        <TextInput
-          style={styles.input}
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          placeholder="tucorreo@empresa.com"
-        />
+        <View style={styles.cardWrap}>
+          <Animated.View style={[styles.card, cardStyle]}>
+            <Text style={styles.title}>COF CRM</Text>
+            <Text style={styles.subtitle}>Reparación de equipamiento tecnológico y vidrios</Text>
 
-        <Text style={styles.label}>Contraseña</Text>
-        <TextInput
-          style={styles.input}
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-          placeholder="••••••••"
-        />
+            <Text style={styles.label}>Email</Text>
+            <TextInput
+              style={styles.input}
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              placeholder="tucorreo@empresa.com"
+            />
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+            <Text style={styles.label}>Contraseña</Text>
+            <TextInput
+              style={styles.input}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              placeholder="••••••••"
+            />
 
-        <Pressable
-          style={[styles.button, isSubmitting && styles.buttonDisabled]}
-          onPress={handleSubmit}
-          disabled={isSubmitting}
-        >
-          {isSubmitting ? (
-            <ActivityIndicator color={colors.primaryText} />
-          ) : (
-            <Text style={styles.buttonText}>Entrar</Text>
-          )}
-        </Pressable>
-      </View>
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+
+            <Pressable
+              style={({ pressed }) => [styles.button, pressed && styles.buttonPressed, isSubmitting && styles.buttonDisabled]}
+              onPress={handleSubmit}
+              disabled={isSubmitting}
+            >
+              {isSubmitting ? (
+                <ActivityIndicator color={colors.primaryText} />
+              ) : (
+                <Text style={styles.buttonText}>Entrar</Text>
+              )}
+            </Pressable>
+          </Animated.View>
+        </View>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
@@ -84,19 +105,33 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  scroll: {
+    flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 20,
+    paddingVertical: 32,
+  },
+  cardWrap: {
+    width: '100%',
+    alignItems: 'center',
+    paddingHorizontal: 20,
   },
   card: {
     width: '100%',
     maxWidth: 400,
+    marginTop: -28,
     backgroundColor: colors.surface,
-    borderRadius: 16,
+    borderRadius: 18,
     padding: 24,
     gap: 4,
     borderWidth: 1,
     borderColor: colors.border,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    elevation: 6,
   },
   title: {
     fontSize: 26,
@@ -139,6 +174,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     alignItems: 'center',
   },
+  buttonPressed: { opacity: 0.85 },
   buttonDisabled: {
     opacity: 0.7,
   },
