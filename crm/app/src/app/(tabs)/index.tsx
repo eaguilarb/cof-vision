@@ -20,6 +20,7 @@ import { fontFamily } from '@/constants/typography';
 import { CaseListItem } from '@/components/case-list-item';
 import { Badge } from '@/components/badge';
 import { StatusDonut } from '@/components/status-donut';
+import { PressableScale } from '@/components/pressable-scale';
 
 const STATUS_ORDER = Object.keys(STATUS_LABELS) as CaseStatus[];
 const TERMINAL_ACCENTS = ['#0ea5e9', '#f97316', '#22c55e', '#a855f7', '#ec4899', '#14b8a6', '#eab308', '#ef4444'];
@@ -199,12 +200,9 @@ export default function CasesScreen() {
         />
       )}
 
-      <Pressable
-        style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
-        onPress={() => router.push('/case/new')}
-      >
+      <PressableScale style={styles.fab} onPress={() => router.push('/case/new')}>
         <Text style={styles.fabText}>+ Nuevo caso</Text>
-      </Pressable>
+      </PressableScale>
     </View>
   );
 }
@@ -437,7 +435,6 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
   },
-  fabPressed: { opacity: 0.9, transform: [{ scale: 0.97 }] },
   fabText: {
     color: colors.primaryText,
     fontFamily: fontFamily.bold,

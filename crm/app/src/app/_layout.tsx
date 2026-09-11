@@ -5,6 +5,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
 import { useEffect } from 'react';
 import { Pressable, Text } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { registerForPushNotifications } from '@/notifications';
 import { AuthProvider, useAuth } from '@/state/auth-context';
 import { colors } from '@/constants/colors';
@@ -62,30 +63,32 @@ export default function RootLayout() {
   if (!fontsLoaded && !fontError) return null;
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <PushNotificationsRegistrar />
-        <StatusBar style="auto" />
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="login" />
-          <Stack.Screen name="module-select" />
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen
-            name="case/[id]"
-            options={{ headerShown: true, title: 'Caso', headerLeft: () => <HeaderBack label="‹" /> }}
-          />
-          <Stack.Screen
-            name="case/new"
-            options={{
-              headerShown: true,
-              title: 'Nuevo caso',
-              presentation: 'modal',
-              headerLeft: () => <HeaderBack label="✕" />,
-            }}
-          />
-        </Stack>
-      </AuthProvider>
-    </QueryClientProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <PushNotificationsRegistrar />
+          <StatusBar style="auto" />
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="index" />
+            <Stack.Screen name="login" />
+            <Stack.Screen name="module-select" />
+            <Stack.Screen name="(tabs)" />
+            <Stack.Screen
+              name="case/[id]"
+              options={{ headerShown: true, title: 'Caso', headerLeft: () => <HeaderBack label="‹" /> }}
+            />
+            <Stack.Screen
+              name="case/new"
+              options={{
+                headerShown: true,
+                title: 'Nuevo caso',
+                presentation: 'modal',
+                headerLeft: () => <HeaderBack label="✕" />,
+              }}
+            />
+          </Stack>
+        </AuthProvider>
+      </QueryClientProvider>
+    </GestureHandlerRootView>
   );
 }

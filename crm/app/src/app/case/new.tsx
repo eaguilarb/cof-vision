@@ -18,6 +18,7 @@ import { useAuth } from '@/state/auth-context';
 import { colors } from '@/constants/colors';
 import { fontFamily } from '@/constants/typography';
 import { BusGlassDiagram, type GlassZone } from '@/components/bus-glass-diagram';
+import { PressableScale } from '@/components/pressable-scale';
 
 const PRIORITIES = Object.keys(PRIORITY_LABELS) as CasePriority[];
 const MAX_EQUIPMENT_RESULTS = 25;
@@ -300,17 +301,13 @@ export default function NewCaseScreen() {
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      <Pressable
-        style={({ pressed }) => [styles.submitButton, pressed && styles.submitPressed]}
-        onPress={handleSubmit}
-        disabled={createCase.isPending}
-      >
+      <PressableScale style={styles.submitButton} onPress={handleSubmit} disabled={createCase.isPending}>
         {createCase.isPending ? (
           <ActivityIndicator color="#fff" />
         ) : (
           <Text style={styles.submitText}>Crear caso</Text>
         )}
-      </Pressable>
+      </PressableScale>
     </ScrollView>
   );
 }
@@ -385,6 +382,5 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 3,
   },
-  submitPressed: { opacity: 0.9, transform: [{ scale: 0.99 }] },
   submitText: { color: '#fff', fontFamily: fontFamily.bold, fontSize: 15 },
 });
