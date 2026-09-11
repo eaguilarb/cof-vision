@@ -2,40 +2,20 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 
 /**
- * URL base del backend. El valor compilado (EXPO_PUBLIC_API_URL, o
- * localhost:4000 si no se definió) es solo el default inicial — se puede
- * cambiar dentro de la app (pantalla Perfil) sin recompilar, por ejemplo
- * cuando el backend pase de correr en tu red local a estar desplegado en
- * Railway. El valor elegido se guarda en el dispositivo.
+ * URL fija del backend de producción. No es configurable desde la app —
+ * a diferencia de una versión anterior, no se puede editar desde Perfil
+ * ni queda guardada en el dispositivo, para evitar que alguien apunte la
+ * app a un servidor distinto (por error o con intención maliciosa, ej.
+ * para capturar credenciales de técnicos/vidrieros).
  */
-const DEFAULT_API_BASE_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:4000';
-const STORAGE_KEY = 'cof-crm.apiBaseUrl';
+const API_BASE_URL = 'https://cof-crm-backend-production.up.railway.app';
 
 export const api = axios.create({
-  baseURL: DEFAULT_API_BASE_URL,
+  baseURL: API_BASE_URL,
 });
 
 export function getApiBaseUrl(): string {
-  return api.defaults.baseURL as string;
-}
-
-export function getDefaultApiBaseUrl(): string {
-  return DEFAULT_API_BASE_URL;
-}
-
-export async function setApiBaseUrl(url: string): Promise<void> {
-  const trimmed = url.trim().replace(/\/+$/, '');
-  api.defaults.baseURL = trimmed;
-  await AsyncStorage.setItem(STORAGE_KEY, trimmed);
-}
-
-export async function loadStoredApiBaseUrl(): Promise<void> {
-  try {
-    const stored = await AsyncStorage.getItem(STORAGE_KEY);
-    if (stored) api.defaults.baseURL = stored;
-  } catch {
-    // Sin storage disponible: nos quedamos con el default compilado.
-  }
+  return API_BASE_URL;
 }
 
 let authToken: string | null = null;

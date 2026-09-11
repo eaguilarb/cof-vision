@@ -4,7 +4,6 @@ import {
   api,
   apiErrorMessage,
   getModule,
-  loadStoredApiBaseUrl,
   loadStoredModule,
   setAuthToken,
   setModule,
@@ -39,7 +38,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        await loadStoredApiBaseUrl();
         await loadStoredModule();
         const raw = await AsyncStorage.getItem(STORAGE_KEY);
         if (raw) {
