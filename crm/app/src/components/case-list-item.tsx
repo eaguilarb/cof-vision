@@ -1,6 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { colors, priorityColors, statusColors } from '@/constants/colors';
+import { fontFamily } from '@/constants/typography';
 import { PRIORITY_LABELS, STATUS_LABELS, type Case, type Technician } from '@/api/types';
 import { Badge } from './badge';
 
@@ -47,12 +48,15 @@ export function CaseListItem({ item, technicians }: { item: Case; technicians: T
 const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: 14,
+    borderRadius: 14,
+    padding: 16,
     marginBottom: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
     gap: 6,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 1,
   },
   headerRow: {
     flexDirection: 'row',
@@ -62,15 +66,16 @@ const styles = StyleSheet.create({
   code: {
     fontSize: 12,
     color: colors.textMuted,
-    fontWeight: '600',
+    fontFamily: fontFamily.semibold,
   },
   title: {
     fontSize: 16,
-    fontWeight: '700',
+    fontFamily: fontFamily.bold,
     color: colors.text,
   },
   client: {
     fontSize: 13,
+    fontFamily: fontFamily.medium,
     color: colors.textMuted,
   },
   footerRow: {
@@ -81,11 +86,13 @@ const styles = StyleSheet.create({
   },
   technician: {
     fontSize: 13,
+    fontFamily: fontFamily.medium,
     color: colors.textMuted,
     maxWidth: '55%',
   },
   age: {
     fontSize: 11,
+    fontFamily: fontFamily.medium,
     color: colors.textMuted,
     fontStyle: 'italic',
   },

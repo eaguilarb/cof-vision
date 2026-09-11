@@ -3,6 +3,7 @@ import { useRouter } from 'expo-router';
 import { useAuth } from '@/state/auth-context';
 import { getApiBaseUrl } from '@/api/client';
 import { colors } from '@/constants/colors';
+import { fontFamily } from '@/constants/typography';
 import { ROLE_LABELS } from '@/api/types';
 
 const MODULE_LABELS = { tech: 'Tecnológico', glass: 'Vidrios' } as const;
@@ -58,25 +59,33 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background, padding: 16, gap: 14 },
   card: {
     backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderRadius: 16,
+    padding: 18,
     gap: 4,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 2,
   },
-  name: { fontSize: 18, fontWeight: '700', color: colors.text },
-  email: { fontSize: 13, color: colors.textMuted },
-  role: { fontSize: 13, color: colors.primary, fontWeight: '600', marginTop: 4 },
-  sectionTitle: { fontSize: 13, fontWeight: '700', color: colors.text },
-  mono: { fontSize: 13, color: colors.textMuted },
-  hintText: { fontSize: 11, color: colors.textMuted, marginTop: 6 },
+  name: { fontSize: 19, fontFamily: fontFamily.extrabold, color: colors.text },
+  email: { fontSize: 13, fontFamily: fontFamily.regular, color: colors.textMuted },
+  role: { fontSize: 13, color: colors.primary, fontFamily: fontFamily.semibold, marginTop: 4 },
+  sectionTitle: { fontSize: 13, fontFamily: fontFamily.bold, color: colors.text },
+  mono: { fontSize: 13, fontFamily: fontFamily.regular, color: colors.textMuted },
+  hintText: { fontSize: 11, fontFamily: fontFamily.medium, color: colors.textMuted, marginTop: 6 },
   linkButton: { marginTop: 8 },
-  linkButtonText: { color: colors.primary, fontWeight: '700', fontSize: 13 },
+  linkButtonText: { color: colors.primary, fontFamily: fontFamily.bold, fontSize: 13 },
   logoutButton: {
     backgroundColor: colors.danger,
-    borderRadius: 10,
-    paddingVertical: 12,
+    borderRadius: 12,
+    paddingVertical: 14,
     alignItems: 'center',
+    shadowColor: colors.danger,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 3,
   },
-  logoutText: { color: '#fff', fontWeight: '700' },
+  logoutText: { color: '#fff', fontFamily: fontFamily.bold, fontSize: 15 },
 });

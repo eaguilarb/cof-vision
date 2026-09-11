@@ -14,6 +14,7 @@ import { useCases, useTechnicians } from '@/api/hooks';
 import { STATUS_LABELS, type Case, type CaseStatus, type Technician } from '@/api/types';
 import { useAuth } from '@/state/auth-context';
 import { colors, statusColors } from '@/constants/colors';
+import { fontFamily } from '@/constants/typography';
 import { CaseListItem } from '@/components/case-list-item';
 import { Badge } from '@/components/badge';
 
@@ -154,7 +155,10 @@ export default function CasesScreen() {
         />
       )}
 
-      <Pressable style={styles.fab} onPress={() => router.push('/case/new')}>
+      <Pressable
+        style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
+        onPress={() => router.push('/case/new')}
+      >
         <Text style={styles.fabText}>+ Nuevo caso</Text>
       </Pressable>
     </View>
@@ -255,16 +259,17 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
     backgroundColor: colors.surface,
   },
-  headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
-  headerCount: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
+  headerTitle: { fontSize: 20, fontFamily: fontFamily.extrabold, color: colors.text, letterSpacing: -0.3 },
+  headerCount: { fontSize: 13, fontFamily: fontFamily.semibold, color: colors.textMuted },
   searchWrap: { paddingHorizontal: 14, paddingTop: 8, paddingBottom: 4, backgroundColor: colors.surface },
   searchInput: {
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     fontSize: 14,
+    fontFamily: fontFamily.regular,
     backgroundColor: colors.background,
   },
   mineToggle: {
@@ -275,12 +280,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 999,
-    borderWidth: 1.5,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
   },
-  mineToggleActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  mineToggleText: { fontSize: 13, fontWeight: '700', color: colors.text },
+  mineToggleActive: { backgroundColor: colors.primary },
+  mineToggleText: { fontSize: 13, fontFamily: fontFamily.semibold, color: colors.text },
   mineToggleTextActive: { color: colors.primaryText },
   listContent: {
     padding: 14,
@@ -293,17 +296,20 @@ const styles = StyleSheet.create({
   },
   terminalCard: {
     backgroundColor: colors.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderLeftWidth: 5,
-    marginBottom: 10,
-    padding: 14,
-    gap: 10,
+    borderRadius: 16,
+    borderLeftWidth: 4,
+    marginBottom: 12,
+    padding: 16,
+    gap: 12,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 2,
   },
   terminalHeader: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  terminalName: { fontSize: 16, fontWeight: '800', color: colors.text },
-  terminalMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+  terminalName: { fontSize: 16, fontFamily: fontFamily.bold, color: colors.text },
+  terminalMeta: { fontSize: 12, fontFamily: fontFamily.medium, color: colors.textMuted, marginTop: 2 },
   expandButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -312,10 +318,8 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 999,
     backgroundColor: colors.background,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
-  expandButtonText: { fontSize: 12, fontWeight: '700', color: colors.primary },
+  expandButtonText: { fontSize: 12, fontFamily: fontFamily.semibold, color: colors.primary },
   chevron: { fontSize: 11, color: colors.primary },
   statusPillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   miniChipRow: {
@@ -330,31 +334,31 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
     backgroundColor: colors.background,
   },
-  miniChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  miniChipText: { fontSize: 12, fontWeight: '700', color: colors.text },
+  miniChipActive: { backgroundColor: colors.primary },
+  miniChipText: { fontSize: 12, fontFamily: fontFamily.semibold, color: colors.text },
   miniChipTextActive: { color: colors.primaryText },
   terminalCaseList: { gap: 0 },
-  noCasesHint: { fontSize: 12, color: colors.textMuted, fontStyle: 'italic' },
+  noCasesHint: { fontSize: 12, fontFamily: fontFamily.medium, color: colors.textMuted, fontStyle: 'italic' },
   fab: {
     position: 'absolute',
     right: 16,
     bottom: 20,
     backgroundColor: colors.primary,
-    paddingHorizontal: 18,
-    paddingVertical: 14,
+    paddingHorizontal: 20,
+    paddingVertical: 15,
     borderRadius: 999,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
+    elevation: 6,
+    shadowColor: colors.primary,
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
   },
+  fabPressed: { opacity: 0.9, transform: [{ scale: 0.97 }] },
   fabText: {
     color: colors.primaryText,
-    fontWeight: '700',
+    fontFamily: fontFamily.bold,
+    fontSize: 14,
   },
 });

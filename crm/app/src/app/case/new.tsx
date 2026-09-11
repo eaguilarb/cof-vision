@@ -16,6 +16,7 @@ import { apiErrorMessage } from '@/api/client';
 import { PRIORITY_LABELS, type CasePriority } from '@/api/types';
 import { useAuth } from '@/state/auth-context';
 import { colors } from '@/constants/colors';
+import { fontFamily } from '@/constants/typography';
 import { BusGlassDiagram, type GlassZone } from '@/components/bus-glass-diagram';
 
 const PRIORITIES = Object.keys(PRIORITY_LABELS) as CasePriority[];
@@ -299,7 +300,11 @@ export default function NewCaseScreen() {
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      <Pressable style={styles.submitButton} onPress={handleSubmit} disabled={createCase.isPending}>
+      <Pressable
+        style={({ pressed }) => [styles.submitButton, pressed && styles.submitPressed]}
+        onPress={handleSubmit}
+        disabled={createCase.isPending}
+      >
         {createCase.isPending ? (
           <ActivityIndicator color="#fff" />
         ) : (
@@ -313,14 +318,15 @@ export default function NewCaseScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: 16, paddingBottom: 40, gap: 4 },
-  label: { fontSize: 13, fontWeight: '700', color: colors.text, marginTop: 14, marginBottom: 6 },
+  label: { fontSize: 13, fontFamily: fontFamily.bold, color: colors.text, marginTop: 14, marginBottom: 6 },
   input: {
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: 10,
+    borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
+    fontFamily: fontFamily.regular,
     backgroundColor: colors.surface,
   },
   textarea: { minHeight: 90, textAlignVertical: 'top' },
@@ -329,18 +335,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.border,
     backgroundColor: colors.surface,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
   },
-  chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  chipText: { fontSize: 13, color: colors.text, fontWeight: '600' },
+  chipActive: { backgroundColor: colors.primary },
+  chipText: { fontSize: 13, color: colors.text, fontFamily: fontFamily.semibold },
   chipTextActive: { color: colors.primaryText },
-  hint: { fontSize: 12, color: colors.textMuted },
-  error: { color: colors.danger, marginTop: 14, fontSize: 13 },
+  hint: { fontSize: 12, fontFamily: fontFamily.medium, color: colors.textMuted },
+  error: { color: colors.danger, marginTop: 14, fontSize: 13, fontFamily: fontFamily.medium },
   photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   photoThumbWrap: { position: 'relative' },
-  photoThumb: { width: 64, height: 64, borderRadius: 10, backgroundColor: colors.border },
+  photoThumb: { width: 64, height: 64, borderRadius: 12, backgroundColor: colors.border },
   photoRemoveButton: {
     position: 'absolute',
     top: -6,
@@ -352,24 +361,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  photoRemoveButtonText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+  photoRemoveButtonText: { color: '#fff', fontSize: 11, fontFamily: fontFamily.bold },
   photoAddButton: {
     width: 64,
     height: 64,
-    borderRadius: 10,
+    borderRadius: 12,
     borderWidth: 1,
     borderStyle: 'dashed',
     borderColor: colors.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  photoAddButtonText: { fontSize: 11, color: colors.textMuted, textAlign: 'center', fontWeight: '600' },
+  photoAddButtonText: { fontSize: 11, color: colors.textMuted, textAlign: 'center', fontFamily: fontFamily.semibold },
   submitButton: {
     marginTop: 24,
     backgroundColor: colors.primary,
-    borderRadius: 10,
-    paddingVertical: 14,
+    borderRadius: 12,
+    paddingVertical: 15,
     alignItems: 'center',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 3,
   },
-  submitText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  submitPressed: { opacity: 0.9, transform: [{ scale: 0.99 }] },
+  submitText: { color: '#fff', fontFamily: fontFamily.bold, fontSize: 15 },
 });

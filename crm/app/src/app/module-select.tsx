@@ -2,6 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/state/auth-context';
 import { colors } from '@/constants/colors';
+import { fontFamily } from '@/constants/typography';
 import type { AppModule } from '@/api/client';
 
 export default function ModuleSelectScreen() {
@@ -18,7 +19,10 @@ export default function ModuleSelectScreen() {
       <Text style={styles.title}>COF CRM</Text>
       <Text style={styles.subtitle}>¿Qué vas a trabajar?</Text>
 
-      <Pressable style={styles.card} onPress={() => handleChoose('tech')}>
+      <Pressable
+        style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+        onPress={() => handleChoose('tech')}
+      >
         <Text style={styles.cardIcon}>🔧</Text>
         <Text style={styles.cardTitle}>Tecnológico</Text>
         <Text style={styles.cardDesc}>
@@ -26,7 +30,10 @@ export default function ModuleSelectScreen() {
         </Text>
       </Pressable>
 
-      <Pressable style={styles.card} onPress={() => handleChoose('glass')}>
+      <Pressable
+        style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
+        onPress={() => handleChoose('glass')}
+      >
         <Text style={styles.cardIcon}>🪟</Text>
         <Text style={styles.cardTitle}>Vidrios</Text>
         <Text style={styles.cardDesc}>
@@ -47,19 +54,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 16,
   },
-  title: { fontSize: 26, fontWeight: '800', color: colors.text, textAlign: 'center' },
-  subtitle: { fontSize: 15, color: colors.textMuted, textAlign: 'center', marginBottom: 8 },
+  title: { fontSize: 28, fontFamily: fontFamily.extrabold, color: colors.text, textAlign: 'center', letterSpacing: -0.5 },
+  subtitle: { fontSize: 15, fontFamily: fontFamily.medium, color: colors.textMuted, textAlign: 'center', marginBottom: 8 },
   card: {
     backgroundColor: colors.surface,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: 22,
+    borderRadius: 20,
+    padding: 24,
     alignItems: 'center',
     gap: 6,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 3,
   },
+  cardPressed: { opacity: 0.9, transform: [{ scale: 0.985 }] },
   cardIcon: { fontSize: 40 },
-  cardTitle: { fontSize: 19, fontWeight: '800', color: colors.text },
-  cardDesc: { fontSize: 13, color: colors.textMuted, textAlign: 'center' },
-  hint: { fontSize: 12, color: colors.textMuted, textAlign: 'center', marginTop: 8 },
+  cardTitle: { fontSize: 19, fontFamily: fontFamily.extrabold, color: colors.text },
+  cardDesc: { fontSize: 13, fontFamily: fontFamily.medium, color: colors.textMuted, textAlign: 'center' },
+  hint: { fontSize: 12, fontFamily: fontFamily.medium, color: colors.textMuted, textAlign: 'center', marginTop: 8 },
 });

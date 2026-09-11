@@ -1,11 +1,15 @@
 import { Redirect, Tabs } from 'expo-router';
-import { Text } from 'react-native';
 import { useAuth } from '@/state/auth-context';
 import { colors } from '@/constants/colors';
-
-function TabIcon({ symbol }: { symbol: string }) {
-  return <Text style={{ fontSize: 20 }}>{symbol}</Text>;
-}
+import { fontFamily } from '@/constants/typography';
+import {
+  CasesIcon,
+  EquipmentIcon,
+  ProfileIcon,
+  ReportsIcon,
+  TechniciansIcon,
+  UsersIcon,
+} from '@/components/tab-icons';
 
 export default function TabsLayout() {
   const { user, isLoading, module } = useAuth();
@@ -24,22 +28,26 @@ export default function TabsLayout() {
     <Tabs
       screenOptions={{
         tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
+        tabBarLabelStyle: { fontFamily: fontFamily.semibold, fontSize: 11 },
+        tabBarStyle: { borderTopColor: colors.border },
         headerStyle: { backgroundColor: colors.surface },
         headerTintColor: colors.text,
+        headerTitleStyle: { fontFamily: fontFamily.bold },
       }}
     >
       <Tabs.Screen
         name="index"
         options={{
           title: 'Casos',
-          tabBarIcon: () => <TabIcon symbol="🗂️" />,
+          tabBarIcon: ({ color }) => <CasesIcon color={color as string} />,
         }}
       />
       <Tabs.Screen
         name="equipment"
         options={{
           title: 'Equipos',
-          tabBarIcon: () => <TabIcon symbol="🖥️" />,
+          tabBarIcon: ({ color }) => <EquipmentIcon color={color as string} />,
         }}
       />
       <Tabs.Screen
@@ -47,7 +55,7 @@ export default function TabsLayout() {
         options={{
           title: 'Reportes',
           href: canSeeReports ? undefined : null,
-          tabBarIcon: () => <TabIcon symbol="📊" />,
+          tabBarIcon: ({ color }) => <ReportsIcon color={color as string} />,
         }}
       />
       <Tabs.Screen
@@ -55,7 +63,7 @@ export default function TabsLayout() {
         options={{
           title: 'Técnicos',
           href: isAdmin ? undefined : null,
-          tabBarIcon: () => <TabIcon symbol="🧑‍🔧" />,
+          tabBarIcon: ({ color }) => <TechniciansIcon color={color as string} />,
         }}
       />
       <Tabs.Screen
@@ -63,14 +71,14 @@ export default function TabsLayout() {
         options={{
           title: 'Usuarios',
           href: isAdmin ? undefined : null,
-          tabBarIcon: () => <TabIcon symbol="🛡️" />,
+          tabBarIcon: ({ color }) => <UsersIcon color={color as string} />,
         }}
       />
       <Tabs.Screen
         name="profile"
         options={{
           title: 'Perfil',
-          tabBarIcon: () => <TabIcon symbol="👤" />,
+          tabBarIcon: ({ color }) => <ProfileIcon color={color as string} />,
         }}
       />
     </Tabs>
