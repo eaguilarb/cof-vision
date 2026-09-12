@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 crm/app/builds/
+crm/.env
 
 # Editor directories and files
 .vscode/*

@@ -1,0 +1,62 @@
+# Stack completo del CRM para correr en un servidor propio (costo cero,
+# solo necesitas Docker instalado). Reemplaza a Railway + Vercel.
+# Ver DEPLOY.md para las 3 formas de exponerlo (red interna, dominio
+# propio, o servidor sin IP pública) antes de levantar esto.
+#
+# Uso:
+#   1. Copia .env.example a .env y completa tus variables.
+#   2. Define EXPO_PUBLIC_API_URL (ver DEPLOY.md) y corre:
+#        EXPO_PUBLIC_API_URL=https://api.tuempresa.cl docker compose build web
+#   3. docker compose up -d
+#
+# Servicios:
+#   - backend: la API del CRM (Node/Express), con su propio volumen de
+#     datos persistente (cuentas, casos de Vidrios, fotos).
+#   - web: el build estático de la app (Expo web export) servido por
+#     nginx — sin runtime de Node en producción.
+#   - caddy: proxy inverso — solo necesario si vas a exponer esto con
+#     dominio propio (Opción B de DEPLOY.md). Si solo es para la red
+#     interna de la empresa (Opción A), puedes omitir este servicio y
+#     publicar los puertos de "web" y "backend" directamente.
+
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - crm-data:/data
+    ports:
+      - "4000:4000"
+
+  web:
+    build:
+      context: ./app
+      dockerfile: ../web.Dockerfile
+      args:
+        EXPO_PUBLIC_API_URL: ${EXPO_PUBLIC_API_URL}
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+
+  # Descomenta este servicio solo si vas a exponer el CRM a internet con
+  # un dominio propio (Opción B de DEPLOY.md) — obtiene HTTPS gratis
+  # automático vía Let's Encrypt.
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile
+  #     - caddy-data:/data
+  #     - caddy-config:/config
+  #   depends_on:
+  #     - backend
+  #     - web
+
+volumes:
+  crm-data:
+  caddy-data:
+  caddy-config:

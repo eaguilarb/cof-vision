@@ -1,0 +1,14 @@
+# Solo se usa si eliges la Opción B de DEPLOY.md (dominio propio +
+# IP pública). Reemplaza los dos dominios de abajo por los tuyos —
+# pueden ser dos subdominios del mismo dominio de la empresa, ej.
+# app.tuempresa.cl y api.tuempresa.cl. Deben apuntar (registro DNS
+# tipo A) a la IP pública de este servidor antes de levantar Caddy —
+# obtiene el certificado HTTPS solo la primera vez que alguien entra.
+
+app.tuempresa.cl {
+	reverse_proxy web:80
+}
+
+api.tuempresa.cl {
+	reverse_proxy backend:4000
+}
