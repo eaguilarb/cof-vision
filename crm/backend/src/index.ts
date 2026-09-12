@@ -11,6 +11,7 @@ import { configRouter } from './routes/config.js';
 import { pushTokensRouter } from './routes/push-tokens.js';
 import { reportsRouter } from './routes/reports.js';
 import { usersRouter } from './routes/users.js';
+import { backupRouter } from './routes/backup.js';
 import { isIntranetEnabled } from './intranet.js';
 import { startPolling } from './notifications.js';
 
@@ -29,6 +30,7 @@ app.use('/config', configRouter);
 app.use('/push-tokens', pushTokensRouter);
 app.use('/reports', reportsRouter);
 app.use('/users', usersRouter);
+app.use('/backup', backupRouter);
 
 const handleUploadErrors: ErrorRequestHandler = (err, _req, res, next) => {
   if (err instanceof multer.MulterError || (err instanceof Error && err.message === 'Solo se permiten imágenes')) {

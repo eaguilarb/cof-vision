@@ -168,6 +168,11 @@ Todos (salvo `/auth/login`) requieren `Authorization: Bearer <token>`.
 - `POST /push-tokens` — `{ token }` (token de push de Expo del dispositivo; ver sección de notificaciones)
 - `GET /users` · `POST /users` · `DELETE /users/:id` (solo admin) — cuentas admin/operator (ver sección de Roles)
 - `GET /reports/summary` · `GET /reports/export?format=xlsx|pdf` (ver sección de Reportes)
+- `GET /backup` (solo admin) — volcado completo de los datos propios del
+  CRM (cuentas, casos de Vidrios, overlays) en JSON, para respaldo.
+  Pensado para llamarse por HTTPS desde donde sea (ej. un cron externo),
+  sin depender de acceso SFTP al volumen de Railway. Las contraseñas
+  van hasheadas (bcrypt), nunca en texto plano.
 
 ## Desplegar en Railway
 
