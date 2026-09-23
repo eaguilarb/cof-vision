@@ -20,9 +20,11 @@ COPY --from=build /app/dist ./dist
 
 # Los datos (cuentas, casos de Vidrios, fotos) se guardan aquí — monta un
 # volumen en este path para que sobrevivan a un `docker compose up`
-# nuevo o una actualización de imagen.
+# nuevo o una actualización de imagen (docker-compose.yml ya lo monta).
+# Sin instrucción VOLUME a propósito: Railway rechaza cualquier Dockerfile
+# que la tenga (la construcción falla en ~1s sin log) y exige usar sus
+# propios volúmenes, que aquí también se montan en /data.
 ENV DATA_DIR=/data
-VOLUME ["/data"]
 
 EXPOSE 4000
 CMD ["npm", "start"]
