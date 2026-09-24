@@ -113,3 +113,6 @@ usuario (sin API key) y el conector de TomTom Maps para el mapa base.
   añadir un objeto a la lista `ENFOQUES`.
 - `node artifact/build.mjs` genera `artifact/camaras.html` (una sola página
   con el CSS de Leaflet incrustado), que es el archivo que se publica.
+- `artifact/COF-Vision-Camaras.html` es la misma página para abrir con doble
+  clic fuera de claude.ai. Lee las coordenadas en el computador (Tesseract.js),
+  usa Gemini con la clave gratuita del usuario y mapas de Esri/OpenStreetMap.

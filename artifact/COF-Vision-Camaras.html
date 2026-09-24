@@ -1317,7 +1317,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
         <form class="field" id="gemForm" hidden>
           <label class="label" for="gemKey">Clave gratuita de Gemini (Google)</label>
           <div class="btn-row">
-            <input type="password" id="gemKey" class="inline-input" style="flex:1;min-width:180px" placeholder="Pega aquí tu clave (empieza con AIza…)" autocomplete="off">
+            <input type="password" id="gemKey" class="inline-input" style="flex:1;min-width:180px" placeholder="Pega aquí tu clave de Gemini" autocomplete="off">
             <button class="btn small primary" type="submit">Guardar clave</button>
             <button class="btn small ghost" type="button" id="gemForget" hidden>Olvidar</button>
           </div>
@@ -1890,7 +1890,6 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   const OCR_FULL = { text: true, blocks: true, hocr: false, tsv: false };
   const OCR_TEXT = { text: true, blocks: false, hocr: false, tsv: false };
   let ocrWorkerP = null;
-  let ocrModeNow = null;
   function loadScript(src) {
     return new Promise((resolve, reject) => {
       const s = document.createElement('script');
@@ -1904,11 +1903,14 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     if (!ocrWorkerP) {
       ocrWorkerP = (async () => {
         if (!window.Tesseract) await loadScript(TESS_URL);
+        let w;
         try {
-          return await window.Tesseract.createWorker('eng', 1);
+          w = await window.Tesseract.createWorker('eng', 1);
         } catch {
-          return await window.Tesseract.createWorker('eng', 1, { cacheMethod: 'none' });
+          w = await window.Tesseract.createWorker('eng', 1, { cacheMethod: 'none' });
         }
+        await w.setParameters({ tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ.:/-$ ', tessedit_pageseg_mode: '6' });
+        return w;
       })().catch(() => {
         ocrWorkerP = null;
         throw { code: 'local', message: 'No se pudo cargar el lector de texto. Revisa tu conexión a internet: se descarga solo la primera vez.' };
@@ -1916,46 +1918,124 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     }
     return ocrWorkerP;
   }
-  async function ocrMode(w, mode) {
-    if (ocrModeNow === mode) return;
-    if (mode === 'strict') await w.setParameters({ tessedit_char_whitelist: '0123456789.,:/-NSEWOKMH ', tessedit_pageseg_mode: '6' });
-    else await w.setParameters({ tessedit_char_whitelist: '', tessedit_pageseg_mode: '3' });
-    ocrModeNow = mode;
+  // Maneras de preparar el texto, de la más a la menos agresiva. `k` es el aumento para un video
+  // de 440 px de alto y `dil` cuánto se engrosa el trazo.
+  const OCR_VARIANTS = [
+    { k: 3, dil: 2 },
+    { k: 2, dil: 1 },
+    { k: 3, dil: 1 },
+    { k: 2, dil: 0 },
+  ];
+  function ocrVariant(frame, v) {
+    const scale = clamp((v.k * 440) / frame.height, 0.75, 4);
+    return { scale, dil: Math.round((v.dil * frame.height * scale) / (v.k * 440)) };
   }
-  // El texto del equipo es blanco con borde negro: se deja en negro sobre blanco y se agranda.
-  function ocrPrep(src, sx, sy, sw, sh, scale) {
-    const padPx = 12;
-    const c = canvas(sw * scale + padPx * 2, sh * scale + padPx * 2);
+  // El texto del equipo es blanco y muchas veces solo el contorno de cada letra: se aísla lo blanco,
+  // se engrosa el trazo para cerrar las letras huecas y queda negro sobre fondo blanco.
+  function ocrPrep(src, sx, sy, sw, sh, v) {
+    const pad = 16;
+    const W = Math.round(sw * v.scale) + pad * 2;
+    const H = Math.round(sh * v.scale) + pad * 2;
+    const c = canvas(W, H);
     const g = c.getContext('2d');
     g.fillStyle = '#000';
-    g.fillRect(0, 0, c.width, c.height);
-    g.imageSmoothingEnabled = true;
-    g.drawImage(src, sx, sy, sw, sh, padPx, padPx, sw * scale, sh * scale);
-    const d = g.getImageData(0, 0, c.width, c.height);
+    g.fillRect(0, 0, W, H);
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(src, sx, sy, sw, sh, pad, pad, W - pad * 2, H - pad * 2);
+    const d = g.getImageData(0, 0, W, H);
     const a = d.data;
-    for (let i = 0; i < a.length; i += 4) {
-      const r = a[i];
-      const gg = a[i + 1];
-      const bl = a[i + 2];
-      const l = 0.299 * r + 0.587 * gg + 0.114 * bl;
-      const sat = Math.max(r, gg, bl) - Math.min(r, gg, bl);
-      const v = l >= 185 && sat <= 70 ? 0 : 255;
-      a[i] = a[i + 1] = a[i + 2] = v;
+    let ink = new Uint8Array(W * H);
+    for (let p = 0, i = 0; p < ink.length; p++, i += 4) {
+      const mn = Math.min(a[i], a[i + 1], a[i + 2]);
+      const mx = Math.max(a[i], a[i + 1], a[i + 2]);
+      ink[p] = mn - (mx - mn) * 1.5 >= 168 ? 1 : 0;
     }
+    const r = v.dil;
+    if (r > 0) {
+      const tmp = new Uint8Array(W * H);
+      for (let y = 0; y < H; y++) {
+        const row = y * W;
+        for (let x = 0; x < W; x++) {
+          const x1 = Math.min(W - 1, x + r);
+          let on = 0;
+          for (let k = Math.max(0, x - r); k <= x1 && !on; k++) on = ink[row + k];
+          tmp[row + x] = on;
+        }
+      }
+      const out = new Uint8Array(W * H);
+      for (let y = 0; y < H; y++) {
+        const y1 = Math.min(H - 1, y + r);
+        for (let x = 0; x < W; x++) {
+          let on = 0;
+          for (let k = Math.max(0, y - r); k <= y1 && !on; k++) on = tmp[k * W + x];
+          out[y * W + x] = on;
+        }
+      }
+      ink = out;
+    }
+    for (let p = 0, i = 0; p < ink.length; p++, i += 4) a[i] = a[i + 1] = a[i + 2] = ink[p] ? 0 : 255;
     g.putImageData(d, 0, 0);
-    return { canvas: c, pad: padPx, scale };
+    return { canvas: c, pad, scale: v.scale };
+  }
+  async function ocrRegion(w, frame, box, v, full) {
+    const sx = Math.max(0, Math.floor(box.left * frame.width));
+    const sy = Math.max(0, Math.floor(box.top * frame.height));
+    const sw = Math.max(8, Math.min(frame.width - sx, Math.ceil((box.right - box.left) * frame.width)));
+    const sh = Math.max(6, Math.min(frame.height - sy, Math.ceil((box.bottom - box.top) * frame.height)));
+    const pp = ocrPrep(frame, sx, sy, sw, sh, ocrVariant(frame, v));
+    const { data } = await w.recognize(pp.canvas, {}, full ? OCR_FULL : OCR_TEXT);
+    const toFrame = (bb) => ({
+      arriba: (sy + (bb.y0 - pp.pad) / pp.scale) / frame.height,
+      abajo: (sy + (bb.y1 - pp.pad) / pp.scale) / frame.height,
+      izquierda: (sx + (bb.x0 - pp.pad) / pp.scale) / frame.width,
+      derecha: (sx + (bb.x1 - pp.pad) / pp.scale) / frame.width,
+    });
+    return { text: data.text || '', lines: data.lines || [], toFrame };
   }
 
+  // Letras que el lector confunde con números en la tipografía de los equipos, y lecturas
+  // equivocadas de la letra del hemisferio (S leída como 5, W como K, etc.).
+  const DIGITISH = { O: '0', D: '0', Q: '0', U: '0', I: '1', L: '1', J: '1', T: '7', Z: '2', B: '8', G: '6', A: '4' };
+  const HEMI = { S: 'S', 5: 'S', 8: 'S', $: 'S', N: 'N', H: 'N', W: 'W', K: 'W', V: 'W', M: 'W', X: 'W', Y: 'W', E: 'E', F: 'E', O: 'W', 0: 'W' };
+  function osdText(raw) {
+    return String(raw || '')
+      .toUpperCase()
+      .replace(/,/g, '.')
+      .replace(/\s*\.\s*/g, '.')
+      .replace(/[A-Z0-9.$]+/g, (tok) => {
+        if ((tok.match(/\d/g) || []).length < 4) return tok;
+        const tail = /[\d.][A-Z$]$/.test(tok) ? tok.slice(-1) : '';
+        const body = tail ? tok.slice(0, -1) : tok;
+        return body.replace(/[A-Z]/g, (ch) => DIGITISH[ch] || ch) + tail;
+      })
+      .replace(/\s+/g, ' ');
+  }
+  // Si el texto no deja ver la letra del hemisferio, se usa la zona horaria del computador.
+  const TZ_SIGNS = (() => {
+    let tz = '';
+    try {
+      tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    } catch {
+      /* sin zona horaria */
+    }
+    const south = /^(America\/(Santiago|Punta_Arenas|Argentina|Buenos_Aires|Cordoba|Mendoza|Sao_Paulo|Rio_Branco|Porto_Velho|Manaus|Cuiaba|Campo_Grande|Belem|Fortaleza|Recife|Maceio|Bahia|Araguaina|Santarem|Noronha|Lima|La_Paz|Asuncion|Montevideo|Guayaquil)|Australia\/|Antarctica\/|Pacific\/(Auckland|Chatham|Fiji|Tongatapu|Easter)|Africa\/(Johannesburg|Maputo|Harare|Lusaka|Windhoek|Gaborone|Luanda|Lubumbashi|Dar_es_Salaam|Blantyre)|Indian\/(Mauritius|Reunion|Antananarivo))/.test(tz);
+    return { lat: south ? -1 : 1, lon: new Date().getTimezoneOffset() > 0 ? -1 : 1 };
+  })();
   // Coordenadas en los formatos habituales de los MDVR:
   // 33.25.30640S (grados.minutos.decimales), 33°25'18.4"S, -33.421773 o S33.421773.
   function parseCoordsText(raw, signs) {
-    const t = String(raw || '').toUpperCase().replace(/,/g, '.').replace(/\s+/g, ' ');
+    const t = osdText(raw);
     const vals = [];
-    const push = (value, letter) => vals.push({ value, letter: letter || null });
-    for (const m of t.matchAll(/([NSEWO])?\s?(\d{1,3})\.(\d{1,2})\.(\d{2,6})\s?([NSEWO])?/g)) {
-      const deg = +m[2];
-      const min = +`${m[3]}.${m[4]}`;
-      if (min < 60) push(deg + min / 60, m[5] || m[1]);
+    const push = (value, letter) => vals.push({ value, letter: HEMI[letter] || null });
+    for (const m of t.matchAll(/([NSEWO])?(\d{1,3})\.(\d{1,2})\.(\d{2,7})([A-Z$]?)/g)) {
+      let frac = m[4];
+      let letter = m[5] || m[1] || '';
+      if (frac.length > 5) {
+        if (!letter) letter = frac[5];
+        frac = frac.slice(0, 5);
+      }
+      const min = +`${m[3]}.${frac}`;
+      if (min < 60) push(+m[2] + min / 60, letter);
     }
     if (vals.length < 2) {
       vals.length = 0;
@@ -1969,21 +2049,23 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     }
     if (vals.length < 2) return null;
     let lat = vals.find((v) => v.letter === 'N' || v.letter === 'S');
-    let lon = vals.find((v) => v.letter === 'E' || v.letter === 'W' || v.letter === 'O');
-    if (!lat || !lon) {
+    let lon = vals.find((v) => v.letter === 'E' || v.letter === 'W');
+    if (!lat || !lon || lat === lon) {
       lat = vals[0];
       lon = vals[1];
     }
-    let la = lat.value;
-    let lo = lon.value;
-    if (lat.letter === 'S') la = -Math.abs(la);
-    else if (lat.letter !== 'N' && la > 0 && signs && signs.lat < 0) la = -la;
-    if (lon.letter === 'W' || lon.letter === 'O') lo = -Math.abs(lo);
-    else if (lon.letter !== 'E' && lo > 0 && signs && signs.lon < 0) lo = -lo;
-    return validLL(la, lo) ? { lat: la, lon: lo, lettered: !!(lat.letter && lon.letter) } : null;
+    const latL = lat.letter === 'N' || lat.letter === 'S';
+    const lonL = lon.letter === 'E' || lon.letter === 'W';
+    let la = Math.abs(lat.value);
+    let lo = Math.abs(lon.value);
+    if (latL) la *= lat.letter === 'S' ? -1 : 1;
+    else la = lat.value < 0 ? lat.value : la * ((signs && signs.lat) || TZ_SIGNS.lat);
+    if (lonL) lo *= lon.letter === 'W' ? -1 : 1;
+    else lo = lon.value < 0 ? lon.value : lo * ((signs && signs.lon) || TZ_SIGNS.lon);
+    return validLL(la, lo) ? { lat: la, lon: lo, latL, lonL } : null;
   }
   function parseClockText(raw) {
-    const t = String(raw || '');
+    const t = osdText(raw);
     let m = t.match(/(\d{2})[/.-](\d{2})[/.-](\d{4})\D{1,4}(\d{2})\D?(\d{2})\D?(\d{2})/);
     if (m) return mk(+m[3], +m[2], +m[1], +m[4], +m[5], +m[6]);
     m = t.match(/(\d{4})[/.-](\d{2})[/.-](\d{2})\D{1,4}(\d{2})\D?(\d{2})\D?(\d{2})/);
@@ -1991,98 +2073,116 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     return null;
   }
   function parseSpeedText(raw) {
-    const m = String(raw || '').toUpperCase().match(/(\d{1,3})\s?K\s?M\s?\/?\s?H/);
+    const m = String(raw || '').toUpperCase().match(/(\d{1,3})\s?K\s?[MNH]/);
     return m ? +m[1] : null;
   }
   const parseCanal = (raw) => {
-    const m = String(raw || '').toUpperCase().match(/\bCH\s?0?(\d{1,2})\b/);
-    return m ? +m[1] : null;
+    const m = String(raw || '').toUpperCase().match(/\bC[HN]\s?0?([0-9TILZS]{1,2})\b/);
+    if (!m) return null;
+    const n = +m[1].replace(/[A-Z]/g, (ch) => ({ T: '7', I: '1', L: '1', Z: '2', S: '5' })[ch]);
+    return n >= 1 && n <= 64 ? n : null;
   };
   const parseBus = (raw) => {
     const m = String(raw || '').toUpperCase().match(/\b(?!CH\d)([A-Z]{2,5}-\d{1,4})\b/);
     return m ? m[1] : null;
   };
-  function unionBox(boxes) {
-    const b = boxes.filter(Boolean);
-    if (!b.length) return null;
-    return { x0: Math.min(...b.map((x) => x.x0)), y0: Math.min(...b.map((x) => x.y0)), x1: Math.max(...b.map((x) => x.x1)), y1: Math.max(...b.map((x) => x.y1)) };
+
+  // Franjas donde los equipos suelen escribir los datos: arriba y abajo de la imagen.
+  const OSD_STRIPS = [
+    { top: 0, bottom: 0.2, left: 0, right: 1 },
+    { top: 0.8, bottom: 1, left: 0, right: 1 },
+  ];
+  const CH_BOXES = [
+    { top: 0, bottom: 0.25, left: 0, right: 0.3 },
+    { top: 0.75, bottom: 1, left: 0, right: 0.3 },
+  ];
+  async function readStrips(w, frame, v, strips = OSD_STRIPS) {
+    const found = { coords: null, clock: null, speed: null, canal: null, bus: null, boxes: [], texto: [] };
+    for (const strip of strips) {
+      const r = await ocrRegion(w, frame, strip, v, true);
+      for (const l of r.lines) {
+        const txt = (l.text || '').trim();
+        if (!txt) continue;
+        found.texto.push(txt);
+        const c = parseCoordsText(txt);
+        if (c && !found.coords) {
+          found.coords = c;
+          found.boxes.push(r.toFrame(l.bbox));
+        }
+        const k = parseClockText(txt);
+        if (k != null && found.clock == null) {
+          found.clock = k;
+          found.boxes.push(r.toFrame(l.bbox));
+        }
+        if (found.speed == null) found.speed = parseSpeedText(txt);
+        if (found.canal == null) found.canal = parseCanal(txt);
+        if (!found.bus) found.bus = parseBus(txt);
+      }
+    }
+    return found;
   }
 
   async function detectLocal(b) {
     busySet('Preparando el lector de texto (solo la primera vez tarda un poco)…', null);
     const w = await ocrWorker();
-    await ocrMode(w, 'free');
     const cams = S.cams.filter((c) => !c.error && isFinite(c.duration));
     const items = [];
+    let best = null;
     for (const cam of cams) {
       busySet(`Leyendo el texto en pantalla de ${cam.label}…`, null);
       const t = clamp(cam.duration * 0.1, 0, Math.max(0, cam.duration - 1));
       const frame = await grabAt(cam, t);
       if (b.stopped) return null;
       S.frameCache.set(cam.key, frame);
-      const scale = frame.width < 1000 ? 2 : 1;
-      const pp = ocrPrep(frame, 0, 0, frame.width, frame.height, scale);
-      const { data } = await w.recognize(pp.canvas, {}, OCR_FULL);
-      if (b.stopped) return null;
-      const lines = data.lines || [];
-      const toFrame = (bb) => ({
-        top: (bb.y0 - pp.pad) / scale / frame.height,
-        bottom: (bb.y1 - pp.pad) / scale / frame.height,
-        left: (bb.x0 - pp.pad) / scale / frame.width,
-        right: (bb.x1 - pp.pad) / scale / frame.width,
-      });
-      let coords = null;
-      let clock = null;
-      let speed = null;
-      let canal = null;
-      let bus = null;
-      const boxes = [];
-      for (const l of lines) {
-        const txt = l.text || '';
-        const words = l.words || [];
-        const c = parseCoordsText(txt);
-        if (c) {
-          coords = coords || c;
-          boxes.push(unionBox(words.filter((wd) => /\d+[.,]\d+/.test(wd.text)).map((wd) => wd.bbox)) || l.bbox);
+      // Mientras no se encuentren coordenadas se prueban todas las preparaciones; después basta
+      // con la que funcionó para reconocer el canal de las demás cámaras.
+      const order = best ? [best.ocr] : OCR_VARIANTS.map((_, i) => i);
+      let f = null;
+      let vi = order[0];
+      for (const i of order) {
+        const r = await readStrips(w, frame, OCR_VARIANTS[i]);
+        if (b.stopped) return null;
+        if (!f || (r.coords && !f.coords) || (!f.coords && r.clock != null && f.clock == null)) {
+          f = r;
+          vi = i;
         }
-        const k = parseClockText(txt);
-        if (k != null && clock == null) {
-          clock = k;
-          boxes.push(unionBox(words.filter((wd) => /\d/.test(wd.text)).map((wd) => wd.bbox)) || l.bbox);
-        }
-        if (speed == null) speed = parseSpeedText(txt);
-        if (canal == null) canal = parseCanal(txt);
-        if (!bus) bus = parseBus(txt);
+        if (r.coords) break;
       }
-      const bands = normBands(boxes.map((bb) => {
-        const f = toFrame(bb);
-        return { arriba: f.top, abajo: f.bottom, izquierda: f.left, derecha: f.right };
-      }));
-      items.push({
+      // El canal (CH7) va en un rótulo corto en una esquina: se lee mejor aislado.
+      for (let i = 0; i < OCR_VARIANTS.length && f.canal == null; i++) {
+        const r = await readStrips(w, frame, OCR_VARIANTS[i], CH_BOXES);
+        if (b.stopped) return null;
+        f.canal = r.canal;
+        f.bus = f.bus || r.bus;
+      }
+      const coords = f.coords;
+      const item = {
         key: cam.key,
-        canal: canal != null ? `CH${canal}` : null,
-        bus,
-        texto: lines.map((l) => (l.text || '').trim()).filter(Boolean).join(' | ').slice(0, 300),
+        canal: f.canal != null ? `CH${f.canal}` : null,
+        bus: f.bus,
+        texto: f.texto.join(' | ').slice(0, 300),
         has: !!coords,
-        bands,
+        bands: normBands(f.boxes),
         lat: coords ? coords.lat : null,
         lon: coords ? coords.lon : null,
-        signs: coords ? { lat: Math.sign(coords.lat), lon: Math.sign(coords.lon) } : null,
-        clock,
-        speed,
+        signs: coords ? { lat: coords.latL ? Math.sign(coords.lat) : 0, lon: coords.lonL ? Math.sign(coords.lon) : 0 } : null,
+        clock: f.clock,
+        speed: f.speed,
         t: t + cam.offset,
-      });
-      if (canal != null && /^CÁM /.test(cam.label)) {
-        cam.label = `CH${canal}`;
+        ocr: vi,
+      };
+      items.push(item);
+      if (coords && !best) best = item;
+      if (f.canal != null && /^CÁM /.test(cam.label)) {
+        cam.label = `CH${f.canal}`;
         if (cam.lblInput) cam.lblInput.value = cam.label;
       }
-      if (bus && !S.busId) S.busId = bus;
-      if (clock != null && !S.osdClockRef) S.osdClockRef = { t: t + cam.offset, clock };
+      if (f.bus && !S.busId) S.busId = f.bus;
+      if (f.clock != null && !S.osdClockRef) S.osdClockRef = { t: t + cam.offset, clock: f.clock };
     }
-    const chosen = items.find((i) => i.has);
-    S.osd = { items, camKey: chosen ? chosen.key : S.osd.camKey || (items[0] && items[0].key) || null, bands: {} };
+    S.osd = { items, camKey: best ? best.key : S.osd.camKey || (items[0] && items[0].key) || null, bands: {} };
     persist();
-    return chosen || null;
+    return best;
   }
 
   async function extractLocal(b) {
@@ -2094,24 +2194,28 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     if (times.length < 2) throw { code: 'local', message: 'El video es demasiado corto para armar un recorrido.' };
     busySet('Preparando el lector de texto…', null);
     const w = await ocrWorker();
-    await ocrMode(w, 'strict');
+    // Se parte con la preparación que funcionó al detectar; si una lectura falla se prueba la
+    // siguiente y, si esa acierta, pasa a ser la principal.
+    let order = OCR_VARIANTS.map((_, i) => i);
+    const first = item && Number.isInteger(item.ocr) ? item.ocr : 0;
+    order = [first, ...order.filter((i) => i !== first)];
+    const signs = item && item.signs;
     const pts = [];
     for (let i = 0; i < times.length; i++) {
       if (b.stopped) return null;
       const frame = await grabAt(cam, times[i]);
-      let text = '';
-      for (const bd of bands) {
-        const sx = Math.max(0, Math.floor(bd.left * frame.width));
-        const sy = Math.max(0, Math.floor(bd.top * frame.height));
-        const sw = Math.max(8, Math.min(frame.width - sx, Math.ceil((bd.right - bd.left) * frame.width)));
-        const sh = Math.max(6, Math.min(frame.height - sy, Math.ceil((bd.bottom - bd.top) * frame.height)));
-        const pp = ocrPrep(frame, sx, sy, sw, sh, clamp(110 / sh, 1.5, 3));
-        const { data } = await w.recognize(pp.canvas, {}, OCR_TEXT);
-        text += ` ${data.text}`;
+      for (let tries = 0; tries < 2; tries++) {
+        const vi = order[tries];
+        let text = '';
+        for (const bd of bands) text += ` ${(await ocrRegion(w, frame, bd, OCR_VARIANTS[vi], false)).text}`;
+        if (b.stopped) return null;
+        const c = parseCoordsText(text, signs);
+        if (c) {
+          pts.push({ t: times[i] + cam.offset, lat: c.lat, lon: c.lon, latL: c.latL, lonL: c.lonL, speed: parseSpeedText(text), clock: parseClockText(text) });
+          if (tries) order = [vi, ...order.filter((x) => x !== vi)];
+          break;
+        }
       }
-      if (b.stopped) return null;
-      const c = parseCoordsText(text, item && item.signs);
-      if (c) pts.push({ t: times[i] + cam.offset, lat: c.lat, lon: c.lon, speed: parseSpeedText(text), clock: parseClockText(text) });
       busySet(`Leyendo coordenadas en tu computador ${i + 1}/${times.length}…`, (i + 1) / times.length);
     }
     const clean = cleanTrack(pts);
@@ -2252,7 +2356,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   }
   async function saveGeminiKey(key) {
     const k = key.trim();
-    if (!/^[\w-]{20,}$/.test(k)) return toast('Esa clave no parece válida. Cópiala completa desde aistudio.google.com/apikey.', 'err');
+    if (!/^[\w.-]{20,}$/.test(k)) return toast('Esa clave no parece válida. Cópiala completa desde aistudio.google.com/apikey.', 'err');
     const st = $('#gemStatus');
     st.textContent = 'Probando la clave…';
     try {
@@ -2288,8 +2392,8 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   function initLocal() {
     S.mcp = null;
     S.downloads = LOCAL_DOWNLOADS;
-    setPill('#mapPill', 'on', 'Mapa: OpenStreetMap');
-    setMapNote('Mapa de OpenStreetMap. Las coordenadas se leen en tu computador, sin costo.');
+    setPill('#mapPill', 'on', 'Mapa: Esri y OpenStreetMap');
+    setMapNote('Cambia entre calles y satélite abajo a la izquierda. Sin costo.');
     $('#gemForm').hidden = false;
     $('#privacyNote').textContent =
       'Las coordenadas se leen en tu computador. Para describir escenas se envían a Gemini (Google) solo los fotogramas de cada consulta; con la capa gratuita, Google puede usar esos datos para mejorar sus productos. El video completo no sale de tu equipo.';
@@ -2720,8 +2824,10 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     let pts = input.filter((p) => validLL(p.lat, p.lon)).sort((a, b) => a.t - b.t);
     if (pts.length < 3) return pts;
     for (const key of ['lat', 'lon']) {
-      const neg = pts.filter((p) => p[key] < 0).length;
-      const sign = neg >= pts.length / 2 ? -1 : 1;
+      // Mandan las lecturas donde se vio la letra del hemisferio, si las hay.
+      const lettered = pts.filter((p) => p[`${key}L`]);
+      const voters = lettered.length ? lettered : pts;
+      const sign = voters.filter((p) => p[key] < 0).length >= voters.length / 2 ? -1 : 1;
       const med = median(pts.map((p) => Math.abs(p[key])));
       for (const p of pts) if (Math.sign(p[key]) !== sign && Math.abs(Math.abs(p[key]) - med) < 1) p[key] = -p[key];
     }
@@ -2731,6 +2837,12 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       return { lat: median(win.map((x) => x.lat)), lon: median(win.map((x) => x.lon)) };
     });
     pts = pts.filter((p, i) => distKm(p, filtered[i]) < 0.35);
+    // La hora del equipo avanza al mismo ritmo que el video: se descartan las mal leídas.
+    const offs = pts.filter((p) => p.clock != null).map((p) => p.clock - p.t * 1000);
+    if (offs.length >= 3) {
+      const mo = median(offs);
+      for (const p of pts) if (p.clock != null && Math.abs(p.clock - p.t * 1000 - mo) > 3000) p.clock = null;
+    }
     const out = [];
     for (const p of pts) {
       const prev = out[out.length - 1];
@@ -2738,6 +2850,8 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
         const dt = Math.max(1, p.t - prev.t);
         if ((distKm(prev, p) / dt) * 3600 > 200) continue;
       }
+      delete p.latL;
+      delete p.lonL;
       out.push(p);
     }
     return out;
@@ -2860,17 +2974,17 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     }
     Mp.map = L.map('map', { zoomControl: true, attributionControl: !IN_CLAUDE, zoomSnap: 0.5, minZoom: 2, maxZoom: 19 }).setView([-20, -65], 3);
     if (!IN_CLAUDE) {
-      let fails = 0;
-      const carto = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-        subdomains: 'abcd',
-        maxZoom: 19,
-        attribution: '© OpenStreetMap © CARTO',
-      }).addTo(Mp.map);
-      carto.on('tileerror', () => {
-        if (++fails !== 8) return;
-        carto.remove();
-        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(Mp.map);
-      });
+      // Esri no exige clave ni cabecera de origen, así que funciona abriendo el archivo con doble clic.
+      const esri = (svc) => `https://server.arcgisonline.com/ArcGIS/rest/services/${svc}/MapServer/tile/{z}/{y}/{x}`;
+      const bases = {
+        Calles: L.tileLayer(esri('World_Street_Map'), { maxZoom: 19, maxNativeZoom: 19, attribution: 'Mapa © Esri, HERE, Garmin, © OpenStreetMap' }),
+        Satélite: L.tileLayer(esri('World_Imagery'), { maxZoom: 19, maxNativeZoom: 19, attribution: 'Imágenes © Esri, Maxar, Earthstar Geographics' }),
+        OpenStreetMap: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }),
+      };
+      const saved = store.get('cofcam:base', 'Calles');
+      (bases[saved] || bases.Calles).addTo(Mp.map);
+      L.control.layers(bases, {}, { collapsed: false, position: 'topleft' }).addTo(Mp.map);
+      Mp.map.on('baselayerchange', (e) => store.set('cofcam:base', e.name));
     }
     Mp.ev = L.layerGroup().addTo(Mp.map);
     Mp.map.on('dragstart', () => setFollow(false));
@@ -3574,8 +3688,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       renderPrep();
       if (!S.osd.items.length) {
         busySet('Leyendo los datos en pantalla…', null);
-        if (IN_CLAUDE) await coreDetect(b);
-        else await detectLocal(b);
+        await detectAny(b);
         if (b.stopped) return;
         renderAll();
       }
@@ -3584,8 +3697,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       const item = osdItem(S.osd.camKey);
       if (!S.track.length && item && item.has) {
         try {
-          if (IN_CLAUDE) await coreExtract(b);
-          else await extractLocal(b);
+          await extractAny(b);
         } catch (e) {
           if (!(e && e.code === 'local')) throw e;
           toast(e.message, 'err');
@@ -3844,7 +3956,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
         return toJpeg(c, 0.9);
       }),
     );
-    busySet('Claude está leyendo el texto en pantalla…', null);
+    busySet(`${AI_NAME} está leyendo el texto en pantalla…`, null);
     const prompt = [
       `Te envío ${frames.length} imagen(es); cada una es un fotograma de una cámara distinta de un autobús: ${frames.map((f, i) => `imagen ${i + 1} = ${f.cam.label}`).join(', ')}.`,
       'Estas cámaras suelen tener texto sobreimpreso (OSD) con datos como el número de la unidad, el canal (CH), la fecha y hora, la velocidad y las coordenadas GPS.',
@@ -3895,7 +4007,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     pause();
     const b = busyStart('Capturando un fotograma de cada cámara…');
     try {
-      const chosen = IN_CLAUDE ? await coreDetect(b) : await detectLocal(b);
+      const chosen = await detectAny(b);
       if (b.stopped) return;
       renderAll();
       if (chosen) toast(`Encontré coordenadas en ${camByKey(chosen.key).label}. Revisa la franja y extrae el recorrido.`, 'ok');
@@ -4054,7 +4166,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     let ocrTok = 0;
     for (let gi = 0; gi < groups.length; gi++) {
       if (b.stopped) return null;
-      busySet(`Claude está leyendo las coordenadas ${gi + 1}/${groups.length}…`, 0.5 + (gi / groups.length) * 0.5);
+      busySet(`${AI_NAME} está leyendo las coordenadas ${gi + 1}/${groups.length}…`, 0.5 + (gi / groups.length) * 0.5);
       const g = groups[gi];
       const ns = g.flatMap((c) => c.ns);
       const images = await Promise.all(g.map((c) => toJpeg(c.canvas, 0.92)));
@@ -4096,13 +4208,50 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     setTrack(clean, { source: 'video', cam: cam.label, read: rows.length, ok: clean.length });
     return { ok: clean.length, read: rows.length, failed };
   }
+  // Fuera de claude.ai se lee primero en el computador (gratis) y Gemini entra solo si no alcanza.
+  async function detectAny(b) {
+    if (IN_CLAUDE) return coreDetect(b);
+    const found = await detectLocal(b);
+    if (found || b.stopped || !S.sample) return found;
+    busySet('El lector local no encontró coordenadas; se las pido a Gemini…', null);
+    try {
+      return await coreDetect(b);
+    } catch (e) {
+      if (e && e.code === 'cancelled') throw e;
+      return null;
+    }
+  }
+  async function extractAny(b) {
+    if (IN_CLAUDE) return coreExtract(b);
+    let local = null;
+    let err = null;
+    try {
+      local = await extractLocal(b);
+    } catch (e) {
+      if (!(e && e.code === 'local')) throw e;
+      err = e;
+    }
+    if (b.stopped) return null;
+    if (!S.sample || (local && local.ok >= local.read * 0.6)) {
+      if (err) throw err;
+      return local;
+    }
+    busySet('Varias lecturas salieron dudosas; Gemini revisa las coordenadas…', null);
+    try {
+      return await coreExtract(b);
+    } catch (e) {
+      if (e && e.code === 'cancelled') throw e;
+      if (local) return local;
+      throw err || e;
+    }
+  }
   async function extractTrack() {
     if (!camByKey(S.osd.camKey)) return toast('Elige la cámara que muestra las coordenadas.', 'err');
     if (IN_CLAUDE && !aiReady()) return;
     pause();
     const b = busyStart('Leyendo el video…');
     try {
-      const r = IN_CLAUDE ? await coreExtract(b) : await extractLocal(b);
+      const r = await extractAny(b);
       if (r) toast(`Recorrido listo: ${r.ok} puntos válidos de ${r.read} lecturas${r.failed ? ` (${r.failed} grupo(s) no se pudieron leer)` : ''}.`, 'ok');
     } catch (e) {
       onAiError(e);
