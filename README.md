@@ -116,3 +116,16 @@ usuario (sin API key) y el conector de TomTom Maps para el mapa base.
 - `artifact/COF-Vision-Camaras.html` es la misma página para abrir con doble
   clic fuera de claude.ai. Lee las coordenadas en el computador (Tesseract.js),
   usa Gemini con la clave gratuita del usuario y mapas de Esri/OpenStreetMap.
+
+## Versión simple (`simple/`)
+
+`simple/cof-vision-simple.html` se abre con doble clic: eliges un video, Gemini
+describe lo que pasa cada pocos segundos y lee las coordenadas escritas en la
+imagen, y el mapa muestra el bus avanzando mientras se reproduce. Para una
+copia personal con la clave ya incorporada:
+
+```bash
+GEMINI_KEY=tu-clave node simple/con-clave.mjs mi-copia.personal.html
+```
+
+Esa copia contiene la clave: no la subas al repositorio ni la compartas.

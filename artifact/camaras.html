@@ -2265,12 +2265,15 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   async function discoverGemini(key) {
     try {
       const data = await gemFetch('/models?pageSize=200', key, { method: 'GET' });
+      // Google retira modelos para usuarios nuevos; los alias -latest siempre apuntan al vigente.
+      const names = (data.models || []).map((m) => String(m.name || '').replace(/^models\//, ''));
+      if (names.includes('gemini-flash-lite-latest') && names.includes('gemini-flash-latest')) return { quick: 'gemini-flash-lite-latest', main: 'gemini-flash-latest' };
       const picked = pickModels(data.models || []);
       if (picked.quick && picked.main) return picked;
     } catch (e) {
       if (e && e.code === 'bad_key') throw e;
     }
-    return { quick: 'gemini-2.5-flash-lite', main: 'gemini-2.5-flash' };
+    return { quick: 'gemini-flash-lite-latest', main: 'gemini-flash-latest' };
   }
   function makeGemini(cfg) {
     async function call(input, opts, wantJson) {

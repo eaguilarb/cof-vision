@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COF Vision Simple</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root {
+    --bg: #eef1f4; --card: #fff; --ink: #14202b; --muted: #5d6b78; --line: #d9e0e6;
+    --accent: #f5a300; --accent-ink: #1a1200; --alert: #d63b2f; --alert-bg: #fdecea; --ok: #1f8a4c;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: #10181f; color: #fff; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+  header .file { color: #b8c4cf; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
+  header .spacer { flex: 1; }
+  .btn { border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; background: var(--accent); color: var(--accent-ink); }
+  .btn.ghost { background: transparent; color: inherit; border: 1px solid currentColor; opacity: .85; font-weight: 500; }
+  .btn.small { padding: 5px 10px; font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px; max-width: 1600px; margin: 0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px; } header .file { max-width: 90vw; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .video-wrap { background: #000; position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .drop { color: #c9d3dc; text-align: center; padding: 24px; }
+  .drop b { color: #fff; font-size: 18px; display: block; margin-bottom: 6px; }
+  .drop.over { outline: 3px dashed var(--accent); outline-offset: -12px; }
+  .now { padding: 14px 16px; min-height: 120px; }
+  .now .meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .chip { background: #eef1f4; border-radius: 99px; padding: 2px 10px; font-variant-numeric: tabular-nums; }
+  .chip.alert { background: var(--alert); color: #fff; font-weight: 600; }
+  .now .text { font-size: 18px; line-height: 1.4; }
+  .now .where { margin-top: 8px; font-size: 14px; color: var(--muted); }
+  .status { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); }
+  .status.err { color: var(--alert); background: var(--alert-bg); }
+  .bar { flex: 1; height: 6px; background: #e3e8ed; border-radius: 99px; overflow: hidden; max-width: 220px; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .map-card { display: flex; flex-direction: column; }
+  #map { height: 100%; min-height: 420px; flex: 1; }
+  .map-foot { padding: 8px 12px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .map-foot label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .list { grid-column: 1 / -1; }
+  .list h2 { font-size: 15px; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .list h2 span { font-weight: 400; color: var(--muted); font-size: 13px; }
+  .rows { max-height: 420px; overflow: auto; }
+  .row { display: grid; grid-template-columns: 64px 80px 1fr; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--line); cursor: pointer; align-items: baseline; }
+  .row:hover { background: #f6f8fa; }
+  .row.cur { background: #fff6e0; }
+  .row.alert { border-left: 4px solid var(--alert); padding-left: 12px; }
+  .row .t { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .row .c { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .row .nogps { color: var(--muted); font-size: 12px; }
+  .empty { padding: 16px; color: var(--muted); }
+  .key-box { padding: 14px 16px; border-top: 1px solid var(--line); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .key-box input { flex: 1; min-width: 200px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
+  .bus-icon { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); border: 3px solid #10181f; box-shadow: 0 2px 6px rgba(0,0,0,.35); display: grid; place-items: center; font-size: 15px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>COF Vision</h1>
+  <span class="file" id="fileName">Elige un video para empezar</span>
+  <span class="spacer"></span>
+  <button class="btn" id="btnPick" type="button">Elegir video</button>
+  <input type="file" id="fileInput" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" hidden>
+</header>
+
+<main>
+  <section class="card">
+    <div class="video-wrap" id="drop">
+      <div class="drop" id="dropHint"><b>Arrastra aquí el video de la cámara</b>o usa el botón «Elegir video». Empieza a analizarse solo.</div>
+      <video id="video" controls playsinline hidden></video>
+    </div>
+    <div class="now" id="now">
+      <div class="meta" id="nowMeta"></div>
+      <div class="text" id="nowText">Aquí verás lo que pasa en el video, momento a momento.</div>
+      <div class="where" id="nowWhere"></div>
+    </div>
+    <div class="status" id="status" hidden><span id="statusText"></span><div class="bar"><i id="barFill"></i></div></div>
+    <form class="key-box" id="keyBox" hidden>
+      <input id="keyInput" type="password" placeholder="Pega tu clave gratuita de Gemini (aistudio.google.com/apikey)" autocomplete="off">
+      <button class="btn small" type="submit">Guardar clave</button>
+    </form>
+  </section>
+
+  <section class="card map-card">
+    <div id="map"></div>
+    <div class="map-foot">
+      <label><input type="checkbox" id="follow" checked> Seguir el bus</label>
+      <span id="mapInfo">El recorrido aparece cuando se leen las coordenadas del video.</span>
+    </div>
+  </section>
+
+  <section class="card list">
+    <h2>Lo que pasa en el video <span id="listInfo"></span></h2>
+    <div class="rows" id="rows"><div class="empty">Todavía no hay nada analizado.</div></div>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(() => {
+  'use strict';
+  // La clave se puede dejar incorporada al generar una copia personal (ver con-clave.mjs).
+  const EMBED_KEY = '__GEMINI_KEY__';
+  // Alias que Google mantiene apuntando al modelo vigente; los demás son respaldo.
+  const MODELS = ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+  const API = 'https://generativelanguage.googleapis.com/v1beta/models';
+  const BATCH = 6;
+
+  const $ = (s) => document.querySelector(s);
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* sin almacenamiento */ } },
+  };
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const pad = (n) => String(n).padStart(2, '0');
+  const mmss = (s) => `${pad(Math.floor(s / 60))}:${pad(Math.floor(s % 60))}`;
+  const validLL = (a, o) => Number.isFinite(a) && Number.isFinite(o) && Math.abs(a) <= 90 && Math.abs(o) <= 180 && !(a === 0 && o === 0);
+
+  const S = {
+    key: EMBED_KEY.startsWith('__') ? store.get('cofsimple:key', '') : EMBED_KEY,
+    model: store.get('cofsimple:model', 0),
+    file: null, id: null, run: 0,
+    moments: [], track: [], cur: -1, addr: {},
+  };
+
+  // ---------------------------------------------------------------- video
+  const video = $('#video');
+  const probe = document.createElement('video');
+  probe.muted = true;
+  probe.preload = 'auto';
+  probe.playsInline = true;
+
+  function pick(file) {
+    if (!file) return;
+    S.run++;
+    S.file = file;
+    S.id = `cofsimple:v:${file.name}|${file.size}`;
+    const saved = store.get(S.id, null);
+    S.moments = saved && Array.isArray(saved.moments) ? saved.moments : [];
+    S.cur = -1;
+    $('#fileName').textContent = file.name;
+    const url = URL.createObjectURL(file);
+    video.src = url;
+    probe.src = url;
+    video.hidden = false;
+    $('#dropHint').hidden = true;
+    rebuild();
+    video.addEventListener('loadedmetadata', () => analyze(S.run), { once: true });
+    video.addEventListener('error', () => status('Este navegador no puede reproducir ese video. Prueba con un .mp4 o ábrelo en Chrome.', 0, true), { once: true });
+  }
+  $('#btnPick').onclick = () => $('#fileInput').click();
+  $('#fileInput').onchange = (e) => pick(e.target.files[0]);
+  const drop = $('#drop');
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); pick(e.dataTransfer.files[0]); });
+
+  function seek(v, t) {
+    return new Promise((resolve) => {
+      let done = false;
+      const fin = () => { if (done) return; done = true; v.removeEventListener('seeked', fin); requestAnimationFrame(() => resolve()); };
+      v.addEventListener('seeked', fin);
+      v.currentTime = t;
+      setTimeout(fin, 5000);
+    });
+  }
+  async function grab(t) {
+    if (probe.readyState < 1) await new Promise((r) => probe.addEventListener('loadedmetadata', r, { once: true }));
+    await seek(probe, t);
+    const s = Math.min(1, 1280 / (probe.videoWidth || 1280));
+    const c = document.createElement('canvas');
+    c.width = Math.round((probe.videoWidth || 1280) * s);
+    c.height = Math.round((probe.videoHeight || 720) * s);
+    c.getContext('2d').drawImage(probe, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.85).split(',')[1];
+  }
+
+  // ---------------------------------------------------------------- Gemini
+  function status(text, frac, err) {
+    $('#status').hidden = !text;
+    $('#status').classList.toggle('err', !!err);
+    $('#statusText').textContent = text || '';
+    $('#barFill').parentElement.hidden = frac == null || err;
+    if (frac != null) $('#barFill').style.width = `${Math.round(frac * 100)}%`;
+  }
+  function retrySeconds(body) {
+    const d = ((body.error && body.error.details) || []).find((x) => x.retryDelay);
+    return d ? Math.ceil(parseFloat(d.retryDelay)) : 0;
+  }
+  async function gemini(parts, run) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      if (run !== S.run) return null;
+      const model = MODELS[S.model] || MODELS[0];
+      let res;
+      try {
+        res = await fetch(`${API}/${model}:generateContent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': S.key },
+          body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { temperature: 0.2, responseMimeType: 'application/json' } }),
+        });
+      } catch {
+        status('Sin conexión con Google. Reintentando…', null);
+        await wait(4000);
+        continue;
+      }
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        const text = ((body.candidates && body.candidates[0] && body.candidates[0].content && body.candidates[0].content.parts) || []).map((p) => p.text || '').join('');
+        try { return JSON.parse(text); } catch {
+          const m = text.match(/\[[\s\S]*\]/);
+          if (m) try { return JSON.parse(m[0]); } catch { /* reintenta */ }
+        }
+        continue;
+      }
+      const msg = (body.error && body.error.message) || res.statusText;
+      if (res.status === 429) {
+        const s = retrySeconds(body) || 20;
+        status(`Google pide esperar ${s} s por el límite gratuito. Sigue solo…`, null);
+        await wait(s * 1000);
+        continue;
+      }
+      if (res.status === 404 || res.status >= 500) {
+        S.model = (S.model + 1) % MODELS.length;
+        store.set('cofsimple:model', S.model);
+        await wait(res.status >= 500 ? 2000 : 0);
+        continue;
+      }
+      if (res.status === 400 && !/api key|API_KEY/i.test(msg)) throw new Error(msg);
+      const e = new Error(msg);
+      e.badKey = true;
+      throw e;
+    }
+    throw new Error('Google no respondió después de varios intentos.');
+  }
+
+  function prompt(times, prev) {
+    return [
+      'Eres un supervisor de flota que revisa las grabaciones de las cámaras de un bus.',
+      `Te envío ${times.length} fotogramas de la misma cámara, en orden: ${times.map((t, i) => `fotograma ${i + 1} = ${mmss(t)} del video`).join(', ')}.`,
+      'Para cada fotograma:',
+      '1. Copia el texto de coordenadas que aparece escrito sobre la imagen (por ejemplo "33.25.30640S 70.42.12900W") en "coord_texto", y conviértelo a grados decimales con signo en "lat" y "lon" (S y W son negativos; el formato 33.25.30640S significa 33 grados y 25.30640 minutos Sur). Lee también la hora y la velocidad escritas. Si algo no se ve, pon null. No inventes números.',
+      '2. En "descripcion" di en español, en 1 o 2 frases claras y concretas, lo que se ve: cuántas personas aproximadamente, qué hacen, puertas, si el bus está detenido o en marcha y cualquier cosa fuera de lo normal. Si nada cambió respecto del fotograma anterior, dilo en pocas palabras.',
+      '3. "alerta" es true solo si hay algo que un supervisor debería revisar (pelea, robo, caída, accidente, conductor distraído o usando el celular, puerta abierta en marcha, cámara tapada o sin imagen).',
+      prev ? `Lo último que viste antes de estos fotogramas: "${prev}"` : '',
+      'Responde SOLO con un JSON array, un objeto por fotograma: [{"n":1,"coord_texto":"...","lat":-33.4,"lon":-70.7,"hora":"HH:MM:SS","velocidad":null,"descripcion":"...","alerta":false}]',
+    ].filter(Boolean).join('\n');
+  }
+
+  // Formato de los MDVR: 33.25.30640S = grados.minutos.decimales de minuto + hemisferio.
+  function parseCoord(txt) {
+    const t = String(txt || '').toUpperCase().replace(/,/g, '.').replace(/\s*\.\s*/g, '.');
+    const v = [];
+    for (const m of t.matchAll(/([NSEWO])?(\d{1,3})\.(\d{1,2})\.(\d{2,6})\s?([NSEWO])?/g)) {
+      const min = +`${m[3]}.${m[4]}`;
+      if (min >= 60) continue;
+      const h = m[5] || m[1] || '';
+      v.push((+m[2] + min / 60) * (/[SWO]/.test(h) ? -1 : 1));
+    }
+    return v.length >= 2 ? { lat: v[0], lon: v[1] } : null;
+  }
+
+  async function analyze(run) {
+    if (!S.key) {
+      $('#keyBox').hidden = false;
+      status('Falta la clave de Gemini para analizar el video.', null, true);
+      return;
+    }
+    const D = video.duration;
+    if (!Number.isFinite(D) || D <= 0) return status('No se pudo leer la duración del video.', null, true);
+    const step = D <= 60 ? 3 : D <= 300 ? 5 : Math.ceil(D / 80);
+    const times = [];
+    for (let t = Math.min(1, D / 2); t < D - 0.2; t += step) times.push(+t.toFixed(1));
+    const done = new Set(S.moments.map((m) => m.t));
+    const todo = times.filter((t) => !done.has(t));
+    if (!todo.length) return status('', null);
+    for (let i = 0; i < todo.length; i += BATCH) {
+      if (run !== S.run) return;
+      const chunk = todo.slice(i, i + BATCH);
+      status(`Mirando el video… ${Math.min(times.length, times.length - todo.length + i + chunk.length)} de ${times.length} momentos`, (times.length - todo.length + i) / times.length);
+      const images = [];
+      for (const t of chunk) images.push(await grab(t));
+      if (run !== S.run) return;
+      const prev = S.moments.filter((m) => m.t < chunk[0]).slice(-1)[0];
+      const parts = [{ text: prompt(chunk, prev && prev.descripcion) }, ...images.map((d) => ({ inlineData: { mimeType: 'image/jpeg', data: d } }))];
+      let list;
+      try {
+        list = await gemini(parts, run);
+      } catch (e) {
+        if (e.badKey) {
+          $('#keyBox').hidden = false;
+          return status('Google rechazó la clave de Gemini. Pega una clave nueva abajo.', null, true);
+        }
+        status(`No se pudo analizar un tramo: ${e.message}`, null, true);
+        await wait(3000);
+        continue;
+      }
+      if (!list || run !== S.run) return;
+      const arr = Array.isArray(list) ? list : list.fotogramas || list.resultados || [];
+      chunk.forEach((t, k) => {
+        const r = arr.find((x) => Number(x && x.n) === k + 1) || arr[k];
+        if (!r) return;
+        const p = parseCoord(r.coord_texto);
+        let lat = p ? p.lat : Number(r.lat);
+        let lon = p ? p.lon : Number(r.lon);
+        if (!validLL(lat, lon)) lat = lon = null;
+        S.moments.push({
+          t, lat, lon,
+          hora: r.hora ? String(r.hora).slice(0, 8) : null,
+          vel: Number.isFinite(Number(r.velocidad)) && r.velocidad !== null ? Number(r.velocidad) : null,
+          descripcion: String(r.descripcion || '').trim(),
+          alerta: r.alerta === true || r.alerta === 'true',
+        });
+      });
+      S.moments.sort((a, b) => a.t - b.t);
+      store.set(S.id, { moments: S.moments });
+      rebuild();
+    }
+    if (run === S.run) {
+      const n = S.moments.filter((m) => m.alerta).length;
+      status(`Listo: ${S.moments.length} momentos analizados${n ? ` · ${n} para revisar` : ''}.`, null);
+      setTimeout(() => { if (run === S.run) status('', null); }, 6000);
+    }
+  }
+
+  // ---------------------------------------------------------------- recorrido y mapa
+  function cleanTrack(pts) {
+    if (pts.length < 5) return pts;
+    const med = (a) => { const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+    return pts.filter((p, i) => {
+      const win = pts.slice(Math.max(0, i - 2), i + 3);
+      return distKm(p, { lat: med(win.map((x) => x.lat)), lon: med(win.map((x) => x.lon)) }) < 0.5;
+    });
+  }
+  function distKm(a, b) {
+    const R = 6371, r = Math.PI / 180;
+    const dLa = (b.lat - a.lat) * r, dLo = (b.lon - a.lon) * r;
+    const h = Math.sin(dLa / 2) ** 2 + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.sin(dLo / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+  function posAt(t) {
+    const tr = S.track;
+    if (!tr.length) return null;
+    if (t <= tr[0].t) return tr[0];
+    if (t >= tr[tr.length - 1].t) return tr[tr.length - 1];
+    let i = 1;
+    while (tr[i].t < t) i++;
+    const a = tr[i - 1], b = tr[i], f = (t - a.t) / (b.t - a.t || 1);
+    return { lat: a.lat + (b.lat - a.lat) * f, lon: a.lon + (b.lon - a.lon) * f, t };
+  }
+
+  const M = { map: null, line: null, done: null, bus: null, fitted: false };
+  function initMap() {
+    if (!window.L) { $('#mapInfo').textContent = 'No se pudo cargar el mapa (revisa tu conexión a internet).'; return; }
+    M.map = L.map('map', { zoomControl: true }).setView([-33.45, -70.66], 11);
+    const esri = (svc) => `https://server.arcgisonline.com/ArcGIS/rest/services/${svc}/MapServer/tile/{z}/{y}/{x}`;
+    const bases = {
+      Calles: L.tileLayer(esri('World_Street_Map'), { maxZoom: 19, attribution: 'Mapa © Esri, © OpenStreetMap' }),
+      Satélite: L.tileLayer(esri('World_Imagery'), { maxZoom: 19, attribution: 'Imágenes © Esri, Maxar' }),
+    };
+    (bases[store.get('cofsimple:base', 'Calles')] || bases.Calles).addTo(M.map);
+    L.control.layers(bases, {}, { collapsed: false }).addTo(M.map);
+    M.map.on('baselayerchange', (e) => store.set('cofsimple:base', e.name));
+    M.map.on('dragstart', () => { $('#follow').checked = false; });
+  }
+  function drawRoute() {
+    if (!M.map) return;
+    const ll = S.track.map((p) => [p.lat, p.lon]);
+    if (!M.line) {
+      M.line = L.polyline([], { color: '#2f6fb3', weight: 5, opacity: .75 }).addTo(M.map);
+      M.done = L.polyline([], { color: '#f5a300', weight: 6 }).addTo(M.map);
+    }
+    M.line.setLatLngs(ll);
+    if (ll.length && !M.bus) {
+      M.bus = L.marker(ll[0], { icon: L.divIcon({ className: '', html: '<div class="bus-icon">🚌</div>', iconSize: [30, 30], iconAnchor: [15, 15] }), zIndexOffset: 1000 }).addTo(M.map);
+    }
+    if (ll.length && !M.fitted) {
+      M.fitted = true;
+      if (ll.length > 1) M.map.fitBounds(M.line.getBounds(), { padding: [30, 30], maxZoom: 17 });
+      else M.map.setView(ll[0], 17);
+    }
+    const km = S.track.reduce((a, p, i) => (i ? a + distKm(S.track[i - 1], p) : 0), 0);
+    $('#mapInfo').textContent = S.track.length ? `${S.track.length} posiciones leídas · ${km.toFixed(2)} km recorridos` : 'Todavía no se leyeron coordenadas.';
+  }
+  function moveBus(t) {
+    const p = posAt(t);
+    if (!p || !M.bus) return;
+    M.bus.setLatLng([p.lat, p.lon]);
+    M.done.setLatLngs([...S.track.filter((x) => x.t <= t).map((x) => [x.lat, x.lon]), [p.lat, p.lon]]);
+    if ($('#follow').checked && !M.map.getBounds().pad(-0.2).contains([p.lat, p.lon])) M.map.panTo([p.lat, p.lon], { animate: true });
+  }
+
+  // ---------------------------------------------------------------- pantalla
+  function rebuild() {
+    S.track = cleanTrack(S.moments.filter((m) => m.lat != null).map((m) => ({ t: m.t, lat: m.lat, lon: m.lon })));
+    if (M.line && !S.track.length) { M.line.setLatLngs([]); M.done.setLatLngs([]); }
+    if (!S.moments.length) M.fitted = false;
+    drawRoute();
+    renderRows();
+    S.cur = -2;
+    tick();
+  }
+  function renderRows() {
+    const box = $('#rows');
+    const n = S.moments.filter((m) => m.alerta).length;
+    $('#listInfo').textContent = S.moments.length ? `${S.moments.length} momentos${n ? ` · ${n} para revisar` : ''} · toca uno para ir a ese punto` : '';
+    if (!S.moments.length) { box.innerHTML = '<div class="empty">Todavía no hay nada analizado.</div>'; return; }
+    box.replaceChildren(...S.moments.map((m, i) => {
+      const row = document.createElement('div');
+      row.className = `row${m.alerta ? ' alert' : ''}`;
+      row.dataset.i = i;
+      const t = document.createElement('span'); t.className = 't'; t.textContent = mmss(m.t);
+      const c = document.createElement('span'); c.className = 'c'; c.textContent = m.hora || '';
+      const d = document.createElement('span'); d.textContent = m.descripcion || '—';
+      if (m.lat == null) { const g = document.createElement('span'); g.className = 'nogps'; g.textContent = ' (sin coordenadas)'; d.append(g); }
+      row.append(t, c, d);
+      row.onclick = () => { video.currentTime = m.t; video.play().catch(() => {}); $('#follow').checked = true; };
+      return row;
+    }));
+  }
+  function currentIndex(t) {
+    let k = -1;
+    for (let i = 0; i < S.moments.length; i++) if (S.moments[i].t <= t + 0.5) k = i;
+    return k === -1 && S.moments.length ? 0 : k;
+  }
+  function tick() {
+    const t = video.currentTime || 0;
+    moveBus(t);
+    const k = currentIndex(t);
+    if (k === S.cur) return;
+    S.cur = k;
+    document.querySelectorAll('.row.cur').forEach((r) => r.classList.remove('cur'));
+    const m = S.moments[k];
+    const meta = $('#nowMeta');
+    meta.replaceChildren();
+    if (!m) { $('#nowText').textContent = S.file ? 'Analizando… en unos segundos aparece lo que se ve.' : 'Aquí verás lo que pasa en el video, momento a momento.'; $('#nowWhere').textContent = ''; return; }
+    const row = document.querySelector(`.row[data-i="${k}"]`);
+    if (row) { row.classList.add('cur'); if (!video.paused) row.scrollIntoView({ block: 'nearest' }); }
+    const chip = (txt, cls) => { const s = document.createElement('span'); s.className = `chip ${cls || ''}`; s.textContent = txt; meta.append(s); };
+    chip(`${mmss(m.t)} del video`);
+    if (m.hora) chip(`Hora ${m.hora}`);
+    if (m.vel != null) chip(`${m.vel} km/h`);
+    if (m.alerta) chip('Revisar', 'alert');
+    $('#nowText').textContent = m.descripcion || '—';
+    where(m);
+  }
+  async function where(m) {
+    const out = $('#nowWhere');
+    if (m.lat == null) { out.textContent = 'En este momento no se leyeron coordenadas.'; return; }
+    const coords = `${m.lat.toFixed(5)}, ${m.lon.toFixed(5)}`;
+    const k = `${m.lat.toFixed(4)},${m.lon.toFixed(4)}`;
+    out.textContent = `📍 ${S.addr[k] ? `${S.addr[k]} · ` : ''}${coords}`;
+    if (S.addr[k] !== undefined) return;
+    S.addr[k] = null;
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=es&lat=${m.lat}&lon=${m.lon}`);
+      const j = await r.json();
+      const a = j.address || {};
+      S.addr[k] = [[a.road, a.house_number].filter(Boolean).join(' '), a.suburb || a.neighbourhood, a.city || a.town || a.village].filter(Boolean).join(', ') || null;
+      if (S.moments[S.cur] === m) out.textContent = `📍 ${S.addr[k] ? `${S.addr[k]} · ` : ''}${coords}`;
+    } catch { /* la dirección es opcional */ }
+  }
+  video.addEventListener('timeupdate', tick);
+  video.addEventListener('seeked', tick);
+  (function loop() { if (!video.paused) tick(); requestAnimationFrame(loop); })();
+
+  $('#keyBox').onsubmit = (e) => {
+    e.preventDefault();
+    const k = $('#keyInput').value.trim();
+    if (k.length < 20) return;
+    S.key = k;
+    store.set('cofsimple:key', k);
+    $('#keyInput').value = '';
+    $('#keyBox').hidden = true;
+    if (S.file) { S.run++; analyze(S.run); } else status('', null);
+  };
+
+  initMap();
+  if (!S.key) $('#keyBox').hidden = false;
+})();
+</script>
+</body>
+</html>
