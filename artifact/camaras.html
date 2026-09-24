@@ -742,6 +742,8 @@ svg.leaflet-image-layer.leaflet-interactive path {
 }
 
 * { box-sizing: border-box; }
+body { margin: 0; }
+.field a, .hint a { color: var(--accent); }
 [hidden] { display: none !important; }
 body {
   background: var(--bg);
@@ -1245,7 +1247,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     </div>
     <div class="session" id="session"></div>
     <div class="status">
-      <span class="pill" id="aiPill" data-state="wait">Claude: conectando…</span>
+      <span class="pill" id="aiPill" data-state="wait">IA: conectando…</span>
       <span class="pill" id="mapPill" data-state="wait">Mapa: conectando…</span>
     </div>
   </header>
@@ -1281,7 +1283,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
           <div class="readout"><span class="label">Hora del equipo</span><span class="v amber" id="roClock">—</span></div>
           <div class="readout hide-sm"><span class="label">Velocidad</span><span class="v" id="roSpeed">—</span></div>
           <div class="spacer"></div>
-          <button class="btn primary" id="btnHere" type="button" title="Claude describe lo que se ve ahora en todas las cámaras">¿Qué pasa aquí?</button>
+          <button class="btn primary" id="btnHere" type="button" title="La IA describe lo que se ve ahora en todas las cámaras">¿Qué pasa aquí?</button>
           <div class="seg" id="rateSeg" role="group" aria-label="Velocidad de reproducción">
             <button data-rate="1" aria-pressed="true">1×</button>
             <button data-rate="2" aria-pressed="false">2×</button>
@@ -1305,6 +1307,16 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     <div class="col">
       <section class="panel prep" aria-label="Preparación del video">
         <div class="prep-head"><h2>Preparación del video</h2><button class="btn primary small" id="btnPrep" type="button">Preparar video</button></div>
+        <form class="field" id="gemForm" hidden>
+          <label class="label" for="gemKey">Clave gratuita de Gemini (Google)</label>
+          <div class="btn-row">
+            <input type="password" id="gemKey" class="inline-input" style="flex:1;min-width:180px" placeholder="Pega aquí tu clave (empieza con AIza…)" autocomplete="off">
+            <button class="btn small primary" type="submit">Guardar clave</button>
+            <button class="btn small ghost" type="button" id="gemForget" hidden>Olvidar</button>
+          </div>
+          <p class="hint">Créala gratis, sin tarjeta, en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>. Solo se guarda en este computador.</p>
+          <p class="hint" id="gemStatus"></p>
+        </form>
         <ol class="prep-steps" id="prepSteps"></ol>
         <p class="warn-box" id="prepWarn" hidden></p>
         <div class="btn-row">
@@ -1376,7 +1388,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
             <button class="btn primary" id="btnMoment">¿Qué pasa aquí?</button>
           </div>
           <p class="hint" id="estAnalysis"></p>
-          <p class="privacy">Se envían a Claude, desde tu cuenta, solo los fotogramas de cada consulta. El video completo no sale de tu equipo.</p>
+          <p class="privacy" id="privacyNote">Se envían a Claude, desde tu cuenta, solo los fotogramas de cada consulta. El video completo no sale de tu equipo.</p>
           <div class="results" id="results"></div>
         </div>
 
@@ -1384,7 +1396,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
           <div class="stat-row" id="trackStats"></div>
           <div class="step">
             <h3><span class="n">1</span>Detectar datos en pantalla</h3>
-            <p class="hint">Claude revisa un fotograma de cada cámara, encuentra el texto con coordenadas, hora y velocidad, y marca la franja que hay que leer.</p>
+            <p class="hint">Se revisa un fotograma de cada cámara para encontrar el texto con coordenadas, hora y velocidad, y marcar la franja que hay que leer.</p>
             <div class="btn-row"><button class="btn primary" id="btnDetect">Detectar datos en pantalla</button></div>
             <div id="osdResult" class="osd-list"></div>
           </div>
@@ -1467,6 +1479,8 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   // ---------------------------------------------------------------------------
   const $ = (s, r = document) => r.querySelector(s);
   const MAP_SERVER = 'TomTom Maps';
+  const IN_CLAUDE = !!(window.claude && typeof window.claude.use === 'function');
+  const AI_NAME = IN_CLAUDE ? 'Claude' : 'Gemini';
   const MAX_CAMS = 8;
 
   function el(tag, props, ...kids) {
@@ -1735,13 +1749,10 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   // ---------------------------------------------------------------------------
   function initCaps() {
     const c = window.claude;
-    if (!c || typeof c.use !== 'function') {
-      S.sample = null;
-      S.mcp = null;
-      S.downloads = null;
-      setPill('#aiPill', 'off', 'Claude: abre la página en claude.ai');
-      setPill('#mapPill', 'off', 'Mapa: solo dentro de claude.ai');
+    if (!IN_CLAUDE) {
+      initLocal();
       refreshButtons();
+      maybeAutoRun();
       return;
     }
     c.use('sample')
@@ -1802,14 +1813,16 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
         capability_disabled: 'Claude no se puede usar en esta vista.',
         capability_removed: 'Claude no se puede usar en esta vista.',
         images_unavailable: 'Esta vista no permite enviar imágenes a Claude.',
-        rate_limited: 'Llegaste al límite de uso por ahora. Espera unos minutos y vuelve a intentarlo.',
+        rate_limited: IN_CLAUDE ? 'Llegaste al límite de uso por ahora. Espera unos minutos y vuelve a intentarlo.' : 'Llegaste al límite gratuito de Gemini. Espera un minuto; si es el límite diario, vuelve mañana.',
         session_expired: 'Tu sesión de claude.ai expiró. Vuelve a iniciar sesión.',
         image_rejected: 'Claude no aceptó una de las imágenes. Prueba con menos cámaras o menos momentos.',
-        refused: 'Claude no pudo analizar este contenido.',
+        refused: `${AI_NAME} no pudo analizar este contenido.`,
         invalid_json: 'La respuesta llegó incompleta. Vuelve a intentarlo o pide menos momentos a la vez.',
         prompt_too_large: 'Hay demasiada información para una sola consulta. Reduce los momentos o limpia la conversación.',
-        empty_completion: 'Claude no devolvió texto. Vuelve a intentarlo con una indicación más simple.',
-      }[c] || 'Hubo un problema de conexión con Claude. Vuelve a intentarlo.'
+        empty_completion: `${AI_NAME} no devolvió texto. Vuelve a intentarlo con una indicación más simple.`,
+        bad_key: 'Google rechazó la clave de Gemini. Vuelve a pegarla en Preparación del video.',
+        bad_model: 'El modelo de Gemini ya no está disponible. Olvida la clave y vuelve a guardarla para elegir uno nuevo.',
+      }[c] || `Hubo un problema de conexión con ${AI_NAME}. Vuelve a intentarlo.`
     );
   }
   function onAiError(e) {
@@ -1835,7 +1848,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       return false;
     }
     if (!S.sample) {
-      toast('El análisis con Claude solo funciona con la página abierta dentro de claude.ai.', 'err');
+      toast(IN_CLAUDE ? 'El análisis con Claude solo funciona con la página abierta dentro de claude.ai.' : 'Pega tu clave gratuita de Gemini en “Preparación del video” para que la IA describa las cámaras.', 'err');
       return false;
     }
     if (S.aiOff) {
@@ -1861,6 +1874,429 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   }
   const kTok = (n) => (n < 1000 ? `${Math.max(100, Math.round(n / 100) * 100)} tokens` : `${(n / 1000).toFixed(n < 10000 ? 1 : 0)} mil tokens`);
   const maxImages = () => Math.max(1, (S.limits && S.limits.images && S.limits.images.maxCount) || (S.limits ? 1 : 4));
+
+  // ---------------------------------------------------------------------------
+  // Modo archivo local (fuera de claude.ai): lector de texto en el computador,
+  // Gemini con la clave gratuita del usuario, mapa OpenStreetMap y descargas.
+  // ---------------------------------------------------------------------------
+  const TESS_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+  const OCR_FULL = { text: true, blocks: true, hocr: false, tsv: false };
+  const OCR_TEXT = { text: true, blocks: false, hocr: false, tsv: false };
+  let ocrWorkerP = null;
+  let ocrModeNow = null;
+  function loadScript(src) {
+    return new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = resolve;
+      s.onerror = () => reject(new Error(`No se pudo cargar ${src}`));
+      document.head.append(s);
+    });
+  }
+  function ocrWorker() {
+    if (!ocrWorkerP) {
+      ocrWorkerP = (async () => {
+        if (!window.Tesseract) await loadScript(TESS_URL);
+        try {
+          return await window.Tesseract.createWorker('eng', 1);
+        } catch {
+          return await window.Tesseract.createWorker('eng', 1, { cacheMethod: 'none' });
+        }
+      })().catch(() => {
+        ocrWorkerP = null;
+        throw { code: 'local', message: 'No se pudo cargar el lector de texto. Revisa tu conexión a internet: se descarga solo la primera vez.' };
+      });
+    }
+    return ocrWorkerP;
+  }
+  async function ocrMode(w, mode) {
+    if (ocrModeNow === mode) return;
+    if (mode === 'strict') await w.setParameters({ tessedit_char_whitelist: '0123456789.,:/-NSEWOKMH ', tessedit_pageseg_mode: '6' });
+    else await w.setParameters({ tessedit_char_whitelist: '', tessedit_pageseg_mode: '3' });
+    ocrModeNow = mode;
+  }
+  // El texto del equipo es blanco con borde negro: se deja en negro sobre blanco y se agranda.
+  function ocrPrep(src, sx, sy, sw, sh, scale) {
+    const padPx = 12;
+    const c = canvas(sw * scale + padPx * 2, sh * scale + padPx * 2);
+    const g = c.getContext('2d');
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, c.width, c.height);
+    g.imageSmoothingEnabled = true;
+    g.drawImage(src, sx, sy, sw, sh, padPx, padPx, sw * scale, sh * scale);
+    const d = g.getImageData(0, 0, c.width, c.height);
+    const a = d.data;
+    for (let i = 0; i < a.length; i += 4) {
+      const r = a[i];
+      const gg = a[i + 1];
+      const bl = a[i + 2];
+      const l = 0.299 * r + 0.587 * gg + 0.114 * bl;
+      const sat = Math.max(r, gg, bl) - Math.min(r, gg, bl);
+      const v = l >= 185 && sat <= 70 ? 0 : 255;
+      a[i] = a[i + 1] = a[i + 2] = v;
+    }
+    g.putImageData(d, 0, 0);
+    return { canvas: c, pad: padPx, scale };
+  }
+
+  // Coordenadas en los formatos habituales de los MDVR:
+  // 33.25.30640S (grados.minutos.decimales), 33°25'18.4"S, -33.421773 o S33.421773.
+  function parseCoordsText(raw, signs) {
+    const t = String(raw || '').toUpperCase().replace(/,/g, '.').replace(/\s+/g, ' ');
+    const vals = [];
+    const push = (value, letter) => vals.push({ value, letter: letter || null });
+    for (const m of t.matchAll(/([NSEWO])?\s?(\d{1,3})\.(\d{1,2})\.(\d{2,6})\s?([NSEWO])?/g)) {
+      const deg = +m[2];
+      const min = +`${m[3]}.${m[4]}`;
+      if (min < 60) push(deg + min / 60, m[5] || m[1]);
+    }
+    if (vals.length < 2) {
+      vals.length = 0;
+      for (const m of t.matchAll(/(\d{1,3})\s?[°º*]\s?(\d{1,2})\s?['’]\s?(\d{1,2}(?:\.\d+)?)\s?["”]?\s?([NSEWO])?/g)) {
+        if (+m[2] < 60 && +m[3] < 60) push(+m[1] + +m[2] / 60 + +m[3] / 3600, m[4]);
+      }
+    }
+    if (vals.length < 2) {
+      vals.length = 0;
+      for (const m of t.matchAll(/([NSEWO])?\s?(-?\d{1,3}\.\d{4,})\s?([NSEWO])?/g)) push(parseFloat(m[2]), m[3] || m[1]);
+    }
+    if (vals.length < 2) return null;
+    let lat = vals.find((v) => v.letter === 'N' || v.letter === 'S');
+    let lon = vals.find((v) => v.letter === 'E' || v.letter === 'W' || v.letter === 'O');
+    if (!lat || !lon) {
+      lat = vals[0];
+      lon = vals[1];
+    }
+    let la = lat.value;
+    let lo = lon.value;
+    if (lat.letter === 'S') la = -Math.abs(la);
+    else if (lat.letter !== 'N' && la > 0 && signs && signs.lat < 0) la = -la;
+    if (lon.letter === 'W' || lon.letter === 'O') lo = -Math.abs(lo);
+    else if (lon.letter !== 'E' && lo > 0 && signs && signs.lon < 0) lo = -lo;
+    return validLL(la, lo) ? { lat: la, lon: lo, lettered: !!(lat.letter && lon.letter) } : null;
+  }
+  function parseClockText(raw) {
+    const t = String(raw || '');
+    let m = t.match(/(\d{2})[/.-](\d{2})[/.-](\d{4})\D{1,4}(\d{2})\D?(\d{2})\D?(\d{2})/);
+    if (m) return mk(+m[3], +m[2], +m[1], +m[4], +m[5], +m[6]);
+    m = t.match(/(\d{4})[/.-](\d{2})[/.-](\d{2})\D{1,4}(\d{2})\D?(\d{2})\D?(\d{2})/);
+    if (m) return mk(+m[1], +m[2], +m[3], +m[4], +m[5], +m[6]);
+    return null;
+  }
+  function parseSpeedText(raw) {
+    const m = String(raw || '').toUpperCase().match(/(\d{1,3})\s?K\s?M\s?\/?\s?H/);
+    return m ? +m[1] : null;
+  }
+  const parseCanal = (raw) => {
+    const m = String(raw || '').toUpperCase().match(/\bCH\s?0?(\d{1,2})\b/);
+    return m ? +m[1] : null;
+  };
+  const parseBus = (raw) => {
+    const m = String(raw || '').toUpperCase().match(/\b(?!CH\d)([A-Z]{2,5}-\d{1,4})\b/);
+    return m ? m[1] : null;
+  };
+  function unionBox(boxes) {
+    const b = boxes.filter(Boolean);
+    if (!b.length) return null;
+    return { x0: Math.min(...b.map((x) => x.x0)), y0: Math.min(...b.map((x) => x.y0)), x1: Math.max(...b.map((x) => x.x1)), y1: Math.max(...b.map((x) => x.y1)) };
+  }
+
+  async function detectLocal(b) {
+    busySet('Preparando el lector de texto (solo la primera vez tarda un poco)…', null);
+    const w = await ocrWorker();
+    await ocrMode(w, 'free');
+    const cams = S.cams.filter((c) => !c.error && isFinite(c.duration));
+    const items = [];
+    for (const cam of cams) {
+      busySet(`Leyendo el texto en pantalla de ${cam.label}…`, null);
+      const t = clamp(cam.duration * 0.1, 0, Math.max(0, cam.duration - 1));
+      const frame = await grabAt(cam, t);
+      if (b.stopped) return null;
+      S.frameCache.set(cam.key, frame);
+      const scale = frame.width < 1000 ? 2 : 1;
+      const pp = ocrPrep(frame, 0, 0, frame.width, frame.height, scale);
+      const { data } = await w.recognize(pp.canvas, {}, OCR_FULL);
+      if (b.stopped) return null;
+      const lines = data.lines || [];
+      const toFrame = (bb) => ({
+        top: (bb.y0 - pp.pad) / scale / frame.height,
+        bottom: (bb.y1 - pp.pad) / scale / frame.height,
+        left: (bb.x0 - pp.pad) / scale / frame.width,
+        right: (bb.x1 - pp.pad) / scale / frame.width,
+      });
+      let coords = null;
+      let clock = null;
+      let speed = null;
+      let canal = null;
+      let bus = null;
+      const boxes = [];
+      for (const l of lines) {
+        const txt = l.text || '';
+        const words = l.words || [];
+        const c = parseCoordsText(txt);
+        if (c) {
+          coords = coords || c;
+          boxes.push(unionBox(words.filter((wd) => /\d+[.,]\d+/.test(wd.text)).map((wd) => wd.bbox)) || l.bbox);
+        }
+        const k = parseClockText(txt);
+        if (k != null && clock == null) {
+          clock = k;
+          boxes.push(unionBox(words.filter((wd) => /\d/.test(wd.text)).map((wd) => wd.bbox)) || l.bbox);
+        }
+        if (speed == null) speed = parseSpeedText(txt);
+        if (canal == null) canal = parseCanal(txt);
+        if (!bus) bus = parseBus(txt);
+      }
+      const bands = normBands(boxes.map((bb) => {
+        const f = toFrame(bb);
+        return { arriba: f.top, abajo: f.bottom, izquierda: f.left, derecha: f.right };
+      }));
+      items.push({
+        key: cam.key,
+        canal: canal != null ? `CH${canal}` : null,
+        bus,
+        texto: lines.map((l) => (l.text || '').trim()).filter(Boolean).join(' | ').slice(0, 300),
+        has: !!coords,
+        bands,
+        lat: coords ? coords.lat : null,
+        lon: coords ? coords.lon : null,
+        signs: coords ? { lat: Math.sign(coords.lat), lon: Math.sign(coords.lon) } : null,
+        clock,
+        speed,
+        t: t + cam.offset,
+      });
+      if (canal != null && /^CÁM /.test(cam.label)) {
+        cam.label = `CH${canal}`;
+        if (cam.lblInput) cam.lblInput.value = cam.label;
+      }
+      if (bus && !S.busId) S.busId = bus;
+      if (clock != null && !S.osdClockRef) S.osdClockRef = { t: t + cam.offset, clock };
+    }
+    const chosen = items.find((i) => i.has);
+    S.osd = { items, camKey: chosen ? chosen.key : S.osd.camKey || (items[0] && items[0].key) || null, bands: {} };
+    persist();
+    return chosen || null;
+  }
+
+  async function extractLocal(b) {
+    const cam = camByKey(S.osd.camKey);
+    if (!cam) throw { code: 'local', message: 'Elige la cámara que muestra las coordenadas.' };
+    const bands = bandsFor(cam.key);
+    const item = osdItem(cam.key);
+    const { times } = ocrPlan(cam);
+    if (times.length < 2) throw { code: 'local', message: 'El video es demasiado corto para armar un recorrido.' };
+    busySet('Preparando el lector de texto…', null);
+    const w = await ocrWorker();
+    await ocrMode(w, 'strict');
+    const pts = [];
+    for (let i = 0; i < times.length; i++) {
+      if (b.stopped) return null;
+      const frame = await grabAt(cam, times[i]);
+      let text = '';
+      for (const bd of bands) {
+        const sx = Math.max(0, Math.floor(bd.left * frame.width));
+        const sy = Math.max(0, Math.floor(bd.top * frame.height));
+        const sw = Math.max(8, Math.min(frame.width - sx, Math.ceil((bd.right - bd.left) * frame.width)));
+        const sh = Math.max(6, Math.min(frame.height - sy, Math.ceil((bd.bottom - bd.top) * frame.height)));
+        const pp = ocrPrep(frame, sx, sy, sw, sh, clamp(110 / sh, 1.5, 3));
+        const { data } = await w.recognize(pp.canvas, {}, OCR_TEXT);
+        text += ` ${data.text}`;
+      }
+      if (b.stopped) return null;
+      const c = parseCoordsText(text, item && item.signs);
+      if (c) pts.push({ t: times[i] + cam.offset, lat: c.lat, lon: c.lon, speed: parseSpeedText(text), clock: parseClockText(text) });
+      busySet(`Leyendo coordenadas en tu computador ${i + 1}/${times.length}…`, (i + 1) / times.length);
+    }
+    const clean = cleanTrack(pts);
+    if (clean.length < 2) throw { code: 'local', message: 'No se pudieron leer suficientes coordenadas. Revisa en la pestaña Recorrido que el recuadro contenga el texto completo.' };
+    setTrack(clean, { source: 'video', cam: cam.label, read: times.length, ok: clean.length });
+    return { ok: clean.length, read: times.length, failed: 0 };
+  }
+
+  // Gemini (Google) con la clave gratuita del usuario, con la misma forma que `sample`.
+  const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
+  const GEM_KEY = 'cofcam:gemini';
+  const blobToB64 = (blob) =>
+    new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result).split(',')[1]);
+      fr.onerror = reject;
+      fr.readAsDataURL(blob);
+    });
+  function waitMs(ms, signal) {
+    return new Promise((resolve, reject) => {
+      const t = setTimeout(resolve, ms);
+      if (signal) signal.addEventListener('abort', () => {
+        clearTimeout(t);
+        reject({ code: 'cancelled' });
+      }, { once: true });
+    });
+  }
+  async function gemFetch(path, key, init) {
+    let res;
+    try {
+      res = await fetch(`${GEMINI}${path}`, { ...init, headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key, ...((init && init.headers) || {}) } });
+    } catch (e) {
+      if (e && e.name === 'AbortError') throw { code: 'cancelled' };
+      throw { code: 'upstream_error', message: String(e) };
+    }
+    if (res.ok) return res.json();
+    const body = await res.json().catch(() => ({}));
+    const msg = (body.error && body.error.message) || res.statusText;
+    const code = res.status === 429 ? 'rate_limited' : res.status === 404 ? 'bad_model' : res.status === 400 && /api key/i.test(msg) ? 'bad_key' : res.status === 403 || res.status === 401 ? 'bad_key' : 'upstream_error';
+    throw { code, message: msg, status: res.status, retryAfter: Number(res.headers.get('retry-after')) || 0 };
+  }
+  function pickModels(list) {
+    const names = list
+      .filter((m) => (m.supportedGenerationMethods || []).includes('generateContent'))
+      .map((m) => String(m.name || '').replace(/^models\//, ''))
+      .filter((n) => /^gemini-/.test(n) && /flash/.test(n) && !/(tts|image|live|audio|embed|thinking|computer|robotics|native)/.test(n));
+    const ver = (n) => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || '0');
+    const stable = (n) => (/(preview|exp|latest)/.test(n) || /-\d{3,}$/.test(n) ? 0 : 1);
+    const rank = (arr) => arr.sort((a, b) => stable(b) - stable(a) || ver(b) - ver(a) || a.length - b.length);
+    const lite = rank(names.filter((n) => /lite/.test(n)));
+    const flash = rank(names.filter((n) => !/lite/.test(n)));
+    return { quick: lite[0] || flash[0] || null, main: flash[0] || lite[0] || null };
+  }
+  async function discoverGemini(key) {
+    try {
+      const data = await gemFetch('/models?pageSize=200', key, { method: 'GET' });
+      const picked = pickModels(data.models || []);
+      if (picked.quick && picked.main) return picked;
+    } catch (e) {
+      if (e && e.code === 'bad_key') throw e;
+    }
+    return { quick: 'gemini-2.5-flash-lite', main: 'gemini-2.5-flash' };
+  }
+  function makeGemini(cfg) {
+    async function call(input, opts, wantJson) {
+      const o = opts || {};
+      const text = typeof input === 'string' ? input : input.map((t) => `${t.role === 'user' ? 'Operador' : 'Analista'}: ${t.content}`).join('\n\n');
+      const parts = [{ text }];
+      for (const img of o.images ? [].concat(Array.from(o.images)) : []) parts.push({ inlineData: { mimeType: 'image/jpeg', data: await blobToB64(img) } });
+      const model = o.modelTier === 'quick' ? cfg.quick : cfg.main;
+      const body = JSON.stringify({
+        contents: [{ role: 'user', parts }],
+        generationConfig: { temperature: 0.2, maxOutputTokens: 8192, ...(wantJson ? { responseMimeType: 'application/json' } : {}) },
+      });
+      let data;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          data = await gemFetch(`/models/${model}:generateContent`, cfg.key, { method: 'POST', body, signal: o.signal });
+          break;
+        } catch (e) {
+          if (e && e.code === 'rate_limited' && attempt === 0) {
+            busySet('Gemini pidió esperar un momento por su límite gratuito…', null);
+            await waitMs(clamp((e.retryAfter || 20) * 1000, 5000, 60000), o.signal);
+            continue;
+          }
+          throw e;
+        }
+      }
+      S.aiCalls = (S.aiCalls || 0) + 1;
+      const cand = data.candidates && data.candidates[0];
+      const out = ((cand && cand.content && cand.content.parts) || []).map((p) => p.text || '').join('');
+      if (!out) throw { code: cand && /SAFETY|PROHIBITED|BLOCK/.test(cand.finishReason || '') ? 'refused' : 'empty_completion', message: 'sin texto' };
+      return { text: out, truncated: !!cand && cand.finishReason === 'MAX_TOKENS' };
+    }
+    const sample = async (input, opts) => {
+      const r = await call(input, opts, false);
+      if (opts && opts.onText) opts.onText({ text: r.text, delta: r.text });
+      return { ...r, modelTierApplied: (opts && opts.modelTier) || 'default' };
+    };
+    sample.json = async (input, opts) => {
+      const r = await call(input, opts, true);
+      try {
+        return JSON.parse(r.text);
+      } catch {
+        const m = r.text.match(/[[{][\s\S]*[\]}]/);
+        if (m) {
+          try {
+            return JSON.parse(m[0]);
+          } catch {
+            /* sigue abajo */
+          }
+        }
+        throw { code: 'invalid_json', message: 'La respuesta no era JSON', text: r.text };
+      }
+    };
+    sample.limits = async () => ({ maxPromptBytes: 500000, images: { maxCount: 16 } });
+    return sample;
+  }
+  function setGemini(cfg) {
+    if (cfg && cfg.key) {
+      S.gem = cfg;
+      S.sample = makeGemini(cfg);
+      S.limits = { maxPromptBytes: 500000, images: { maxCount: 16 } };
+      S.aiOff = null;
+      setPill('#aiPill', 'on', 'IA: Gemini lista');
+      $('#gemStatus').textContent = `Clave guardada en este computador · modelos: ${cfg.quick} y ${cfg.main}.`;
+    } else {
+      S.gem = null;
+      S.sample = null;
+      S.limits = null;
+      setPill('#aiPill', 'wait', 'IA: falta la clave de Gemini');
+      $('#gemStatus').textContent = '';
+    }
+    $('#gemForget').hidden = !S.gem;
+    renderPrep();
+    updateEstimates();
+    refreshButtons();
+  }
+  async function saveGeminiKey(key) {
+    const k = key.trim();
+    if (!/^[\w-]{20,}$/.test(k)) return toast('Esa clave no parece válida. Cópiala completa desde aistudio.google.com/apikey.', 'err');
+    const st = $('#gemStatus');
+    st.textContent = 'Probando la clave…';
+    try {
+      const models = await discoverGemini(k);
+      const cfg = { key: k, ...models };
+      store.set(GEM_KEY, cfg);
+      $('#gemKey').value = '';
+      setGemini(cfg);
+      toast('Clave de Gemini guardada. Ya puedes preparar el video.', 'ok');
+      S.autoTried = false;
+      maybeAutoRun();
+    } catch (e) {
+      st.textContent = '';
+      toast(e && e.code === 'bad_key' ? 'Google rechazó la clave. Revisa que la copiaste completa y que esté activa.' : 'No se pudo comprobar la clave. Revisa tu conexión y vuelve a intentarlo.', 'err');
+    }
+  }
+
+  const LOCAL_DOWNLOADS = {
+    async save({ filename, data }) {
+      const blob = data instanceof Blob ? data : new Blob([data], { type: 'application/octet-stream' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.append(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 2000);
+      return { status: 'saved' };
+    },
+  };
+  function initLocal() {
+    S.mcp = null;
+    S.downloads = LOCAL_DOWNLOADS;
+    setPill('#mapPill', 'on', 'Mapa: OpenStreetMap');
+    setMapNote('Mapa de OpenStreetMap. Las coordenadas se leen en tu computador, sin costo.');
+    $('#gemForm').hidden = false;
+    $('#privacyNote').textContent =
+      'Las coordenadas se leen en tu computador. Para describir escenas se envían a Gemini (Google) solo los fotogramas de cada consulta; con la capa gratuita, Google puede usar esos datos para mejorar sus productos. El video completo no sale de tu equipo.';
+    setGemini(store.get(GEM_KEY, null));
+  }
+  async function addressLocal(p) {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${p.lat.toFixed(6)}&lon=${p.lon.toFixed(6)}&accept-language=es&zoom=18`;
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!res.ok) throw new Error(String(res.status));
+    const j = await res.json();
+    const a = j.address || {};
+    const street = [a.road, a.house_number].filter(Boolean).join(' ');
+    return [street, a.suburb || a.neighbourhood, a.city || a.town || a.village].filter(Boolean).join(', ') || j.display_name || null;
+  }
 
   // ---------------------------------------------------------------------------
   // Cámaras
@@ -2061,8 +2497,8 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
               'ol',
               null,
               el('li', { text: 'Arrastra aquí los videos de cada cámara (CH1, CH2…), hasta 8.' }),
-              el('li', { text: 'En Recorrido, extrae las coordenadas que aparecen escritas en el video.' }),
-              el('li', { text: 'En Análisis, elige un enfoque y pide a Claude que describa cada cámara.' }),
+              el('li', { text: 'Todo se prepara solo. Puedes seguirlo en el panel Preparación del video.' }),
+              el('li', { text: 'La página lee las coordenadas, arma el recorrido y crea un índice de lo que pasa. Luego busca arriba lo que necesites.' }),
             ),
             el(
               'div',
@@ -2415,7 +2851,20 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       setMapNote('No se pudo cargar el componente del mapa.');
       return;
     }
-    Mp.map = L.map('map', { zoomControl: true, attributionControl: false, zoomSnap: 0.5, minZoom: 2, maxZoom: 19 }).setView([14, -80], 3);
+    Mp.map = L.map('map', { zoomControl: true, attributionControl: !IN_CLAUDE, zoomSnap: 0.5, minZoom: 2, maxZoom: 19 }).setView([-20, -65], 3);
+    if (!IN_CLAUDE) {
+      let fails = 0;
+      const carto = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        subdomains: 'abcd',
+        maxZoom: 19,
+        attribution: '© OpenStreetMap © CARTO',
+      }).addTo(Mp.map);
+      carto.on('tileerror', () => {
+        if (++fails !== 8) return;
+        carto.remove();
+        L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(Mp.map);
+      });
+    }
     Mp.ev = L.layerGroup().addTo(Mp.map);
     Mp.map.on('dragstart', () => setFollow(false));
     Mp.map.on('moveend', () => {
@@ -2613,7 +3062,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   async function loadBase(ptsOverride) {
     const pts = ptsOverride || S.track;
     if (!Mp.map || !pts.length || !S.mcp || S.mapOff) {
-      if (S.mcp === null && pts.length) setMapNote('Sin mapa base en esta vista: la ruta se dibuja sobre una cuadrícula.');
+      if (IN_CLAUDE && S.mcp === null && pts.length) setMapNote('Sin mapa base en esta vista: la ruta se dibuja sobre una cuadrícula.');
       return;
     }
     const spec = baseSpec(pts);
@@ -2668,9 +3117,17 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   async function whereIsBus() {
     const p = posAt(S.t);
     if (!p) return toast('Primero extrae o importa el recorrido en la pestaña Recorrido.', 'err');
-    if (!S.mcp) return toast('La búsqueda de direcciones usa el conector de TomTom y solo funciona dentro de claude.ai.', 'err');
     const key = `${p.lat.toFixed(4)},${p.lon.toFixed(4)}`;
     let text = S.addrCache.get(key);
+    if (!text && !IN_CLAUDE) {
+      try {
+        text = await addressLocal(p);
+        if (text) S.addrCache.set(key, text);
+      } catch {
+        return toast('No se pudo consultar la dirección ahora. Intenta de nuevo en unos segundos.', 'err');
+      }
+    }
+    if (!text && !S.mcp) return toast('La búsqueda de direcciones usa el conector de TomTom y solo funciona dentro de claude.ai.', 'err');
     if (!text) {
       const btn = $('#btnAddr');
       btn.disabled = true;
@@ -2886,7 +3343,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
         imgTok = imgTokens(mo.width, mo.height);
         layout = `una imagen tipo mosaico con las cámaras rotuladas: ${frames.map((f) => f.cam.label).join(', ')}.`;
       }
-      busySet('Claude está analizando las cámaras…', null);
+      busySet(`${AI_NAME} está analizando las cámaras…`, null);
       const prompt = [
         RULES,
         `Contexto:\n${contextText()}`,
@@ -2987,7 +3444,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
         used.push(t);
       }
       if (!images.length) continue;
-      busySet(`Claude está describiendo los momentos ${i + 1} a ${i + used.length} de ${times.length}…`, (i + used.length) / times.length);
+      busySet(`${AI_NAME} está describiendo los momentos ${i + 1} a ${i + used.length} de ${times.length}…`, (i + used.length) / times.length);
       const prompt = [
         RULES,
         `Contexto:\n${contextText()}`,
@@ -3074,8 +3531,8 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       },
       {
         label: 'Índice de lo que pasa',
-        s: run === 2 ? 'run' : S.index.length ? 'ok' : 'pend',
-        det: S.index.length ? `${S.index.length} momento${S.index.length === 1 ? '' : 's'}` : '',
+        s: run === 2 ? 'run' : S.index.length ? 'ok' : !IN_CLAUDE && !S.sample ? 'skip' : 'pend',
+        det: S.index.length ? `${S.index.length} momento${S.index.length === 1 ? '' : 's'}` : !IN_CLAUDE && !S.sample ? 'falta clave de Gemini' : '',
       },
     ];
     box.replaceChildren(
@@ -3084,21 +3541,24 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       ),
     );
     const warn = $('#prepWarn');
-    const msg = S.sample === null ? 'El análisis con Claude solo funciona con la página abierta dentro de claude.ai.' : S.aiOff || (imagesOff() ? NO_IMAGES : '');
+    const msg = !IN_CLAUDE ? S.aiOff || '' : S.sample === null ? 'El análisis con Claude solo funciona con la página abierta dentro de claude.ai.' : S.aiOff || (imagesOff() ? NO_IMAGES : '');
     warn.hidden = !msg;
     warn.textContent = msg;
-    const all = osdDone && S.index.length && (S.track.length || !(item && item.has));
+    const all = osdDone && (S.index.length || (!IN_CLAUDE && !S.sample)) && (S.track.length || !(item && item.has));
     $('#btnPrep').textContent = all ? 'Volver a preparar' : 'Preparar video';
     const est = $('#prepEstimate');
     if (!S.cams.length) est.textContent = 'Carga los videos para calcular el consumo.';
     else if (!S.duration) est.textContent = '';
-    else if (all) est.textContent = `Rehacer el índice: ≈ ${kTok(indexCost().tokens)}`;
+    else if (!IN_CLAUDE) {
+      const n = indexCost().calls;
+      est.textContent = S.sample ? `Coordenadas: gratis en tu computador · índice: ${n} consulta${n === 1 ? '' : 's'} a Gemini` : 'Coordenadas: gratis en tu computador';
+    } else if (all) est.textContent = `Rehacer el índice: ≈ ${kTok(indexCost().tokens)}`;
     else est.textContent = `≈ ${kTok(prepCost())} con el modelo ${TIERS[S.tier].toLowerCase()}`;
   }
   async function runPipeline() {
     if (!S.cams.length || !S.duration) return toast('Primero carga los videos de las cámaras.', 'err');
     if (S.busy) return;
-    if (!aiReady()) return;
+    if (IN_CLAUDE && !aiReady()) return;
     pause();
     const b = busyStart('Preparando el video…');
     const redo = S.osd.items.length && S.index.length;
@@ -3107,7 +3567,8 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       renderPrep();
       if (!S.osd.items.length) {
         busySet('Leyendo los datos en pantalla…', null);
-        await coreDetect(b);
+        if (IN_CLAUDE) await coreDetect(b);
+        else await detectLocal(b);
         if (b.stopped) return;
         renderAll();
       }
@@ -3116,7 +3577,8 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       const item = osdItem(S.osd.camKey);
       if (!S.track.length && item && item.has) {
         try {
-          await coreExtract(b);
+          if (IN_CLAUDE) await coreExtract(b);
+          else await extractLocal(b);
         } catch (e) {
           if (!(e && e.code === 'local')) throw e;
           toast(e.message, 'err');
@@ -3125,9 +3587,13 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       }
       S.prepRun = 2;
       renderPrep();
-      if (!S.index.length || redo) await coreIndex(b);
-      if (b.stopped) return;
-      toast('Video preparado. Escribe arriba lo que quieras buscar.', 'ok');
+      if (S.sample && !imagesOff()) {
+        if (!S.index.length || redo) await coreIndex(b);
+        if (b.stopped) return;
+        toast('Video preparado. Escribe arriba lo que quieras buscar.', 'ok');
+      } else if (!IN_CLAUDE) {
+        toast(S.track.length ? 'Recorrido listo. Para que la IA describa las cámaras, pega tu clave gratuita de Gemini.' : 'Para que la IA describa las cámaras, pega tu clave gratuita de Gemini.', S.track.length ? 'ok' : 'err');
+      }
       $('#q').focus();
     } catch (e) {
       onAiError(e);
@@ -3140,8 +3606,14 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   function maybeAutoRun() {
     if (!S.autoRun || S.autoTried || S.busy) return;
     if (!S.cams.length || S.cams.some((c) => !c.error && !isFinite(c.duration))) return;
-    if (S.sample === undefined || !S.sample || S.aiOff || imagesOff()) return;
-    if (S.index.length) return;
+    if (IN_CLAUDE) {
+      if (S.sample === undefined || !S.sample || S.aiOff || imagesOff()) return;
+      if (S.index.length) return;
+    } else {
+      const item = osdItem(S.osd.camKey);
+      const ocrDone = S.osd.items.length && (S.track.length || !(item && item.has));
+      if (ocrDone && (S.index.length || !S.sample)) return;
+    }
     S.autoTried = true;
     runPipeline();
   }
@@ -3177,7 +3649,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     if (S.busy) return;
     if (!aiReady(false)) return;
     if (!S.index.length && !S.analyses.length && !S.track.length) {
-      toast(S.cams.length ? 'Primero pulsa “Preparar video” para que Claude tenga de dónde buscar.' : 'Primero carga los videos de las cámaras.', 'err');
+      toast(S.cams.length ? 'Primero pulsa “Preparar video” para que la IA tenga de dónde buscar.' : 'Primero carga los videos de las cámaras.', 'err');
       return;
     }
     const item = { id: uid(), q, a: '', at: Date.now(), pending: true };
@@ -3412,11 +3884,11 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   }
   async function detectOSD() {
     if (!S.cams.length) return toast('Primero carga los videos de las cámaras.', 'err');
-    if (!aiReady()) return;
+    if (IN_CLAUDE && !aiReady()) return;
     pause();
     const b = busyStart('Capturando un fotograma de cada cámara…');
     try {
-      const chosen = await coreDetect(b);
+      const chosen = IN_CLAUDE ? await coreDetect(b) : await detectLocal(b);
       if (b.stopped) return;
       renderAll();
       if (chosen) toast(`Encontré coordenadas en ${camByKey(chosen.key).label}. Revisa la franja y extrae el recorrido.`, 'ok');
@@ -3498,7 +3970,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   function ocrPlan(cam) {
     const v = $('#ocrEvery').value;
     const dur = cam && isFinite(cam.duration) ? cam.duration : 0;
-    const every = v === 'auto' ? Math.max(5, Math.ceil(dur / 150)) : Number(v);
+    const every = v === 'auto' ? (IN_CLAUDE ? Math.max(5, Math.ceil(dur / 150)) : Math.max(2, Math.ceil(dur / 300))) : Number(v);
     const times = [];
     for (let t = Math.min(1, dur / 2); t < dur - 0.3; t += every) times.push(+t.toFixed(2));
     if (times.length > 400) times.length = 400;
@@ -3527,7 +3999,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       return;
     }
     const c = ocrCost(cam);
-    out.textContent = `${c.n} lecturas (cada ${c.every} s) · ${c.calls} consulta${c.calls === 1 ? '' : 's'} · ≈ ${kTok(c.tokens)}`;
+    out.textContent = IN_CLAUDE ? `${c.n} lecturas (cada ${c.every} s) · ${c.calls} consulta${c.calls === 1 ? '' : 's'} · ≈ ${kTok(c.tokens)}` : `${c.n} lecturas (cada ${c.every} s) · gratis, en tu computador`;
   }
   function updateEstimates() {
     const box = $('#estAnalysis');
@@ -3543,7 +4015,9 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     const vh = cam.video.videoHeight || 720;
     const s = Math.min(1, 768 / vw);
     const moment = (n <= maxImages() ? n * imgTokens(vw * s, vh * s) : 800) + 900 + 180 * n + 250;
-    box.textContent = `“¿Qué pasa aquí?” gasta ≈ ${kTok(moment)} con el modelo ${TIERS[S.tier].toLowerCase()}. Buscar arriba gasta ≈ ${kTok(3500)} (solo texto).`;
+    box.textContent = IN_CLAUDE
+      ? `“¿Qué pasa aquí?” gasta ≈ ${kTok(moment)} con el modelo ${TIERS[S.tier].toLowerCase()}. Buscar arriba gasta ≈ ${kTok(3500)} (solo texto).`
+      : `Cada “¿Qué pasa aquí?” y cada búsqueda es 1 consulta a Gemini (gratis con tu clave, con límite diario).`;
     renderPrep();
   }
 
@@ -3617,11 +4091,11 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
   }
   async function extractTrack() {
     if (!camByKey(S.osd.camKey)) return toast('Elige la cámara que muestra las coordenadas.', 'err');
-    if (!aiReady()) return;
+    if (IN_CLAUDE && !aiReady()) return;
     pause();
     const b = busyStart('Leyendo el video…');
     try {
-      const r = await coreExtract(b);
+      const r = IN_CLAUDE ? await coreExtract(b) : await extractLocal(b);
       if (r) toast(`Recorrido listo: ${r.ok} puntos válidos de ${r.read} lecturas${r.failed ? ` (${r.failed} grupo(s) no se pudieron leer)` : ''}.`, 'ok');
     } catch (e) {
       onAiError(e);
@@ -3824,7 +4298,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     if (!aiReady(false)) return;
     if (!S.analyses.length && !S.index.length && !S.track.length) return toast('Primero prepara el video.', 'err');
     const out = $('#report');
-    const b = busyStart('Claude está redactando el informe…');
+    const b = busyStart(`${AI_NAME} está redactando el informe…`);
     out.replaceChildren(el('p', { class: 'muted', text: 'Redactando…' }));
     const st = routeStats();
     const prompt = [
@@ -3942,7 +4416,8 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     box.append(chip('Cámaras', String(S.cams.length)));
     if (S.duration) box.append(chip('Duración', hms(S.duration)));
     if (S.track.length) box.append(chip('GPS', `${S.track.length} pts`));
-    if (S.usage) box.append(chip('Uso aprox.', kTok(S.usage)));
+    if (IN_CLAUDE && S.usage) box.append(chip('Uso aprox.', kTok(S.usage)));
+    if (!IN_CLAUDE && S.aiCalls) box.append(chip('Consultas IA', String(S.aiCalls)));
   }
   function renderFocus() {
     const box = $('#focusChips');
@@ -4453,6 +4928,15 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
       }
     });
     $('#idxEvery').addEventListener('change', renderPrep);
+    $('#gemForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      saveGeminiKey($('#gemKey').value);
+    });
+    $('#gemForget').addEventListener('click', () => {
+      store.set(GEM_KEY, null);
+      setGemini(null);
+      toast('Clave de Gemini olvidada en este computador.');
+    });
     $('#searchForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const q = $('#q').value.trim();

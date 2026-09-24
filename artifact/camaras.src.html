@@ -81,6 +81,8 @@
 }
 
 * { box-sizing: border-box; }
+body { margin: 0; }
+.field a, .hint a { color: var(--accent); }
 [hidden] { display: none !important; }
 body {
   background: var(--bg);
@@ -584,7 +586,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     </div>
     <div class="session" id="session"></div>
     <div class="status">
-      <span class="pill" id="aiPill" data-state="wait">Claude: conectando…</span>
+      <span class="pill" id="aiPill" data-state="wait">IA: conectando…</span>
       <span class="pill" id="mapPill" data-state="wait">Mapa: conectando…</span>
     </div>
   </header>
@@ -620,7 +622,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
           <div class="readout"><span class="label">Hora del equipo</span><span class="v amber" id="roClock">—</span></div>
           <div class="readout hide-sm"><span class="label">Velocidad</span><span class="v" id="roSpeed">—</span></div>
           <div class="spacer"></div>
-          <button class="btn primary" id="btnHere" type="button" title="Claude describe lo que se ve ahora en todas las cámaras">¿Qué pasa aquí?</button>
+          <button class="btn primary" id="btnHere" type="button" title="La IA describe lo que se ve ahora en todas las cámaras">¿Qué pasa aquí?</button>
           <div class="seg" id="rateSeg" role="group" aria-label="Velocidad de reproducción">
             <button data-rate="1" aria-pressed="true">1×</button>
             <button data-rate="2" aria-pressed="false">2×</button>
@@ -644,6 +646,16 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     <div class="col">
       <section class="panel prep" aria-label="Preparación del video">
         <div class="prep-head"><h2>Preparación del video</h2><button class="btn primary small" id="btnPrep" type="button">Preparar video</button></div>
+        <form class="field" id="gemForm" hidden>
+          <label class="label" for="gemKey">Clave gratuita de Gemini (Google)</label>
+          <div class="btn-row">
+            <input type="password" id="gemKey" class="inline-input" style="flex:1;min-width:180px" placeholder="Pega aquí tu clave (empieza con AIza…)" autocomplete="off">
+            <button class="btn small primary" type="submit">Guardar clave</button>
+            <button class="btn small ghost" type="button" id="gemForget" hidden>Olvidar</button>
+          </div>
+          <p class="hint">Créala gratis, sin tarjeta, en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noreferrer">aistudio.google.com/apikey</a>. Solo se guarda en este computador.</p>
+          <p class="hint" id="gemStatus"></p>
+        </form>
         <ol class="prep-steps" id="prepSteps"></ol>
         <p class="warn-box" id="prepWarn" hidden></p>
         <div class="btn-row">
@@ -715,7 +727,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
             <button class="btn primary" id="btnMoment">¿Qué pasa aquí?</button>
           </div>
           <p class="hint" id="estAnalysis"></p>
-          <p class="privacy">Se envían a Claude, desde tu cuenta, solo los fotogramas de cada consulta. El video completo no sale de tu equipo.</p>
+          <p class="privacy" id="privacyNote">Se envían a Claude, desde tu cuenta, solo los fotogramas de cada consulta. El video completo no sale de tu equipo.</p>
           <div class="results" id="results"></div>
         </div>
 
@@ -723,7 +735,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
           <div class="stat-row" id="trackStats"></div>
           <div class="step">
             <h3><span class="n">1</span>Detectar datos en pantalla</h3>
-            <p class="hint">Claude revisa un fotograma de cada cámara, encuentra el texto con coordenadas, hora y velocidad, y marca la franja que hay que leer.</p>
+            <p class="hint">Se revisa un fotograma de cada cámara para encontrar el texto con coordenadas, hora y velocidad, y marcar la franja que hay que leer.</p>
             <div class="btn-row"><button class="btn primary" id="btnDetect">Detectar datos en pantalla</button></div>
             <div id="osdResult" class="osd-list"></div>
           </div>

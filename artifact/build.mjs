@@ -12,3 +12,18 @@ const appJs = readFileSync(join(here, 'app.js'), 'utf8')
 const out = template.replace('/*__LEAFLET_CSS__*/', () => leafletCss).replace('/*__APP_JS__*/', () => appJs)
 writeFileSync(join(here, 'camaras.html'), out)
 console.log(`camaras.html: ${(out.length / 1024).toFixed(1)} KB`)
+
+// Versión para abrir con doble clic (fuera de claude.ai): necesita su propio encabezado.
+const standalone = `<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+</head>
+<body>
+${out}
+</body>
+</html>
+`
+writeFileSync(join(here, 'COF-Vision-Camaras.html'), standalone)
+console.log(`COF-Vision-Camaras.html: ${(standalone.length / 1024).toFixed(1)} KB`)
