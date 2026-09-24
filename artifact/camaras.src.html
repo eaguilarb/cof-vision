@@ -1,0 +1,748 @@
+<title>COF Vision Cámaras</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+/*__LEAFLET_CSS__*/
+</style>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #e6eaed;
+  --surface: #ffffff;
+  --raised: #f2f4f6;
+  --sunken: #dde2e6;
+  --ink: #15202a;
+  --muted: #566573;
+  --faint: #8794a0;
+  --line: #cbd3da;
+  --accent: #a65f00;
+  --accent-fill: #f2a20c;
+  --accent-soft: #fbe8c4;
+  --accent-ink: #1c1303;
+  --wall: #0a0e11;
+  --wall-line: #1d262d;
+  --ok: #1d8656;
+  --low: #2b7c94;
+  --warn: #cf5f16;
+  --crit: #c22e2e;
+  --map-ground: #dfe4e7;
+  --map-grid: rgba(21, 32, 42, 0.07);
+  --shadow: 0 1px 2px rgba(21, 32, 42, 0.08), 0 6px 18px rgba(21, 32, 42, 0.06);
+  --f-ui: "Barlow", "Segoe UI", system-ui, sans-serif;
+  --f-label: "Barlow Semi Condensed", "Arial Narrow", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0d1216;
+    --surface: #141b21;
+    --raised: #1a232a;
+    --sunken: #10161b;
+    --ink: #e3e9ee;
+    --muted: #93a1ad;
+    --faint: #66737f;
+    --line: #25313a;
+    --accent: #ffb21a;
+    --accent-fill: #ffb21a;
+    --accent-soft: #3a2a0b;
+    --accent-ink: #1c1303;
+    --ok: #3dba80;
+    --low: #4aa8c4;
+    --warn: #f28a3d;
+    --crit: #ef5b5b;
+    --map-ground: #172027;
+    --map-grid: rgba(227, 233, 238, 0.05);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.25);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1216;
+  --surface: #141b21;
+  --raised: #1a232a;
+  --sunken: #10161b;
+  --ink: #e3e9ee;
+  --muted: #93a1ad;
+  --faint: #66737f;
+  --line: #25313a;
+  --accent: #ffb21a;
+  --accent-fill: #ffb21a;
+  --accent-soft: #3a2a0b;
+  --accent-ink: #1c1303;
+  --ok: #3dba80;
+  --low: #4aa8c4;
+  --warn: #f28a3d;
+  --crit: #ef5b5b;
+  --map-ground: #172027;
+  --map-grid: rgba(227, 233, 238, 0.05);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--f-ui);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.shell {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding-inline: 16px;
+  padding-block: 14px 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent-fill); outline-offset: 2px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; }
+.label {
+  font-family: var(--f-label);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mono { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+
+/* ---------- top bar ---------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 14px 22px;
+  flex-wrap: wrap;
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand-mark {
+  width: 38px; height: 38px; border-radius: 9px;
+  background: var(--wall);
+  display: grid; place-items: center;
+}
+.brand-mark svg { width: 24px; height: 24px; }
+.brand-text strong {
+  display: block;
+  font-family: var(--f-label);
+  font-weight: 700;
+  font-size: 19px;
+  letter-spacing: 0.02em;
+  line-height: 1.1;
+}
+.brand-text span { font-size: 12.5px; color: var(--muted); }
+.session { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.chip b { font-family: var(--f-label); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; font-size: 11.5px; color: var(--muted); }
+.chip .mono { font-size: 12.5px; }
+.status { display: flex; gap: 8px; flex-wrap: wrap; }
+.pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 4px 10px 4px 8px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.pill::before {
+  content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--faint);
+}
+.pill[data-state="on"]::before { background: var(--ok); }
+.pill[data-state="wait"]::before { background: var(--accent-fill); }
+.pill[data-state="off"]::before { background: var(--crit); }
+
+/* ---------- workspace ---------- */
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(360px, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 1080px) {
+  .workspace { grid-template-columns: minmax(0, 1fr); }
+}
+.col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  min-width: 0;
+}
+
+/* ---------- camera wall ---------- */
+.wall-frame {
+  background: var(--wall);
+  border-radius: 12px;
+  padding: 8px;
+  border: 1px solid var(--wall-line);
+}
+.wall {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
+}
+.tile {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  max-width: 100%;
+  background: #000;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--wall-line);
+}
+.tile video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
+.wall.has-focus .tile.focus { grid-column: 1 / -1; }
+.tile-label {
+  position: absolute; left: 8px; top: 8px;
+  display: flex; align-items: center; gap: 6px;
+  background: rgba(8, 11, 14, 0.78);
+  color: #f3f6f8;
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-family: var(--f-label);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  font-size: 12.5px;
+  max-width: calc(100% - 90px);
+}
+.tile-label input {
+  background: transparent; border: 0; width: 7ch; padding: 0;
+  font: inherit; color: inherit; letter-spacing: inherit;
+}
+.tile-label input:focus { outline: 1px solid #ffb21a; }
+.tile-label .fname { font-family: var(--f-ui); font-weight: 400; letter-spacing: 0; color: #9fb0bd; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-tools { position: absolute; right: 6px; top: 6px; display: flex; gap: 4px; }
+.iconbtn {
+  width: 28px; height: 28px;
+  display: grid; place-items: center;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(8, 11, 14, 0.7);
+  color: #e8edf1;
+  cursor: pointer;
+}
+.iconbtn:hover { background: rgba(30, 38, 46, 0.9); }
+.iconbtn svg { width: 15px; height: 15px; }
+.tile-veil {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  text-align: center;
+  padding: 16px;
+  color: #b8c4ce;
+  background: rgba(6, 9, 12, 0.78);
+  font-size: 13px;
+}
+.tile.placeholder {
+  display: grid; place-items: center;
+  color: #4d5c68;
+  font-family: var(--f-label);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  font-size: 20px;
+  background: repeating-linear-gradient(135deg, #0d1215 0 10px, #0f151a 10px 20px);
+}
+.dropzone {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  padding: 16px;
+}
+.drop-card {
+  background: rgba(10, 14, 17, 0.9);
+  border: 1px dashed #3a4854;
+  border-radius: 12px;
+  padding: 22px 24px;
+  max-width: 460px;
+  color: #d9e1e7;
+  text-align: left;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.drop-card h2 { font-family: var(--f-label); font-size: 21px; font-weight: 700; letter-spacing: 0.02em; }
+.drop-card ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: #aebbc6; font-size: 13.5px; }
+.wall-wrap { position: relative; }
+.wall-wrap.dragging .wall-frame { outline: 2px dashed var(--accent-fill); outline-offset: 3px; }
+
+/* ---------- buttons ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--raised);
+  cursor: pointer;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) { border-color: var(--faint); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn.primary { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--accent-ink); font-weight: 600; }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.05); }
+.btn.ghost { background: transparent; }
+.btn.small { padding: 5px 10px; font-size: 13px; }
+.btn svg { width: 16px; height: 16px; }
+.btn.dark { background: #1b242b; border-color: #2c3943; color: #e7edf2; }
+.btn-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* ---------- transport ---------- */
+.transport { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.transport-top { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
+.tbtns { display: flex; gap: 6px; }
+.tbtn {
+  width: 38px; height: 38px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--raised);
+  display: grid; place-items: center; cursor: pointer;
+}
+.tbtn.play { background: var(--accent-fill); border-color: var(--accent-fill); color: var(--accent-ink); width: 46px; }
+.tbtn svg { width: 18px; height: 18px; }
+.tbtn:disabled { opacity: 0.45; cursor: not-allowed; }
+.readout { display: flex; flex-direction: column; min-width: 0; }
+.readout .v { font-family: var(--f-mono); font-variant-numeric: tabular-nums; font-size: 17px; font-weight: 500; line-height: 1.2; }
+.readout .v.amber { color: var(--accent); }
+.readout .v small { font-size: 12px; color: var(--muted); font-weight: 400; }
+.spacer { flex: 1; }
+.seg {
+  display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+}
+.seg button {
+  border: 0; background: var(--raised); padding: 6px 10px; cursor: pointer;
+  font-family: var(--f-mono); font-size: 12.5px;
+  border-right: 1px solid var(--line);
+}
+.seg button:last-child { border-right: 0; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.scrub-wrap { position: relative; display: flex; flex-direction: column; gap: 4px; }
+#lane { width: 100%; height: 46px; display: block; border-radius: 6px; background: var(--raised); cursor: pointer; }
+#scrub { width: 100%; accent-color: var(--accent-fill); margin: 0; }
+.lane-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.lane-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+
+/* ---------- map ---------- */
+.mapcard { overflow: hidden; }
+.map-stage { position: relative; }
+#map {
+  height: 380px;
+  background-color: var(--map-ground);
+  background-image:
+    linear-gradient(var(--map-grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--map-grid) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+.leaflet-container { font-family: var(--f-ui); background: transparent; }
+.map-hud {
+  position: absolute; left: 10px; bottom: 10px; z-index: 500;
+  background: rgba(10, 14, 17, 0.86);
+  color: #e7edf2;
+  border-radius: 10px;
+  padding: 8px 12px;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 2px 16px;
+  align-items: end;
+  max-width: calc(100% - 20px);
+  pointer-events: none;
+}
+.map-hud .spd { font-family: var(--f-mono); font-size: 26px; font-weight: 600; color: #ffb21a; line-height: 1; }
+.map-hud .spd small { font-size: 12px; color: #9fb0bd; font-weight: 400; margin-left: 3px; }
+.map-hud .clk { font-family: var(--f-mono); font-size: 13px; }
+.map-hud .coord { grid-column: 1 / -1; font-family: var(--f-mono); font-size: 11.5px; color: #9fb0bd; }
+.map-hud .addr { grid-column: 1 / -1; font-size: 12px; color: #d3dde4; max-width: 34ch; }
+.map-tools {
+  position: absolute; right: 10px; top: 10px; z-index: 500;
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-end;
+}
+.map-tools .btn { background: var(--surface); box-shadow: var(--shadow); padding: 6px 10px; font-size: 12.5px; }
+.map-tools .btn[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.map-empty {
+  position: absolute; inset: 0; z-index: 450;
+  display: grid; place-items: center; text-align: center;
+  padding: 24px; pointer-events: none;
+  color: var(--muted);
+}
+.map-empty div { max-width: 30ch; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.map-note { padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; align-items: baseline; }
+.busmk { width: 34px; height: 34px; display: grid; place-items: center; }
+.busmk-rot { width: 20px; height: 34px; transition: transform 0.25s linear; }
+.busmk svg { width: 20px; height: 34px; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.55)); }
+.evt-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.35); }
+.leaflet-popup-content { font-family: var(--f-ui); font-size: 13px; margin: 10px 12px; }
+
+/* ---------- desk / tabs ---------- */
+.desk { display: flex; flex-direction: column; min-height: 420px; }
+.tabs { display: flex; gap: 2px; padding: 6px 6px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
+.tab {
+  border: 0; background: transparent; cursor: pointer;
+  padding: 9px 12px 10px;
+  font-family: var(--f-label); font-weight: 600; font-size: 13.5px; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+}
+.tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent-fill); }
+.tab .count { font-family: var(--f-mono); font-size: 11px; color: var(--faint); margin-left: 4px; }
+.tabpanel { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field textarea, .field input[type="text"], .field select, .inline-input {
+  width: 100%;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.field textarea { resize: vertical; min-height: 64px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.fchip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line); background: var(--raised);
+  border-radius: 999px; padding: 5px 12px; cursor: pointer; font-size: 13px;
+}
+.fchip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-fill); color: var(--ink); font-weight: 600; }
+.fchip .x { border: 0; background: transparent; cursor: pointer; padding: 0 0 0 2px; color: var(--muted); font-size: 15px; line-height: 1; }
+.fchip.add { border-style: dashed; color: var(--muted); }
+.hint { font-size: 12.5px; color: var(--muted); margin: 0; }
+.hint.err { color: var(--crit); }
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.step { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line); }
+.step:first-child { border-top: 0; padding-top: 0; }
+.step h3 { font-family: var(--f-label); font-size: 15px; font-weight: 700; letter-spacing: 0.02em; display: flex; gap: 8px; align-items: baseline; }
+.step h3 .n { font-family: var(--f-mono); font-size: 12px; color: var(--accent); }
+
+/* ---------- results ---------- */
+.results { display: flex; flex-direction: column; gap: 12px; }
+.card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--raised);
+  padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 10px;
+  position: relative;
+}
+.card[data-risk="alto"] { border-left: 4px solid var(--crit); }
+.card[data-risk="medio"] { border-left: 4px solid var(--warn); }
+.card[data-risk="bajo"] { border-left: 4px solid var(--low); }
+.card-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.card-head .kind { font-family: var(--f-label); font-weight: 700; font-size: 14px; letter-spacing: 0.02em; }
+.card-head .spacer { flex: 1; }
+.tchip {
+  font-family: var(--f-mono); font-size: 12px;
+  border: 1px solid var(--line); background: var(--surface);
+  border-radius: 5px; padding: 2px 7px; cursor: pointer;
+}
+.tchip:hover { border-color: var(--accent-fill); }
+.risk { font-family: var(--f-label); font-weight: 700; font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; border-radius: 4px; padding: 2px 7px; color: #fff; background: var(--faint); }
+.risk[data-r="bajo"] { background: var(--low); }
+.risk[data-r="medio"] { background: var(--warn); }
+.risk[data-r="alto"] { background: var(--crit); }
+.risk[data-r="ninguno"] { background: var(--ok); }
+.card p { margin: 0; }
+.cam-block { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 4px 10px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.cam-block .cl { font-family: var(--f-label); font-weight: 700; letter-spacing: 0.05em; font-size: 13px; }
+.cam-block .meta { font-size: 12px; color: var(--muted); }
+.cam-block ul, .card ul { margin: 0; padding-left: 18px; }
+.alerts { background: color-mix(in srgb, var(--crit) 10%, transparent); border-radius: 8px; padding: 8px 10px; }
+.alerts b { color: var(--crit); font-family: var(--f-label); letter-spacing: 0.05em; text-transform: uppercase; font-size: 12px; }
+.moment { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.example-tag { position: absolute; right: 10px; top: 10px; font-family: var(--f-label); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
+
+/* ---------- GPS ---------- */
+.osd-list { display: flex; flex-direction: column; gap: 8px; }
+.osd-item { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 4px 10px; font-size: 13px; }
+.osd-item .cl { font-family: var(--f-label); font-weight: 700; letter-spacing: 0.05em; }
+.osd-item code { font-family: var(--f-mono); font-size: 12px; word-break: break-word; }
+.crop-preview { max-width: 100%; border-radius: 6px; border: 1px solid var(--line); background: #000; display: block; }
+.band-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
+.band-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.band-grid input { width: 100%; background: var(--raised); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font-family: var(--f-mono); }
+.table-wrap { overflow-x: auto; max-height: 260px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
+table.pts { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+table.pts th, table.pts td { padding: 5px 9px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.pts th { position: sticky; top: 0; background: var(--raised); font-family: var(--f-label); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; font-size: 11.5px; color: var(--muted); }
+table.pts td { font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+.stat { background: var(--raised); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.stat .v { font-family: var(--f-mono); font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.stat .v small { font-size: 12px; color: var(--muted); }
+
+/* ---------- chat ---------- */
+.chat { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; }
+.msg { max-width: 92%; padding: 9px 12px; border-radius: 10px; white-space: pre-wrap; word-wrap: break-word; }
+.msg.user { align-self: flex-end; background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent-fill) 45%, transparent); }
+.msg.bot { align-self: flex-start; background: var(--raised); border: 1px solid var(--line); }
+.msg.bot.thinking { color: var(--muted); font-style: italic; }
+.check { display: inline-flex; gap: 7px; align-items: center; font-size: 13px; color: var(--muted); }
+
+/* ---------- report ---------- */
+.report { background: var(--raised); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; max-height: 520px; overflow-y: auto; }
+.report h1 { font-family: var(--f-label); font-size: 21px; font-weight: 700; margin-bottom: 8px; }
+.report h2 { font-family: var(--f-label); font-size: 16px; font-weight: 700; margin: 14px 0 6px; letter-spacing: 0.02em; }
+.report h3 { font-size: 14px; margin: 10px 0 4px; }
+.report p { margin: 6px 0; max-width: 72ch; }
+.report ul, .report ol { margin: 6px 0; padding-left: 20px; }
+
+/* ---------- busy bar / toast ---------- */
+.busy {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  z-index: 2000;
+  width: min(560px, calc(100% - 32px));
+  background: var(--wall); color: #e7edf2;
+  border: 1px solid #2c3943;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: center;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+}
+.busy .lbl { font-size: 13px; min-width: 0; }
+.busy .bar { grid-column: 1 / -1; height: 4px; border-radius: 4px; background: #24303a; overflow: hidden; }
+.busy .bar i { display: block; height: 100%; width: 0; background: #ffb21a; transition: width 0.25s ease; }
+.busy .bar.indet i { width: 35%; animation: indet 1.2s ease-in-out infinite; }
+@keyframes indet { 0% { transform: translateX(-100%); } 100% { transform: translateX(300%); } }
+.toast {
+  position: fixed; right: 16px; top: calc(16px + env(safe-area-inset-top, 0px)); z-index: 2100;
+  max-width: min(420px, calc(100% - 32px));
+  background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--accent-fill);
+  border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); font-size: 13.5px;
+}
+.toast[data-kind="err"] { border-left-color: var(--crit); }
+.toast[data-kind="ok"] { border-left-color: var(--ok); }
+.privacy { font-size: 12px; color: var(--faint); }
+@media (prefers-reduced-motion: reduce) {
+  .busmk-rot, .busy .bar i { transition: none; }
+  .busy .bar.indet i { animation: none; width: 100%; opacity: 0.5; }
+}
+@media (max-width: 560px) {
+  .transport-top .readout.hide-sm { display: none; }
+  #map { height: 300px; }
+}
+</style>
+
+<div class="shell" id="app">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none"><rect x="4" y="3" width="16" height="15" rx="3" fill="#ffb21a"/><rect x="6.5" y="5.5" width="11" height="6" rx="1" fill="#0a0e11"/><circle cx="8" cy="15" r="1.3" fill="#0a0e11"/><circle cx="16" cy="15" r="1.3" fill="#0a0e11"/><rect x="6" y="18" width="3" height="3" rx="1" fill="#ffb21a"/><rect x="15" y="18" width="3" height="3" rx="1" fill="#ffb21a"/></svg>
+      </div>
+      <div class="brand-text"><strong>COF Vision</strong><span>Revisión de cámaras de flota</span></div>
+    </div>
+    <div class="session" id="session"></div>
+    <div class="status">
+      <span class="pill" id="aiPill" data-state="wait">Claude: conectando…</span>
+      <span class="pill" id="mapPill" data-state="wait">Mapa: conectando…</span>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <div class="col">
+      <div class="wall-wrap" id="wallWrap">
+        <div class="wall-frame">
+          <div class="wall" id="wall"></div>
+        </div>
+      </div>
+
+      <section class="panel transport" aria-label="Controles de reproducción">
+        <div class="transport-top">
+          <div class="tbtns">
+            <button class="tbtn" id="btnBack" title="Retroceder 10 s (←)" aria-label="Retroceder 10 segundos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5"/><path d="M18 17l-5-5 5-5"/></svg></button>
+            <button class="tbtn play" id="btnPlay" title="Reproducir / pausar (espacio)" aria-label="Reproducir"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 5v14l12-7z"/></svg></button>
+            <button class="tbtn" id="btnFwd" title="Adelantar 10 s (→)" aria-label="Adelantar 10 segundos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5"/><path d="M6 17l5-5-5-5"/></svg></button>
+          </div>
+          <div class="readout"><span class="label">Tiempo de video</span><span class="v" id="roTime">00:00:00 <small>/ 00:00:00</small></span></div>
+          <div class="readout"><span class="label">Hora del equipo</span><span class="v amber" id="roClock">—</span></div>
+          <div class="readout hide-sm"><span class="label">Velocidad</span><span class="v" id="roSpeed">—</span></div>
+          <div class="spacer"></div>
+          <div class="seg" id="rateSeg" role="group" aria-label="Velocidad de reproducción">
+            <button data-rate="1" aria-pressed="true">1×</button>
+            <button data-rate="2" aria-pressed="false">2×</button>
+            <button data-rate="4" aria-pressed="false">4×</button>
+            <button data-rate="8" aria-pressed="false">8×</button>
+          </div>
+        </div>
+        <div class="scrub-wrap">
+          <canvas id="lane" aria-label="Línea de tiempo con velocidad y hallazgos"></canvas>
+          <input type="range" id="scrub" min="0" max="0" step="0.1" value="0" aria-label="Posición del video">
+          <div class="lane-legend">
+            <span><i style="background:var(--accent-fill)"></i>Velocidad (km/h)</span>
+            <span><i style="background:var(--crit)"></i>Riesgo alto</span>
+            <span><i style="background:var(--warn)"></i>Riesgo medio</span>
+            <span><i style="background:var(--low)"></i>Hallazgo</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="col">
+      <section class="panel mapcard" aria-label="Mapa del recorrido">
+        <div class="map-stage">
+        <div id="map"></div>
+        <div class="map-empty" id="mapEmpty"><div>Aquí verás el bus avanzando sobre el mapa cuando extraigas el recorrido desde la pestaña <b>Recorrido</b>.</div></div>
+        <div class="map-hud" id="hud" hidden>
+          <div class="spd" id="hudSpeed">—</div>
+          <div class="clk" id="hudClock">—</div>
+          <div class="coord" id="hudCoord">—</div>
+          <div class="addr" id="hudAddr" hidden></div>
+        </div>
+        <div class="map-tools">
+          <button class="btn" id="btnFollow" aria-pressed="true">Seguir bus</button>
+          <button class="btn" id="btnFit">Ver ruta completa</button>
+          <button class="btn" id="btnAddr">¿Dónde está?</button>
+        </div>
+        </div>
+        <div class="map-note" id="mapNote"><span class="label">Mapa</span><span id="mapNoteText">Mapa base de TomTom con tu conector. Acércate para ver más detalle.</span></div>
+      </section>
+
+      <section class="panel desk">
+        <nav class="tabs" role="tablist" aria-label="Herramientas">
+          <button class="tab" role="tab" id="tab-a" aria-controls="p-a" aria-selected="true">Análisis<span class="count" id="cntA"></span></button>
+          <button class="tab" role="tab" id="tab-r" aria-controls="p-r" aria-selected="false">Recorrido<span class="count" id="cntR"></span></button>
+          <button class="tab" role="tab" id="tab-q" aria-controls="p-q" aria-selected="false">Preguntar</button>
+          <button class="tab" role="tab" id="tab-i" aria-controls="p-i" aria-selected="false">Informe</button>
+        </nav>
+
+        <div class="tabpanel" role="tabpanel" id="p-a" aria-labelledby="tab-a">
+          <div class="field">
+            <span class="label">Enfoque</span>
+            <div class="chips" id="focusChips"></div>
+          </div>
+          <form class="field" id="newFocusForm" hidden>
+            <span class="label">Nuevo enfoque</span>
+            <input type="text" id="nfName" placeholder="Nombre, ej. Uso de mascarilla" maxlength="40">
+            <textarea id="nfInstr" rows="3" placeholder="Qué debe revisar la IA, ej. Indica si el conductor y los pasajeros usan cubrebocas y cuántos no lo usan."></textarea>
+            <div class="btn-row"><button class="btn primary small" type="submit">Guardar enfoque</button><button class="btn ghost small" type="button" id="nfCancel">Cancelar</button></div>
+          </form>
+          <div class="field">
+            <label class="label" for="extraInstr">Indicación adicional (opcional)</label>
+            <textarea id="extraInstr" rows="2" placeholder="Ej. Revisa si alguien deja una mochila en los asientos del fondo."></textarea>
+          </div>
+          <div class="btn-row">
+            <span class="label">Profundidad</span>
+            <div class="seg" id="tierSeg" role="group" aria-label="Profundidad del análisis">
+              <button data-tier="quick" aria-pressed="false">Rápido</button>
+              <button data-tier="default" aria-pressed="true">Normal</button>
+              <button data-tier="complex" aria-pressed="false">Máxima</button>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button class="btn primary" id="btnMoment">Analizar este momento</button>
+            <button class="btn" id="btnOverview">Análisis general del video</button>
+            <select id="ovCount" class="inline-input" style="width:auto" aria-label="Momentos del análisis general">
+              <option value="6">6 momentos</option>
+              <option value="8" selected>8 momentos</option>
+              <option value="12">12 momentos</option>
+              <option value="16">16 momentos</option>
+            </select>
+          </div>
+          <p class="privacy">Se envían a Claude, desde tu cuenta, solo los fotogramas de cada consulta. El video completo no sale de tu equipo.</p>
+          <div class="results" id="results"></div>
+        </div>
+
+        <div class="tabpanel" role="tabpanel" id="p-r" aria-labelledby="tab-r" hidden>
+          <div class="stat-row" id="trackStats"></div>
+          <div class="step">
+            <h3><span class="n">1</span>Detectar datos en pantalla</h3>
+            <p class="hint">Claude revisa un fotograma de cada cámara, encuentra el texto con coordenadas, hora y velocidad, y marca la franja que hay que leer.</p>
+            <div class="btn-row"><button class="btn primary" id="btnDetect">Detectar datos en pantalla</button></div>
+            <div id="osdResult" class="osd-list"></div>
+          </div>
+          <div class="step" id="bandStep" hidden>
+            <h3><span class="n">2</span>Franja a leer</h3>
+            <p class="hint">Esta es la franja que se leerá en cada momento. Si no contiene todas las coordenadas, ajústala en porcentaje de la altura.</p>
+            <div class="field"><label class="label" for="osdCam">Cámara con coordenadas</label><select id="osdCam"></select></div>
+            <canvas class="crop-preview" id="bandPreview"></canvas>
+            <div class="band-grid" id="bandInputs"></div>
+          </div>
+          <div class="step" id="readStep" hidden>
+            <h3><span class="n">3</span>Leer coordenadas del video</h3>
+            <div class="btn-row">
+              <label class="label" for="ocrEvery">Leer cada</label>
+              <select id="ocrEvery" class="inline-input" style="width:auto">
+                <option value="auto" selected>Automático</option>
+                <option value="5">5 segundos</option>
+                <option value="10">10 segundos</option>
+                <option value="15">15 segundos</option>
+                <option value="30">30 segundos</option>
+                <option value="60">60 segundos</option>
+              </select>
+              <span class="hint" id="ocrEstimate"></span>
+            </div>
+            <div class="btn-row"><button class="btn primary" id="btnExtract">Extraer recorrido</button></div>
+          </div>
+          <div class="step">
+            <h3><span class="n">o</span>Importar un archivo de recorrido</h3>
+            <p class="hint">Si tu plataforma GPS exporta el historial, cárgalo aquí: CSV, GPX, KML o NMEA.</p>
+            <div class="btn-row">
+              <label class="btn" for="trackFile">Elegir archivo</label>
+              <input type="file" id="trackFile" accept=".csv,.txt,.gpx,.kml,.nmea,.log" hidden>
+            </div>
+          </div>
+          <div class="step" id="trackStep" hidden>
+            <h3>Puntos del recorrido</h3>
+            <div class="btn-row">
+              <label class="label" for="shiftSec">Desfase (s)</label>
+              <input type="number" id="shiftSec" class="inline-input" style="width:100px" value="0" step="1">
+              <span class="hint">Ajusta si el bus en el mapa va adelantado (−) o atrasado (+) respecto al video.</span>
+            </div>
+            <div class="table-wrap"><table class="pts" id="ptsTable"></table></div>
+            <div class="btn-row">
+              <button class="btn small" id="btnCsv">Descargar CSV</button>
+              <button class="btn small" id="btnGeo">Descargar GeoJSON</button>
+              <button class="btn small ghost" id="btnClearTrack">Borrar recorrido</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="tabpanel" role="tabpanel" id="p-q" aria-labelledby="tab-q" hidden>
+          <div class="chat" id="chat" aria-live="polite"></div>
+          <form class="field" id="askForm">
+            <label class="label" for="askInput">Tu pregunta sobre el video</label>
+            <textarea id="askInput" rows="3" placeholder="Ej. ¿En qué momento sube más gente? ¿El conductor usó el celular?"></textarea>
+            <div class="btn-row">
+              <label class="check"><input type="checkbox" id="askImg" checked> Incluir las cámaras del momento actual</label>
+              <span class="spacer"></span>
+              <button class="btn ghost small" type="button" id="btnClearChat">Limpiar</button>
+              <button class="btn primary" type="submit" id="btnAsk">Preguntar</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="tabpanel" role="tabpanel" id="p-i" aria-labelledby="tab-i" hidden>
+          <div class="stat-row" id="repStats"></div>
+          <div class="btn-row">
+            <button class="btn primary" id="btnReport">Redactar informe con IA</button>
+            <button class="btn" id="btnDlMd" disabled>Descargar .md</button>
+            <button class="btn" id="btnDlHtml" disabled>Descargar .html</button>
+            <button class="btn ghost" id="btnCopy" disabled>Copiar</button>
+          </div>
+          <div class="report" id="report"><p class="muted">El informe junta los análisis y el recorrido en un documento listo para entregar. Primero analiza algunos momentos o el video completo.</p></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <input type="file" id="videoInput" accept="video/*,.mp4,.mov,.avi,.mkv,.webm" multiple hidden>
+  <div class="busy" id="busy" hidden role="status">
+    <span class="lbl" id="busyLabel">Trabajando…</span>
+    <button class="btn dark small" id="busyStop">Detener</button>
+    <div class="bar indet" id="busyBar"><i></i></div>
+  </div>
+  <div class="toast" id="toast" hidden role="status"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script>
+/*__APP_JS__*/
+</script>

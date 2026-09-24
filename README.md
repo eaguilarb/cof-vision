@@ -99,3 +99,17 @@ src/
 Esta herramienta es para diagnóstico OBD-II genérico. No reemplaza el escáner
 de concesionario para procedimientos de programación de módulos ni para
 códigos específicos de fabricante que requieran bases de datos propietarias.
+
+## Revisión de cámaras de flota (artefacto de claude.ai)
+
+La versión avanzada del analizador de video vive en `artifact/` y se publica
+como artefacto privado de claude.ai, donde usa Claude con la cuenta del
+usuario (sin API key) y el conector de TomTom Maps para el mapa base.
+
+- `artifact/camaras.src.html`: estructura y estilos de la página.
+- `artifact/app.js`: lógica (muro de cámaras sincronizado, lectura del
+  recorrido GPS desde el texto sobreimpreso, mapa con el bus, análisis por
+  enfoques, preguntas e informe). Para agregar un enfoque nuevo basta con
+  añadir un objeto a la lista `ENFOQUES`.
+- `node artifact/build.mjs` genera `artifact/camaras.html` (una sola página
+  con el CSS de Leaflet incrustado), que es el archivo que se publica.
