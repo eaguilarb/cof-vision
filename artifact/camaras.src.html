@@ -209,7 +209,7 @@ h1, h2, h3 { text-wrap: balance; margin: 0; }
 .tile video { width: 100%; height: 100%; object-fit: contain; display: block; background: #000; }
 .wall.has-focus .tile.focus { grid-column: 1 / -1; }
 .tile-label {
-  position: absolute; left: 8px; top: 8px;
+  position: absolute; left: 8px; bottom: 8px;
   display: flex; align-items: center; gap: 6px;
   background: rgba(8, 11, 14, 0.78);
   color: #f3f6f8;
@@ -226,8 +226,9 @@ h1, h2, h3 { text-wrap: balance; margin: 0; }
   font: inherit; color: inherit; letter-spacing: inherit;
 }
 .tile-label input:focus { outline: 1px solid #ffb21a; }
-.tile-label .fname { font-family: var(--f-ui); font-weight: 400; letter-spacing: 0; color: #9fb0bd; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tile-tools { position: absolute; right: 6px; top: 6px; display: flex; gap: 4px; }
+.tile-label .fname { display: none;  font-family: var(--f-ui); font-weight: 400; letter-spacing: 0; color: #9fb0bd; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile-tools { position: absolute; right: 6px; bottom: 6px; display: flex; gap: 4px; opacity: 0.35; transition: opacity 0.15s ease; }
+.tile:hover .tile-tools, .tile:focus-within .tile-tools { opacity: 1; }
 .iconbtn {
   width: 28px; height: 28px;
   display: grid; place-items: center;
@@ -478,12 +479,6 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
 .stat .v { font-family: var(--f-mono); font-size: 17px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .stat .v small { font-size: 12px; color: var(--muted); }
 
-/* ---------- chat ---------- */
-.chat { display: flex; flex-direction: column; gap: 10px; max-height: 420px; overflow-y: auto; }
-.msg { max-width: 92%; padding: 9px 12px; border-radius: 10px; white-space: pre-wrap; word-wrap: break-word; }
-.msg.user { align-self: flex-end; background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent-fill) 45%, transparent); }
-.msg.bot { align-self: flex-start; background: var(--raised); border: 1px solid var(--line); }
-.msg.bot.thinking { color: var(--muted); font-style: italic; }
 .check { display: inline-flex; gap: 7px; align-items: center; font-size: 13px; color: var(--muted); }
 
 /* ---------- report ---------- */
@@ -493,6 +488,53 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
 .report h3 { font-size: 14px; margin: 10px 0 4px; }
 .report p { margin: 6px 0; max-width: 72ch; }
 .report ul, .report ol { margin: 6px 0; padding-left: 20px; }
+
+/* ---------- búsqueda ---------- */
+.search { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.search-row { display: flex; gap: 8px; align-items: center; }
+.search-box {
+  flex: 1; min-width: 0;
+  display: flex; align-items: center; gap: 8px;
+  background: var(--raised); border: 1px solid var(--line); border-radius: 10px;
+  padding: 0 12px;
+}
+.search-box:focus-within { border-color: var(--accent-fill); box-shadow: 0 0 0 3px var(--accent-soft); }
+.search-box svg { width: 18px; height: 18px; color: var(--muted); flex: none; }
+.search-box input { flex: 1; min-width: 0; border: 0; background: transparent; padding: 11px 0; font-size: 15px; outline: none; }
+.qchips { display: flex; gap: 6px; flex-wrap: wrap; }
+.qchip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 11px; font-size: 12.5px; cursor: pointer; color: var(--muted); }
+.qchip:hover:not(:disabled) { color: var(--ink); border-color: var(--accent-fill); }
+.qchip:disabled { opacity: 0.5; cursor: not-allowed; }
+.answers { display: flex; flex-direction: column; gap: 10px; }
+.answer { border: 1px solid var(--line); border-radius: 10px; background: var(--raised); padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; }
+.answer .q { font-family: var(--f-label); font-weight: 700; font-size: 14px; letter-spacing: 0.02em; display: flex; gap: 8px; align-items: baseline; }
+.answer .q span { flex: 1; }
+.answer .a { display: flex; flex-direction: column; gap: 3px; max-width: 90ch; }
+.answer .a .li { padding-left: 14px; position: relative; }
+.answer .a .li::before { content: "•"; position: absolute; left: 2px; color: var(--accent); }
+.answer .thinking { color: var(--muted); font-style: italic; }
+.answer .tchip { margin: 0 2px; }
+.more-answers { align-self: flex-start; }
+
+/* ---------- preparación ---------- */
+.prep { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.prep-head { display: flex; align-items: center; gap: 10px; }
+.prep-head h2 { font-family: var(--f-label); font-size: 16px; font-weight: 700; letter-spacing: 0.02em; flex: 1; }
+.prep-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.prep-steps li { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 13.5px; }
+.prep-steps .ico { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; border: 1.5px solid var(--line); color: var(--faint); }
+.prep-steps li[data-s="ok"] .ico { background: var(--ok); border-color: var(--ok); color: #fff; }
+.prep-steps li[data-s="run"] .ico { border-color: var(--accent-fill); color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
+.prep-steps li[data-s="skip"] .ico { border-style: dashed; }
+.prep-steps .det { font-size: 12px; color: var(--muted); text-align: right; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 4px var(--accent-soft); } }
+.warn-box { border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 10%, transparent); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin: 0; }
+.index-list { display: flex; flex-direction: column; }
+.idx-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; padding: 8px 0; border-top: 1px dashed var(--line); font-size: 13.5px; }
+.idx-row:first-child { border-top: 0; }
+.idx-row ul { margin: 2px 0 0; padding-left: 18px; }
+.idx-row.here { background: var(--accent-soft); border-radius: 6px; }
+.section-title { font-family: var(--f-label); font-weight: 700; font-size: 14px; letter-spacing: 0.03em; margin: 0; display: flex; gap: 8px; align-items: baseline; }
 
 /* ---------- busy bar / toast ---------- */
 .busy {
@@ -523,6 +565,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
 .privacy { font-size: 12px; color: var(--faint); }
 @media (prefers-reduced-motion: reduce) {
   .busmk-rot, .busy .bar i { transition: none; }
+  .prep-steps li[data-s="run"] .ico { animation: none; }
   .busy .bar.indet i { animation: none; width: 100%; opacity: 0.5; }
 }
 @media (max-width: 560px) {
@@ -546,6 +589,18 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     </div>
   </header>
 
+  <form class="panel search" id="searchForm" role="search">
+    <div class="search-row">
+      <label class="search-box" for="q">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+        <input type="search" id="q" placeholder="Busca en el video: ¿cuándo se abrió la puerta trasera? ¿hubo alguna pelea? ¿a qué velocidad iba?" autocomplete="off" aria-label="Buscar en el video">
+      </label>
+      <button class="btn primary" type="submit" id="btnSearch">Buscar</button>
+    </div>
+    <div class="qchips" id="quickQs"></div>
+    <div class="answers" id="answers" aria-live="polite"></div>
+  </form>
+
   <main class="workspace">
     <div class="col">
       <div class="wall-wrap" id="wallWrap">
@@ -565,6 +620,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
           <div class="readout"><span class="label">Hora del equipo</span><span class="v amber" id="roClock">—</span></div>
           <div class="readout hide-sm"><span class="label">Velocidad</span><span class="v" id="roSpeed">—</span></div>
           <div class="spacer"></div>
+          <button class="btn primary" id="btnHere" type="button" title="Claude describe lo que se ve ahora en todas las cámaras">¿Qué pasa aquí?</button>
           <div class="seg" id="rateSeg" role="group" aria-label="Velocidad de reproducción">
             <button data-rate="1" aria-pressed="true">1×</button>
             <button data-rate="2" aria-pressed="false">2×</button>
@@ -586,10 +642,30 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
     </div>
 
     <div class="col">
+      <section class="panel prep" aria-label="Preparación del video">
+        <div class="prep-head"><h2>Preparación del video</h2><button class="btn primary small" id="btnPrep" type="button">Preparar video</button></div>
+        <ol class="prep-steps" id="prepSteps"></ol>
+        <p class="warn-box" id="prepWarn" hidden></p>
+        <div class="btn-row">
+          <label class="check"><input type="checkbox" id="autoRun"> Preparar automáticamente al cargar videos</label>
+        </div>
+        <div class="btn-row">
+          <label class="label" for="idxEvery">Índice</label>
+          <select id="idxEvery" class="inline-input" style="width:auto">
+            <option value="auto" selected>Automático (unos 20 momentos)</option>
+            <option value="30">Un momento cada 30 s</option>
+            <option value="60">Un momento cada minuto</option>
+            <option value="120">Un momento cada 2 minutos</option>
+            <option value="300">Un momento cada 5 minutos</option>
+          </select>
+          <span class="hint" id="prepEstimate"></span>
+        </div>
+      </section>
+
       <section class="panel mapcard" aria-label="Mapa del recorrido">
         <div class="map-stage">
         <div id="map"></div>
-        <div class="map-empty" id="mapEmpty"><div>Aquí verás el bus avanzando sobre el mapa cuando extraigas el recorrido desde la pestaña <b>Recorrido</b>.</div></div>
+        <div class="map-empty" id="mapEmpty"><div>Aquí verás el bus avanzando sobre el mapa cuando extraigas el recorrido con <b>Preparar video</b>.</div></div>
         <div class="map-hud" id="hud" hidden>
           <div class="spd" id="hudSpeed">—</div>
           <div class="clk" id="hudClock">—</div>
@@ -607,9 +683,8 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
 
       <section class="panel desk">
         <nav class="tabs" role="tablist" aria-label="Herramientas">
-          <button class="tab" role="tab" id="tab-a" aria-controls="p-a" aria-selected="true">Análisis<span class="count" id="cntA"></span></button>
+          <button class="tab" role="tab" id="tab-a" aria-controls="p-a" aria-selected="true">Momentos<span class="count" id="cntA"></span></button>
           <button class="tab" role="tab" id="tab-r" aria-controls="p-r" aria-selected="false">Recorrido<span class="count" id="cntR"></span></button>
-          <button class="tab" role="tab" id="tab-q" aria-controls="p-q" aria-selected="false">Preguntar</button>
           <button class="tab" role="tab" id="tab-i" aria-controls="p-i" aria-selected="false">Informe</button>
         </nav>
 
@@ -637,14 +712,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
             </div>
           </div>
           <div class="btn-row">
-            <button class="btn primary" id="btnMoment">Analizar este momento</button>
-            <button class="btn" id="btnOverview">Análisis general del video</button>
-            <select id="ovCount" class="inline-input" style="width:auto" aria-label="Momentos del análisis general">
-              <option value="6">6 momentos</option>
-              <option value="8" selected>8 momentos</option>
-              <option value="12">12 momentos</option>
-              <option value="16">16 momentos</option>
-            </select>
+            <button class="btn primary" id="btnMoment">¿Qué pasa aquí?</button>
           </div>
           <p class="hint" id="estAnalysis"></p>
           <p class="privacy">Se envían a Claude, desde tu cuenta, solo los fotogramas de cada consulta. El video completo no sale de tu equipo.</p>
@@ -706,20 +774,6 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
           </div>
         </div>
 
-        <div class="tabpanel" role="tabpanel" id="p-q" aria-labelledby="tab-q" hidden>
-          <div class="chat" id="chat" aria-live="polite"></div>
-          <form class="field" id="askForm">
-            <label class="label" for="askInput">Tu pregunta sobre el video</label>
-            <textarea id="askInput" rows="3" placeholder="Ej. ¿En qué momento sube más gente? ¿El conductor usó el celular?"></textarea>
-            <div class="btn-row">
-              <label class="check"><input type="checkbox" id="askImg" checked> Incluir las cámaras del momento actual</label>
-              <span class="spacer"></span>
-              <button class="btn ghost small" type="button" id="btnClearChat">Limpiar</button>
-              <button class="btn primary" type="submit" id="btnAsk">Preguntar</button>
-            </div>
-          </form>
-        </div>
-
         <div class="tabpanel" role="tabpanel" id="p-i" aria-labelledby="tab-i" hidden>
           <div class="stat-row" id="repStats"></div>
           <div class="btn-row">
@@ -728,7 +782,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
             <button class="btn" id="btnDlHtml" disabled>Descargar .html</button>
             <button class="btn ghost" id="btnCopy" disabled>Copiar</button>
           </div>
-          <div class="report" id="report"><p class="muted">El informe junta los análisis y el recorrido en un documento listo para entregar. Primero analiza algunos momentos o el video completo.</p></div>
+          <div class="report" id="report"><p class="muted">El informe junta los análisis y el recorrido en un documento listo para entregar. Primero prepara el video.</p></div>
         </div>
       </section>
     </div>

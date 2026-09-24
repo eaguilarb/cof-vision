@@ -196,7 +196,13 @@
     osdClockRef: null,
     busId: null,
     analyses: [],
-    chat: [],
+    index: [],
+    indexFocus: null,
+    qa: [],
+    qaOpen: 1,
+    autoRun: store.get('cofcam:auto', true),
+    autoTried: false,
+    prepRun: null,
     reportMd: '',
     focusId: 'general',
     tier: 'quick',
@@ -283,9 +289,12 @@
           setPill('#aiPill', 'off', 'Claude: no disponible aquí');
         } else {
           S.limits = await s.limits().catch(() => null);
-          setPill('#aiPill', 'on', S.limits && S.limits.images ? 'Claude: listo' : 'Claude: listo, sin imágenes');
+          if (imagesOff()) setPill('#aiPill', 'wait', 'Claude: sin imágenes en esta vista');
+          else setPill('#aiPill', 'on', 'Claude: listo');
           updateEstimates();
           ocrEstimate();
+          renderPrep();
+          maybeAutoRun();
         }
         refreshButtons();
       })
@@ -344,6 +353,12 @@
   function onAiError(e) {
     if (e && e.code === 'cancelled') return;
     if (e && e.code === 'local') return toast(e.message, 'err');
+    if (e && e.code === 'images_unavailable') {
+      S.limits = { ...(S.limits || {}), images: undefined };
+      setPill('#aiPill', 'wait', 'Claude: sin imágenes en esta vista');
+      renderPrep();
+      return toast(NO_IMAGES, 'err');
+    }
     if (e && AI_PERMANENT.has(e.code)) {
       S.aiOff = aiMsg(e);
       setPill('#aiPill', 'off', 'Claude: sin permiso');
@@ -365,8 +380,8 @@
       toast(S.aiOff, 'err');
       return false;
     }
-    if (needImages && !(S.limits && S.limits.images)) {
-      toast('Esta vista no permite enviar imágenes a Claude.', 'err');
+    if (needImages && imagesOff()) {
+      toast(NO_IMAGES, 'err');
       return false;
     }
     return true;
@@ -383,7 +398,7 @@
     renderSession();
   }
   const kTok = (n) => (n < 1000 ? `${Math.max(100, Math.round(n / 100) * 100)} tokens` : `${(n / 1000).toFixed(n < 10000 ? 1 : 0)} mil tokens`);
-  const maxImages = () => Math.max(1, (S.limits && S.limits.images && S.limits.images.maxCount) || 1);
+  const maxImages = () => Math.max(1, (S.limits && S.limits.images && S.limits.images.maxCount) || (S.limits ? 1 : 4));
 
   // ---------------------------------------------------------------------------
   // Cámaras
@@ -437,7 +452,9 @@
     computeOffsets();
     renderWall();
     restoreSession();
+    S.autoTried = false;
     renderAll();
+    maybeAutoRun();
   }
 
   function makeCam(file) {
@@ -467,6 +484,7 @@
       computeOffsets();
       updateDuration();
       renderAll();
+      maybeAutoRun();
     });
     video.addEventListener('error', () => {
       cam.error = 'Este navegador no puede reproducir el archivo. Si está en H.265/HEVC, conviértelo a MP4 H.264.';
@@ -533,7 +551,7 @@
       'div',
       { class: 'tile' },
       cam.video,
-      el('div', { class: 'tile-label' }, input, el('span', { class: 'fname', title: cam.file.name, text: cam.file.name })),
+      el('div', { class: 'tile-label', title: cam.file.name }, input, el('span', { class: 'fname', text: cam.file.name })),
       el(
         'div',
         { class: 'tile-tools' },
@@ -842,9 +860,10 @@
   // ---------------------------------------------------------------------------
   function eventMarks() {
     const out = [];
+    for (const e of S.index) if (e.riesgo !== 'ninguno' || e.eventos.length) out.push({ t: e.t, r: e.riesgo, text: e.texto });
     for (const a of S.analyses) {
-      if (a.kind === 'momento') out.push({ t: a.t, r: a.riesgo, a });
-      else for (const m of a.momentos) if (m.riesgo !== 'ninguno' || m.eventos.length) out.push({ t: m.t, r: m.riesgo, a });
+      if (a.kind === 'momento') out.push({ t: a.t, r: a.riesgo, text: a.resumen });
+      else for (const m of a.momentos || []) if (m.riesgo !== 'ninguno' || m.eventos.length) out.push({ t: m.t, r: m.riesgo, text: m.descripcion });
     }
     return out;
   }
@@ -1056,7 +1075,7 @@
       const p = posAt(m.t);
       if (!p) continue;
       const icon = L.divIcon({ className: '', html: `<div class="evt-dot" style="background:${riskColor(m.r)}"></div>`, iconSize: [14, 14], iconAnchor: [7, 7] });
-      const text = m.a.kind === 'momento' ? m.a.resumen : (m.a.momentos.find((x) => x.t === m.t) || {}).descripcion || '';
+      const text = m.text || '';
       L.marker([p.lat, p.lon], { icon })
         .bindPopup(`<b>${hms(m.t)}</b> · riesgo ${m.r}<br>${escapeHtml(text).slice(0, 280)}`)
         .on('click', () => seek(m.t))
@@ -1462,150 +1481,352 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Análisis general del video
+  // Índice del video: lo que pasa a lo largo del video, para buscar rápido
   // ---------------------------------------------------------------------------
-  async function analyzeOverview() {
-    if (!S.cams.length || !S.duration) return toast('Primero carga los videos de las cámaras.', 'err');
-    if (!aiReady()) return;
-    pause();
-    let K = Number($('#ovCount').value) || 8;
-    if (K > maxImages()) {
-      K = maxImages();
-      toast(`Esta vista permite ${K} imágenes por consulta; se usarán ${K} momentos.`);
-    }
-    const times = Array.from({ length: K }, (_, i) => S.duration * (K === 1 ? 0.5 : 0.04 + (0.92 * i) / (K - 1)));
-    const b = busyStart(`Capturando momentos 0/${K}…`);
-    try {
+  function indexPlan() {
+    const v = $('#idxEvery').value;
+    const D = S.duration || 0;
+    const step = v === 'auto' ? Math.max(20, Math.ceil(D / 20)) : Number(v);
+    const times = [];
+    for (let t = Math.min(step / 2, D / 2); t < D - 0.5; t += step) times.push(+t.toFixed(2));
+    if (!times.length && D > 0) times.push(+(D / 2).toFixed(2));
+    if (times.length > 240) times.length = 240;
+    return { step, times };
+  }
+  const perIndexCall = () => Math.max(1, Math.min(maxImages(), 8));
+  function indexCost() {
+    const { times } = indexPlan();
+    const calls = Math.ceil(times.length / perIndexCall());
+    return { n: times.length, calls, tokens: times.length * (imgTokens(1150, 610) + 110) + calls * 1300 };
+  }
+  function upsertIndex(entries) {
+    const map = new Map(S.index.map((e) => [e.t, e]));
+    for (const e of entries) map.set(e.t, e);
+    S.index = [...map.values()].sort((a, b) => a.t - b.t);
+  }
+  async function coreIndex(b) {
+    const { times } = indexPlan();
+    const per = perIndexCall();
+    S.index = [];
+    let tok = 0;
+    for (let i = 0; i < times.length; i += per) {
+      const chunk = times.slice(i, i + per);
       const images = [];
       const used = [];
-      let imgTok = 0;
-      for (let i = 0; i < times.length; i++) {
-        busySet(`Capturando momentos ${i + 1}/${K}…`, (i + 1) / K);
-        const frames = await framesAt(times[i], 640, b);
-        if (!frames) return;
+      for (const t of chunk) {
+        busySet(`Mirando el video: momento ${Math.min(times.length, i + used.length + 1)} de ${times.length}…`, (i + used.length) / times.length);
+        const frames = await framesAt(t, 640, b);
+        if (!frames) return null;
         if (!frames.length) continue;
-        const clk = clockAt(times[i]);
-        const caption = `Momento ${used.length + 1} · ${hms(times[i])}${clk != null ? ` · ${fmtClock(clk, false)}` : ''}`;
-        const mo = mosaic(frames.map((f) => ({ canvas: f.canvas, label: f.cam.label })), caption);
-        imgTok += imgTokens(mo.width, mo.height);
+        const clk = clockAt(t);
+        const mo = mosaic(frames.map((f) => ({ canvas: f.canvas, label: f.cam.label })), `Momento ${used.length + 1} · ${hms(t)}${clk != null ? ` · ${fmtClock(clk, false)}` : ''}`, 700000);
+        tok += imgTokens(mo.width, mo.height);
         images.push(await toJpeg(mo, 0.8));
-        used.push(times[i]);
+        used.push(t);
       }
-      if (!images.length) throw { code: 'local', message: 'No se pudieron capturar fotogramas del video.' };
-      busySet('Claude está revisando el video completo…', null);
-      const list = used.map((t, i) => `Momento ${i + 1} = ${momentText(t)}`).join('\n');
+      if (!images.length) continue;
+      busySet(`Claude está describiendo los momentos ${i + 1} a ${i + used.length} de ${times.length}…`, (i + used.length) / times.length);
       const prompt = [
         RULES,
         `Contexto:\n${contextText()}`,
         focusText($('#extraInstr').value.trim()),
-        `Te envío ${images.length} imágenes en orden cronológico. Cada una es un mosaico con las cámaras del bus (rotuladas) en un momento distinto del video; el encabezado amarillo de cada imagen indica el número de momento.\n${list}`,
-        'Responde SOLO con JSON con esta forma:',
-        '{"resumen":"un párrafo de 4 a 6 frases que cuente lo que pasa a lo largo del video","momentos":[{"n":1,"descripcion":"2 a 3 frases de lo que se ve, mencionando las cámaras","eventos":["hecho relevante según el enfoque"],"riesgo":"ninguno|bajo|medio|alto"}],"conclusiones":["..."],"recomendaciones":["..."]}',
-        `Incluye un objeto por cada momento, del 1 al ${images.length}, en orden.`,
+        `Te envío ${images.length} imágenes en orden cronológico. Cada una es un mosaico con las cámaras del bus (rotuladas) en un momento; el encabezado amarillo indica el número de momento.\n${used.map((t, k) => `Momento ${k + 1} = ${momentText(t)}`).join('\n')}`,
+        'Para cada momento describe de forma breve y concreta lo que pasa: qué hacen las personas, si el bus está detenido o en marcha, puertas, y cualquier situación llamativa. Menciona la cámara cuando importe.',
+        'Responde SOLO con un JSON array con un objeto por momento, en orden: [{"n":1,"descripcion":"1 a 3 frases","personas":0,"eventos":["hecho relevante"],"riesgo":"ninguno|bajo|medio|alto"}]',
+        `Incluye los momentos del 1 al ${images.length}. "personas" es el total aproximado de personas visibles sumando las cámaras.`,
       ].join('\n\n');
       const data = await S.sample.json(prompt, { images, modelTier: S.tier, signal: b.ctl.signal });
-      spend(imgTok + textTokens(prompt) + textTokens(JSON.stringify(data)));
-      const d = data && typeof data === 'object' ? data : {};
-      const momentos = (Array.isArray(d.momentos) ? d.momentos : [])
-        .map((m, i) => {
-          const n = Math.round(num(m && m.n)) || i + 1;
-          const t = used[n - 1];
-          if (t == null) return null;
-          return { n, t, clock: clockAt(t), descripcion: String((m && m.descripcion) || ''), eventos: strList(m && m.eventos), riesgo: normRisk(m && m.riesgo) };
-        })
-        .filter(Boolean);
-      const rec = {
-        id: uid(),
-        kind: 'general',
-        at: Date.now(),
-        t: used[0],
-        focus: currentFocus().nombre,
-        resumen: String(d.resumen || ''),
-        momentos,
-        conclusiones: strList(d.conclusiones),
-        recomendaciones: strList(d.recomendaciones),
-        riesgo: maxRisk(momentos.map((m) => m.riesgo)),
-      };
-      S.analyses.unshift(rec);
+      tok += textTokens(prompt) + textTokens(JSON.stringify(data));
+      const list = Array.isArray(data) ? data : (data && (data.momentos || data.items)) || [];
+      const entries = [];
+      list.forEach((m, k) => {
+        const n = Math.round(num(m && m.n)) || k + 1;
+        const t = used[n - 1];
+        if (t == null || !m) return;
+        entries.push({ t, clock: clockAt(t), texto: String(m.descripcion || ''), personas: numOrNull(m.personas), eventos: strList(m.eventos), riesgo: normRisk(m.riesgo) });
+      });
+      upsertIndex(entries);
+      S.indexFocus = currentFocus().nombre;
       persist();
-      renderAll();
+      renderResults();
       renderEvents();
-      showTab('a');
-      toast('Análisis general listo.', 'ok');
-    } catch (e) {
-      onAiError(e);
-    } finally {
-      busyEnd();
+      drawLane();
+      renderPrep();
     }
+    spend(tok);
+    return S.index.length;
+  }
+  function indexText(maxChars) {
+    const lines = S.index.map(
+      (e) =>
+        `[${hms(e.t)}]${e.clock != null ? ` ${fmtClock(e.clock, false)}` : ''}${e.riesgo !== 'ninguno' ? ` · riesgo ${e.riesgo}` : ''}${e.personas != null ? ` · ${e.personas} personas` : ''} · ${e.texto}${e.eventos.length ? ` Eventos: ${e.eventos.join('; ')}.` : ''}`,
+    );
+    let s = lines.join('\n');
+    if (s.length > maxChars) s = `${s.slice(0, maxChars)}…`;
+    return s || '(todavía no hay índice)';
+  }
+  function gpsText(maxLines) {
+    const a = S.track;
+    if (!a.length) return '';
+    const step = Math.max(1, Math.ceil(a.length / maxLines));
+    const out = [];
+    for (let i = 0; i < a.length; i += step) {
+      const p = a[i];
+      out.push(`[${hms(tOf(p))}]${p.clock != null ? ` ${fmtClock(p.clock, false)}` : ''} · ${p.speed != null ? `${Math.round(p.speed)} km/h` : 'velocidad sin dato'} · ${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}`);
+    }
+    return out.join('\n');
   }
 
   // ---------------------------------------------------------------------------
-  // Preguntas al analista
+  // Preparación: detectar datos en pantalla → recorrido → índice (un clic)
   // ---------------------------------------------------------------------------
-  async function askQuestion(q) {
-    if (!aiReady(false)) return;
-    const withImg = $('#askImg').checked && S.cams.length > 0 && !!(S.limits && S.limits.images);
-    S.chat.push({ role: 'user', content: q });
-    renderChat();
-    const bubble = el('div', { class: 'msg bot thinking', text: 'Pensando…' });
-    $('#chat').append(bubble);
-    bubble.scrollIntoView({ block: 'nearest' });
-    const b = busyStart('Claude está respondiendo…');
+  const imagesOff = () => !!(S.limits && !S.limits.images);
+  const NO_IMAGES =
+    'La vista donde abriste esta página no permite enviar imágenes a Claude, así que no puede ver el video. Prueba abrir el enlace en claude.ai desde Chrome o Edge en una computadora. Mientras tanto puedes importar un archivo de recorrido en la pestaña Recorrido para ver el mapa.';
+  function prepCost() {
+    const n = Math.max(1, Math.min(S.cams.filter((c) => !c.error).length, maxImages()));
+    let tokens = 0;
+    if (!S.osd.items.length) tokens += n * imgTokens(1024, 576) + 700 + n * 120;
+    const item = osdItem(S.osd.camKey);
+    const cam = camByKey(S.osd.camKey) || S.cams[0];
+    if (!S.track.length && cam && isFinite(cam.duration) && (!S.osd.items.length || (item && item.has))) tokens += ocrCost(cam).tokens;
+    if (!S.index.length) tokens += indexCost().tokens;
+    return tokens;
+  }
+  function renderPrep() {
+    const box = $('#prepSteps');
+    if (!box) return;
+    const run = S.prepRun;
+    const item = osdItem(S.osd.camKey);
+    const osdDone = S.osd.items.length > 0;
+    const steps = [
+      {
+        label: 'Leer los datos en pantalla',
+        s: run === 0 ? 'run' : osdDone ? 'ok' : 'pend',
+        det: osdDone ? (item && item.has ? `coordenadas en ${(camByKey(item.key) || {}).label || 'una cámara'}` : 'sin coordenadas en pantalla') : '',
+      },
+      {
+        label: 'Recorrido GPS',
+        s: run === 1 ? 'run' : S.track.length ? 'ok' : osdDone && !(item && item.has) ? 'skip' : 'pend',
+        det: S.track.length ? `${S.track.length} puntos` : osdDone && !(item && item.has) ? 'no disponible' : '',
+      },
+      {
+        label: 'Índice de lo que pasa',
+        s: run === 2 ? 'run' : S.index.length ? 'ok' : 'pend',
+        det: S.index.length ? `${S.index.length} momento${S.index.length === 1 ? '' : 's'}` : '',
+      },
+    ];
+    box.replaceChildren(
+      ...steps.map((st, i) =>
+        el('li', { 'data-s': st.s }, el('span', { class: 'ico', text: st.s === 'ok' ? '✓' : st.s === 'skip' ? '–' : String(i + 1) }), el('span', { text: st.label }), el('span', { class: 'det', text: st.det })),
+      ),
+    );
+    const warn = $('#prepWarn');
+    const msg = S.sample === null ? 'El análisis con Claude solo funciona con la página abierta dentro de claude.ai.' : S.aiOff || (imagesOff() ? NO_IMAGES : '');
+    warn.hidden = !msg;
+    warn.textContent = msg;
+    const all = osdDone && S.index.length && (S.track.length || !(item && item.has));
+    $('#btnPrep').textContent = all ? 'Volver a preparar' : 'Preparar video';
+    const est = $('#prepEstimate');
+    if (!S.cams.length) est.textContent = 'Carga los videos para calcular el consumo.';
+    else if (!S.duration) est.textContent = '';
+    else if (all) est.textContent = `Rehacer el índice: ≈ ${kTok(indexCost().tokens)}`;
+    else est.textContent = `≈ ${kTok(prepCost())} con el modelo ${TIERS[S.tier].toLowerCase()}`;
+  }
+  async function runPipeline() {
+    if (!S.cams.length || !S.duration) return toast('Primero carga los videos de las cámaras.', 'err');
+    if (S.busy) return;
+    if (!aiReady()) return;
+    pause();
+    const b = busyStart('Preparando el video…');
+    const redo = S.osd.items.length && S.index.length;
     try {
-      let images;
-      let note = '';
-      let askImgTok = 0;
-      if (withImg) {
-        const frames = await framesAt(S.t, 640, b);
-        if (!frames) return;
-        if (frames.length) {
-          const mo = mosaic(frames.map((f) => ({ canvas: f.canvas, label: f.cam.label })), `Momento actual · ${hms(S.t)}`, 500000);
-          askImgTok = imgTokens(mo.width, mo.height);
-          images = [await toJpeg(mo, 0.8)];
-          note = `\n\n(Adjunto un mosaico de las cámaras en el momento actual: ${momentText(S.t)}.)`;
-        }
+      S.prepRun = 0;
+      renderPrep();
+      if (!S.osd.items.length) {
+        busySet('Leyendo los datos en pantalla…', null);
+        await coreDetect(b);
+        if (b.stopped) return;
+        renderAll();
       }
-      const rules = [
-        RULES,
-        'Estás respondiendo preguntas del operador sobre este video. Usa los hallazgos registrados y, si se adjunta, la imagen del momento actual. Si la información no alcanza para responder, dilo y sugiere qué momento o cámara revisar o qué enfoque usar. Responde en texto normal (sin JSON), breve y útil; usa viñetas cuando ayude.',
-        `Contexto:\n${contextText()}`,
-        `Hallazgos registrados hasta ahora:\n${digest(8000)}`,
-      ].join('\n\n');
-      const hist = S.chat.slice(-12).map((m) => ({ role: m.role, content: m.content }));
-      if (hist[0] && hist[0].role !== 'user') hist.shift();
-      hist[hist.length - 1] = { role: 'user', content: q + note };
-      const opts = {
-        modelTier: S.tier,
-        cache: false,
-        signal: b.ctl.signal,
-        onText: ({ text: t }) => {
-          bubble.classList.remove('thinking');
-          bubble.textContent = t;
-        },
-      };
-      if (images) opts.images = images;
-      const { text } = await S.sample([{ role: 'user', content: rules }, ...hist], opts);
-      S.chat.push({ role: 'assistant', content: text });
-      spend(askImgTok + textTokens(rules) + hist.reduce((a, m) => a + textTokens(m.content), 0) + textTokens(text));
+      S.prepRun = 1;
+      renderPrep();
+      const item = osdItem(S.osd.camKey);
+      if (!S.track.length && item && item.has) {
+        try {
+          await coreExtract(b);
+        } catch (e) {
+          if (!(e && e.code === 'local')) throw e;
+          toast(e.message, 'err');
+        }
+        if (b.stopped) return;
+      }
+      S.prepRun = 2;
+      renderPrep();
+      if (!S.index.length || redo) await coreIndex(b);
+      if (b.stopped) return;
+      toast('Video preparado. Escribe arriba lo que quieras buscar.', 'ok');
+      $('#q').focus();
     } catch (e) {
-      if (e && e.text) S.chat.push({ role: 'assistant', content: `${e.text} …` });
       onAiError(e);
     } finally {
+      S.prepRun = null;
       busyEnd();
-      renderChat();
+      renderAll();
     }
   }
-  function renderChat() {
-    const box = $('#chat');
-    box.replaceChildren();
-    if (!S.chat.length) {
-      box.append(
-        el('p', { class: 'hint', text: 'Pregunta lo que necesites sobre el video. Claude usa los análisis que ya hiciste y, si lo marcas, las cámaras del momento actual.' }),
-      );
+  function maybeAutoRun() {
+    if (!S.autoRun || S.autoTried || S.busy) return;
+    if (!S.cams.length || S.cams.some((c) => !c.error && !isFinite(c.duration))) return;
+    if (S.sample === undefined || !S.sample || S.aiOff || imagesOff()) return;
+    if (S.index.length) return;
+    S.autoTried = true;
+    runPipeline();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Búsqueda: responde al instante con el índice (solo texto, barato)
+  // ---------------------------------------------------------------------------
+  const QUICK = [
+    'Resumen de lo que pasa en el video',
+    '¿Hubo peleas, robos o situaciones de riesgo?',
+    '¿Cuándo suben y bajan más pasajeros?',
+    '¿Qué hizo el conductor? ¿Usó el celular?',
+    '¿Cuándo estuvo detenido y cuándo fue más rápido?',
+    '¿Alguna cámara se ve mal o tapada?',
+  ];
+  function renderQuick() {
+    const box = $('#quickQs');
+    box.replaceChildren(
+      ...QUICK.map((q) =>
+        el('button', {
+          class: 'qchip',
+          type: 'button',
+          text: q,
+          onclick: () => {
+            $('#q').value = q;
+            search(q);
+          },
+        }),
+      ),
+    );
+  }
+  async function search(q) {
+    if (S.busy) return;
+    if (!aiReady(false)) return;
+    if (!S.index.length && !S.analyses.length && !S.track.length) {
+      toast(S.cams.length ? 'Primero pulsa “Preparar video” para que Claude tenga de dónde buscar.' : 'Primero carga los videos de las cámaras.', 'err');
       return;
     }
-    for (const m of S.chat) box.append(el('div', { class: `msg ${m.role === 'user' ? 'user' : 'bot'}`, text: m.content }));
-    box.scrollTop = box.scrollHeight;
+    const item = { id: uid(), q, a: '', at: Date.now(), pending: true };
+    S.qa.unshift(item);
+    S.qaOpen = 1;
+    renderAnswers();
+    const b = busyStart('Buscando…');
+    const prompt = [
+      RULES,
+      'Responde la búsqueda del operador usando SOLO el índice del video, los análisis y los datos GPS de abajo. Sé directo: primero la respuesta en una o dos frases y luego, en viñetas, los momentos donde ocurre, cada uno con su tiempo de video entre corchetes en formato [hh:mm:ss] y la cámara si se sabe. Si no hay información suficiente, dilo y sugiere en qué tiempo revisar con el botón "¿Qué pasa aquí?". Máximo 8 líneas.',
+      `Contexto:\n${contextText()}`,
+      `Índice del video (tiempo de video, hora del equipo y lo que se ve):\n${indexText(14000)}`,
+      S.analyses.length ? `Análisis puntuales:\n${digest(6000)}` : '',
+      S.track.length ? `Datos GPS (muestra del recorrido):\n${gpsText(60)}` : '',
+      `Búsqueda: ${q}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+    try {
+      const { text } = await S.sample(prompt, {
+        modelTier: S.tier,
+        signal: b.ctl.signal,
+        onText: ({ text: t }) => {
+          item.a = t;
+          item.pending = false;
+          renderAnswers();
+        },
+      });
+      item.a = text;
+      spend(textTokens(prompt) + textTokens(text));
+    } catch (e) {
+      if (e && e.text) item.a = e.text;
+      else S.qa = S.qa.filter((x) => x !== item);
+      onAiError(e);
+    } finally {
+      item.pending = false;
+      busyEnd();
+      persist();
+      renderAnswers();
+    }
+  }
+  function richLine(text) {
+    const frag = document.createDocumentFragment();
+    const parts = String(text).split(/(\*\*[^*]+\*\*|\[?\b\d{1,2}:\d{2}:\d{2}\b\]?)/);
+    for (const part of parts) {
+      if (!part) continue;
+      const tm = part.match(/^\[?(\d{1,2}):(\d{2}):(\d{2})\]?$/);
+      if (tm) {
+        const t = +tm[1] * 3600 + +tm[2] * 60 + +tm[3];
+        if (S.duration && t <= S.duration + 1) {
+          frag.append(tchip(t));
+          continue;
+        }
+      }
+      if (/^\*\*[^*]+\*\*$/.test(part)) frag.append(el('strong', { text: part.slice(2, -2) }));
+      else frag.append(part);
+    }
+    return frag;
+  }
+  function renderAnswers() {
+    const box = $('#answers');
+    box.replaceChildren();
+    const shown = S.qa.slice(0, S.qaOpen || 1);
+    for (const it of shown) {
+      const a = el('div', { class: 'a' });
+      if (it.pending && !it.a) a.append(el('span', { class: 'thinking', text: 'Buscando en el índice del video…' }));
+      else {
+        for (const raw of String(it.a).split(/\r?\n/)) {
+          const line = raw.trim();
+          if (!line) continue;
+          const m = line.match(/^(?:[-*•]|\d+[.)])\s+(.*)$/);
+          if (m) a.append(el('div', { class: 'li' }, richLine(m[1])));
+          else a.append(el('div', null, richLine(line.replace(/^#+\s*/, ''))));
+        }
+      }
+      box.append(
+        el(
+          'div',
+          { class: 'answer' },
+          el(
+            'div',
+            { class: 'q' },
+            el('span', { text: it.q }),
+            el('button', {
+              class: 'btn ghost small',
+              type: 'button',
+              text: 'Quitar',
+              onclick: () => {
+                S.qa = S.qa.filter((x) => x !== it);
+                persist();
+                renderAnswers();
+              },
+            }),
+          ),
+          a,
+        ),
+      );
+    }
+    if (S.qa.length > shown.length) {
+      box.append(
+        el('button', {
+          class: 'btn ghost small more-answers',
+          type: 'button',
+          text: `Ver búsquedas anteriores (${S.qa.length - shown.length})`,
+          onclick: () => {
+            S.qaOpen = S.qa.length;
+            renderAnswers();
+          },
+        }),
+      );
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1663,73 +1884,78 @@
     return list.map((b) => ({ left: 0, right: 1, ...b }));
   }
 
+  async function coreDetect(b) {
+    const cams = S.cams.filter((c) => !c.error && isFinite(c.duration)).slice(0, maxImages());
+    const frames = [];
+    for (const cam of cams) {
+      const t = clamp(cam.duration * 0.1, 0, Math.max(0, cam.duration - 1));
+      const cv = await grabAt(cam, t);
+      if (b.stopped) return null;
+      frames.push({ cam, canvas: cv, t });
+      S.frameCache.set(cam.key, cv);
+    }
+    if (!frames.length) throw { code: 'local', message: 'No hay cámaras listas para revisar.' };
+    let detTok = 0;
+    const images = await Promise.all(
+      frames.map((f) => {
+        const c = f.canvas.width > 1024 ? drawCanvasScaled(f.canvas, 1024) : f.canvas;
+        detTok += imgTokens(c.width, c.height);
+        return toJpeg(c, 0.9);
+      }),
+    );
+    busySet('Claude está leyendo el texto en pantalla…', null);
+    const prompt = [
+      `Te envío ${frames.length} imagen(es); cada una es un fotograma de una cámara distinta de un autobús: ${frames.map((f, i) => `imagen ${i + 1} = ${f.cam.label}`).join(', ')}.`,
+      'Estas cámaras suelen tener texto sobreimpreso (OSD) con datos como el número de la unidad, el canal (CH), la fecha y hora, la velocidad y las coordenadas GPS.',
+      'Para cada imagen:\n- copia el texto sobreimpreso tal como aparece;\n- indica si contiene coordenadas GPS (latitud y longitud);\n- da el recuadro donde están las líneas de texto con coordenadas, fecha/hora y velocidad: arriba y abajo como fracción de la altura (0 = borde superior, 1 = borde inferior) e izquierda y derecha como fracción del ancho (0 = borde izquierdo, 1 = borde derecho). Si esos datos están en dos zonas separadas, da hasta 2 recuadros. Cada recuadro debe contener las líneas de texto completas, con un poco de margen.',
+      'Responde SOLO con JSON con esta forma:',
+      '{"camaras":[{"imagen":1,"canal":"CH1","bus":null,"texto":"texto sobreimpreso","tiene_coordenadas":false,"franjas":[{"arriba":0.0,"abajo":0.07,"izquierda":0.0,"derecha":0.55}],"lat":null,"lon":null,"fecha_hora":null,"velocidad_kmh":null}]}',
+      'Coordenadas en grados decimales con signo (sur y oeste negativos; convierte grados-minutos-segundos si hace falta). fecha_hora como AAAA-MM-DD HH:MM:SS.',
+    ].join('\n\n');
+    const data = await S.sample.json(prompt, { images, modelTier: S.tier, signal: b.ctl.signal });
+    spend(detTok + textTokens(prompt) + textTokens(JSON.stringify(data)));
+    const list = Array.isArray(data && data.camaras) ? data.camaras : Array.isArray(data) ? data : [];
+    const items = [];
+    list.forEach((it, i) => {
+      const fr = frames[(Math.round(num(it && it.imagen)) || i + 1) - 1];
+      if (!fr || !it) return;
+      const lat = num(it.lat);
+      const lon = num(it.lon);
+      const has = !!it.tiene_coordenadas && validLL(lat, lon);
+      const item = {
+        key: fr.cam.key,
+        canal: it.canal ? String(it.canal).toUpperCase().replace(/\s+/g, '') : null,
+        bus: it.bus ? String(it.bus) : null,
+        texto: String(it.texto || ''),
+        has,
+        bands: normBands(it.franjas),
+        lat: has ? lat : null,
+        lon: has ? lon : null,
+        clock: parseClock(it.fecha_hora),
+        speed: numOrNull(it.velocidad_kmh),
+        t: fr.t + fr.cam.offset,
+      };
+      items.push(item);
+      if (item.canal && /^CH\d{1,2}$/.test(item.canal) && /^CÁM /.test(fr.cam.label)) {
+        fr.cam.label = item.canal;
+        if (fr.cam.lblInput) fr.cam.lblInput.value = item.canal;
+      }
+      if (item.bus && !S.busId) S.busId = item.bus.slice(0, 24);
+      if (item.clock != null && !S.osdClockRef) S.osdClockRef = { t: item.t, clock: item.clock };
+    });
+    const chosen = items.find((i) => i.has);
+    S.osd = { items, camKey: chosen ? chosen.key : S.osd.camKey || (items[0] && items[0].key) || null, bands: {} };
+    persist();
+    return chosen || null;
+  }
   async function detectOSD() {
     if (!S.cams.length) return toast('Primero carga los videos de las cámaras.', 'err');
     if (!aiReady()) return;
     pause();
     const b = busyStart('Capturando un fotograma de cada cámara…');
     try {
-      const cams = S.cams.filter((c) => !c.error && isFinite(c.duration)).slice(0, maxImages());
-      const frames = [];
-      for (const cam of cams) {
-        const t = clamp(cam.duration * 0.1, 0, Math.max(0, cam.duration - 1));
-        const cv = await grabAt(cam, t);
-        if (b.stopped) return;
-        frames.push({ cam, canvas: cv, t });
-        S.frameCache.set(cam.key, cv);
-      }
-      if (!frames.length) throw { code: 'local', message: 'No hay cámaras listas para revisar.' };
-      let detTok = 0;
-      const images = await Promise.all(
-        frames.map((f) => {
-          const c = f.canvas.width > 1024 ? drawCanvasScaled(f.canvas, 1024) : f.canvas;
-          detTok += imgTokens(c.width, c.height);
-          return toJpeg(c, 0.9);
-        }),
-      );
-      busySet('Claude está leyendo el texto en pantalla…', null);
-      const prompt = [
-        `Te envío ${frames.length} imagen(es); cada una es un fotograma de una cámara distinta de un autobús: ${frames.map((f, i) => `imagen ${i + 1} = ${f.cam.label}`).join(', ')}.`,
-        'Estas cámaras suelen tener texto sobreimpreso (OSD) con datos como el número de la unidad, el canal (CH), la fecha y hora, la velocidad y las coordenadas GPS.',
-        'Para cada imagen:\n- copia el texto sobreimpreso tal como aparece;\n- indica si contiene coordenadas GPS (latitud y longitud);\n- da el recuadro donde están las líneas de texto con coordenadas, fecha/hora y velocidad: arriba y abajo como fracción de la altura (0 = borde superior, 1 = borde inferior) e izquierda y derecha como fracción del ancho (0 = borde izquierdo, 1 = borde derecho). Si esos datos están en dos zonas separadas, da hasta 2 recuadros. Cada recuadro debe contener las líneas de texto completas, con un poco de margen.',
-        'Responde SOLO con JSON con esta forma:',
-        '{"camaras":[{"imagen":1,"canal":"CH1","bus":null,"texto":"texto sobreimpreso","tiene_coordenadas":false,"franjas":[{"arriba":0.0,"abajo":0.07,"izquierda":0.0,"derecha":0.55}],"lat":null,"lon":null,"fecha_hora":null,"velocidad_kmh":null}]}',
-        'Coordenadas en grados decimales con signo (sur y oeste negativos; convierte grados-minutos-segundos si hace falta). fecha_hora como AAAA-MM-DD HH:MM:SS.',
-      ].join('\n\n');
-      const data = await S.sample.json(prompt, { images, modelTier: S.tier, signal: b.ctl.signal });
-      spend(detTok + textTokens(prompt) + textTokens(JSON.stringify(data)));
-      const list = Array.isArray(data && data.camaras) ? data.camaras : Array.isArray(data) ? data : [];
-      const items = [];
-      list.forEach((it, i) => {
-        const fr = frames[(Math.round(num(it && it.imagen)) || i + 1) - 1];
-        if (!fr || !it) return;
-        const lat = num(it.lat);
-        const lon = num(it.lon);
-        const has = !!it.tiene_coordenadas && validLL(lat, lon);
-        const item = {
-          key: fr.cam.key,
-          canal: it.canal ? String(it.canal).toUpperCase().replace(/\s+/g, '') : null,
-          bus: it.bus ? String(it.bus) : null,
-          texto: String(it.texto || ''),
-          has,
-          bands: normBands(it.franjas),
-          lat: has ? lat : null,
-          lon: has ? lon : null,
-          clock: parseClock(it.fecha_hora),
-          speed: numOrNull(it.velocidad_kmh),
-          t: fr.t + fr.cam.offset,
-        };
-        items.push(item);
-        if (item.canal && /^CH\d{1,2}$/.test(item.canal) && /^CÁM /.test(fr.cam.label)) {
-          fr.cam.label = item.canal;
-          if (fr.cam.lblInput) fr.cam.lblInput.value = item.canal;
-        }
-        if (item.bus && !S.busId) S.busId = item.bus.slice(0, 24);
-        if (item.clock != null && !S.osdClockRef) S.osdClockRef = { t: item.t, clock: item.clock };
-      });
-      const chosen = items.find((i) => i.has);
-      S.osd = { items, camKey: chosen ? chosen.key : S.osd.camKey || (items[0] && items[0].key) || null, bands: {} };
-      persist();
+      const chosen = await coreDetect(b);
+      if (b.stopped) return;
       renderAll();
       if (chosen) toast(`Encontré coordenadas en ${camByKey(chosen.key).label}. Revisa la franja y extrae el recorrido.`, 'ok');
       else toast('No encontré coordenadas escritas en las cámaras. Puedes ajustar la franja a mano o importar un archivo de recorrido.', 'err');
@@ -1846,7 +2072,8 @@
     if (!box) return;
     const n = S.cams.filter((c) => !c.error).length;
     if (!n) {
-      box.textContent = 'Consumo aproximado por acción: carga videos para calcularlo.';
+      box.textContent = '';
+      renderPrep();
       return;
     }
     const cam = S.cams[0];
@@ -1854,81 +2081,86 @@
     const vh = cam.video.videoHeight || 720;
     const s = Math.min(1, 768 / vw);
     const moment = (n <= maxImages() ? n * imgTokens(vw * s, vh * s) : 800) + 900 + 180 * n + 250;
-    const K = Math.min(Number($('#ovCount').value) || 8, maxImages());
-    const overview = K * 800 + 1100 + K * 110 + 350;
-    box.textContent = `Consumo aproximado (modelo ${TIERS[S.tier].toLowerCase()}): este momento ≈ ${kTok(moment)} · análisis general ≈ ${kTok(overview)}.`;
+    box.textContent = `“¿Qué pasa aquí?” gasta ≈ ${kTok(moment)} con el modelo ${TIERS[S.tier].toLowerCase()}. Buscar arriba gasta ≈ ${kTok(3500)} (solo texto).`;
+    renderPrep();
   }
 
-  async function extractTrack() {
+
+  async function coreExtract(b) {
     const cam = camByKey(S.osd.camKey);
-    if (!cam) return toast('Elige la cámara que muestra las coordenadas.', 'err');
-    if (!aiReady()) return;
-    pause();
+    if (!cam) throw { code: 'local', message: 'Elige la cámara que muestra las coordenadas.' };
     const bands = bandsFor(cam.key);
     const item = osdItem(cam.key);
     const { times } = ocrPlan(cam);
-    if (times.length < 2) return toast('El video es demasiado corto para armar un recorrido.', 'err');
-    const b = busyStart(`Leyendo el video 0/${times.length}…`);
-    try {
-      await ensureProbe(cam);
-      const rows = [];
-      for (let i = 0; i < times.length; i++) {
-        const frame = await grabAt(cam, times[i]);
-        if (b.stopped) return;
-        rows.push({ n: i + 1, t: times[i], canvas: cropBands(frame, bands) });
-        if (i % 3 === 0 || i === times.length - 1) busySet(`Leyendo el video ${i + 1}/${times.length}…`, ((i + 1) / times.length) * 0.5);
-      }
-      const comps = buildComposites(rows);
-      const perCall = Math.max(1, Math.min(maxImages(), 4));
-      const groups = [];
-      for (let i = 0; i < comps.length; i += perCall) groups.push(comps.slice(i, i + perCall));
-      const results = new Map();
-      let failed = 0;
-      const ref = item && item.has ? `En una lectura previa este texto decía: "${item.texto.slice(0, 200)}", que corresponde a lat ${item.lat}, lon ${item.lon}.` : '';
-      let ocrTok = 0;
-      for (let gi = 0; gi < groups.length; gi++) {
-        if (b.stopped) return;
-        busySet(`Claude está leyendo las coordenadas ${gi + 1}/${groups.length}…`, 0.5 + (gi / groups.length) * 0.5);
-        const g = groups[gi];
-        const ns = g.flatMap((c) => c.ns);
-        const images = await Promise.all(g.map((c) => toJpeg(c.canvas, 0.92)));
-        ocrTok += g.reduce((a, c) => a + imgTokens(c.canvas.width, c.canvas.height), 0);
-        const prompt = [
-          `Cada imagen contiene franjas numeradas (#${ns[0]} a #${ns[ns.length - 1]}) recortadas del texto sobreimpreso de una cámara de autobús en distintos momentos. ${ref}`,
-          'Lee en cada franja la latitud, la longitud, la fecha y hora, y la velocidad. Convierte las coordenadas a grados decimales con signo (sur y oeste negativos; convierte grados-minutos o grados-minutos-segundos si hace falta). Copia los dígitos con cuidado y no adivines.',
-          `Responde SOLO con un JSON array con un objeto por franja, en orden: [{"n":${ns[0]},"lat":0.0,"lon":0.0,"fecha_hora":"AAAA-MM-DD HH:MM:SS","velocidad_kmh":0}]`,
-          'Si en una franja no se puede leer un dato, pon null en ese campo.',
-        ].join('\n\n');
-        try {
-          const data = await S.sample.json(prompt, { images, modelTier: 'quick', signal: b.ctl.signal });
-          ocrTok += textTokens(prompt) + textTokens(JSON.stringify(data));
-          const list = Array.isArray(data) ? data : (data && (data.franjas || data.resultados || data.puntos)) || [];
-          for (const r of list) {
-            const n = Math.round(num(r && r.n));
-            if (ns.includes(n)) results.set(n, r);
-          }
-        } catch (e) {
-          if (e && (e.code === 'invalid_json' || e.code === 'upstream_error' || e.code === 'empty_completion')) {
-            failed++;
-            continue;
-          }
-          throw e;
+    if (times.length < 2) throw { code: 'local', message: 'El video es demasiado corto para armar un recorrido.' };
+    await ensureProbe(cam);
+    const rows = [];
+    for (let i = 0; i < times.length; i++) {
+      const frame = await grabAt(cam, times[i]);
+      if (b.stopped) return null;
+      rows.push({ n: i + 1, t: times[i], canvas: cropBands(frame, bands) });
+      if (i % 3 === 0 || i === times.length - 1) busySet(`Leyendo el video ${i + 1}/${times.length}…`, ((i + 1) / times.length) * 0.5);
+    }
+    const comps = buildComposites(rows);
+    const perCall = Math.max(1, Math.min(maxImages(), 4));
+    const groups = [];
+    for (let i = 0; i < comps.length; i += perCall) groups.push(comps.slice(i, i + perCall));
+    const results = new Map();
+    let failed = 0;
+    const ref = item && item.has ? `En una lectura previa este texto decía: "${item.texto.slice(0, 200)}", que corresponde a lat ${item.lat}, lon ${item.lon}.` : '';
+    let ocrTok = 0;
+    for (let gi = 0; gi < groups.length; gi++) {
+      if (b.stopped) return null;
+      busySet(`Claude está leyendo las coordenadas ${gi + 1}/${groups.length}…`, 0.5 + (gi / groups.length) * 0.5);
+      const g = groups[gi];
+      const ns = g.flatMap((c) => c.ns);
+      const images = await Promise.all(g.map((c) => toJpeg(c.canvas, 0.92)));
+      ocrTok += g.reduce((a, c) => a + imgTokens(c.canvas.width, c.canvas.height), 0);
+      const prompt = [
+        `Cada imagen contiene franjas numeradas (#${ns[0]} a #${ns[ns.length - 1]}) recortadas del texto sobreimpreso de una cámara de autobús en distintos momentos. ${ref}`,
+        'Lee en cada franja la latitud, la longitud, la fecha y hora, y la velocidad. Convierte las coordenadas a grados decimales con signo (sur y oeste negativos; convierte grados-minutos o grados-minutos-segundos si hace falta). Copia los dígitos con cuidado y no adivines.',
+        `Responde SOLO con un JSON array con un objeto por franja, en orden: [{"n":${ns[0]},"lat":0.0,"lon":0.0,"fecha_hora":"AAAA-MM-DD HH:MM:SS","velocidad_kmh":0}]`,
+        'Si en una franja no se puede leer un dato, pon null en ese campo.',
+      ].join('\n\n');
+      try {
+        const data = await S.sample.json(prompt, { images, modelTier: 'quick', signal: b.ctl.signal });
+        ocrTok += textTokens(prompt) + textTokens(JSON.stringify(data));
+        const list = Array.isArray(data) ? data : (data && (data.franjas || data.resultados || data.puntos)) || [];
+        for (const r of list) {
+          const n = Math.round(num(r && r.n));
+          if (ns.includes(n)) results.set(n, r);
         }
+      } catch (e) {
+        if (e && (e.code === 'invalid_json' || e.code === 'upstream_error' || e.code === 'empty_completion')) {
+          failed++;
+          continue;
+        }
+        throw e;
       }
-      spend(ocrTok);
-      const pts = [];
-      for (const row of rows) {
-        const r = results.get(row.n);
-        if (!r) continue;
-        const lat = num(r.lat);
-        const lon = num(r.lon);
-        if (!validLL(lat, lon)) continue;
-        pts.push({ t: row.t + cam.offset, lat, lon, speed: numOrNull(r.velocidad_kmh ?? r.velocidad), clock: parseClock(r.fecha_hora) });
-      }
-      const clean = cleanTrack(pts);
-      if (clean.length < 2) throw { code: 'local', message: 'No se pudieron leer suficientes coordenadas. Revisa que la franja del paso 2 contenga el texto completo y vuelve a intentarlo.' };
-      setTrack(clean, { source: 'video', cam: cam.label, read: rows.length, ok: clean.length });
-      toast(`Recorrido listo: ${clean.length} puntos válidos de ${rows.length} lecturas${failed ? ` (${failed} grupo(s) no se pudieron leer)` : ''}.`, 'ok');
+    }
+    spend(ocrTok);
+    const pts = [];
+    for (const row of rows) {
+      const r = results.get(row.n);
+      if (!r) continue;
+      const lat = num(r.lat);
+      const lon = num(r.lon);
+      if (!validLL(lat, lon)) continue;
+      pts.push({ t: row.t + cam.offset, lat, lon, speed: numOrNull(r.velocidad_kmh ?? r.velocidad), clock: parseClock(r.fecha_hora) });
+    }
+    const clean = cleanTrack(pts);
+    if (clean.length < 2) throw { code: 'local', message: 'No se pudieron leer suficientes coordenadas. Revisa que la franja del paso 2 contenga el texto completo y vuelve a intentarlo.' };
+    setTrack(clean, { source: 'video', cam: cam.label, read: rows.length, ok: clean.length });
+    return { ok: clean.length, read: rows.length, failed };
+  }
+  async function extractTrack() {
+    if (!camByKey(S.osd.camKey)) return toast('Elige la cámara que muestra las coordenadas.', 'err');
+    if (!aiReady()) return;
+    pause();
+    const b = busyStart('Leyendo el video…');
+    try {
+      const r = await coreExtract(b);
+      if (r) toast(`Recorrido listo: ${r.ok} puntos válidos de ${r.read} lecturas${r.failed ? ` (${r.failed} grupo(s) no se pudieron leer)` : ''}.`, 'ok');
     } catch (e) {
       onAiError(e);
     } finally {
@@ -2128,7 +2360,7 @@
   // ---------------------------------------------------------------------------
   async function writeReport() {
     if (!aiReady(false)) return;
-    if (!S.analyses.length && !S.track.length) return toast('Primero analiza el video o extrae el recorrido.', 'err');
+    if (!S.analyses.length && !S.index.length && !S.track.length) return toast('Primero prepara el video.', 'err');
     const out = $('#report');
     const b = busyStart('Claude está redactando el informe…');
     out.replaceChildren(el('p', { class: 'muted', text: 'Redactando…' }));
@@ -2140,7 +2372,8 @@
       S.track.length > 1
         ? `Recorrido: ${S.track.length} puntos GPS, ${st.km.toFixed(1)} km, velocidad máxima ${st.vmax ?? 'sin dato'} km/h, velocidad promedio ${st.vavg ?? 'sin dato'} km/h, de ${S.track[0].lat.toFixed(5)}, ${S.track[0].lon.toFixed(5)} a ${S.track[S.track.length - 1].lat.toFixed(5)}, ${S.track[S.track.length - 1].lon.toFixed(5)}.`
         : 'Recorrido: sin datos GPS.',
-      `Hallazgos registrados:\n${digest(12000)}`,
+      `Índice del video:\n${indexText(9000)}`,
+      `Análisis puntuales:\n${digest(5000)}`,
     ].join('\n\n');
     try {
       const { text, truncated } = await S.sample(prompt, {
@@ -2391,15 +2624,38 @@
     );
     return card;
   }
+  function indexRow(e) {
+    return el(
+      'div',
+      { class: 'idx-row', 'data-t': String(e.t) },
+      tchip(e.t),
+      el(
+        'div',
+        null,
+        el('span', { text: e.texto }),
+        e.personas != null ? el('span', { class: 'meta small muted', text: ` · ${e.personas} persona${e.personas === 1 ? '' : 's'}` }) : null,
+        e.eventos.length ? el('ul', null, e.eventos.map((x) => el('li', { text: x }))) : null,
+        e.riesgo !== 'ninguno' ? riskBadge(e.riesgo) : null,
+      ),
+    );
+  }
   function renderResults() {
     const box = $('#results');
     box.replaceChildren();
-    if (!S.analyses.length) {
-      box.append(el('p', { class: 'hint', text: 'Así se verá cada análisis. Pausa el video donde quieras y pulsa “Analizar este momento”.' }), exampleCard());
+    if (!S.analyses.length && !S.index.length) {
+      box.append(el('p', { class: 'hint', text: 'Así se verá cada análisis. Pausa el video donde quieras y pulsa “¿Qué pasa aquí?”.' }), exampleCard());
       return;
     }
-    for (const a of S.analyses) box.append(a.kind === 'momento' ? momentCard(a) : generalCard(a));
+    if (S.analyses.length) {
+      box.append(el('h3', { class: 'section-title', text: 'Momentos analizados' }));
+      for (const a of S.analyses) box.append(a.kind === 'momento' ? momentCard(a) : generalCard(a));
+    }
+    if (S.index.length) {
+      box.append(el('h3', { class: 'section-title' }, 'Índice del video', el('span', { class: 'mono small muted', text: `${S.index.length} momentos${S.indexFocus ? ` · enfoque ${S.indexFocus}` : ''}` })));
+      box.append(el('div', { class: 'index-list' }, S.index.map(indexRow)));
+    }
   }
+
   function statTiles(target, list) {
     target.replaceChildren(
       ...list.map(([k, v, unit]) => el('div', { class: 'stat' }, el('span', { class: 'label', text: k }), el('div', { class: 'v' }, v, unit ? el('small', { text: ` ${unit}` }) : null))),
@@ -2568,14 +2824,15 @@
     t.append(body);
   }
   function renderCounts() {
-    $('#cntA').textContent = S.analyses.length ? String(S.analyses.length) : '';
+    $('#cntA').textContent = S.analyses.length + S.index.length ? String(S.analyses.length + S.index.length) : '';
     $('#cntR').textContent = S.track.length ? String(S.track.length) : '';
   }
   function refreshButtons() {
     const busy = !!S.busy;
     const noCams = !S.cams.length;
-    for (const id of ['#btnMoment', '#btnOverview', '#btnDetect', '#btnExtract']) $(id).disabled = busy || noCams;
-    $('#btnAsk').disabled = busy;
+    for (const id of ['#btnMoment', '#btnHere', '#btnDetect', '#btnExtract', '#btnPrep']) $(id).disabled = busy || noCams;
+    $('#btnSearch').disabled = busy;
+    for (const b of document.querySelectorAll('.qchip')) b.disabled = busy;
     $('#btnReport').disabled = busy;
     $('#btnPlay').disabled = noCams;
     $('#btnBack').disabled = noCams;
@@ -2585,18 +2842,20 @@
     $('#btnDlHtml').disabled = !hasReport;
     $('#btnCopy').disabled = !hasReport;
   }
+
   function renderAll() {
     renderSession();
     renderResults();
     renderStats();
     renderGps();
     renderCounts();
+    renderPrep();
     updateEstimates();
     refreshButtons();
     onTime(true);
   }
   function showTab(k) {
-    for (const t of ['a', 'r', 'q', 'i']) {
+    for (const t of ['a', 'r', 'i']) {
       $(`#tab-${t}`).setAttribute('aria-selected', String(t === k));
       $(`#p-${t}`).hidden = t !== k;
     }
@@ -2624,7 +2883,9 @@
       osdClockRef: S.osdClockRef,
       busId: S.busId,
       analyses: S.analyses.slice(0, 60),
-      chat: S.chat.slice(-40),
+      index: S.index,
+      indexFocus: S.indexFocus,
+      qa: S.qa.filter((x) => !x.pending).slice(0, 20),
       reportMd: S.reportMd,
       usage: S.usage,
     });
@@ -2648,13 +2909,16 @@
     S.osdClockRef = saved.osdClockRef || null;
     S.busId = saved.busId || null;
     S.analyses = Array.isArray(saved.analyses) ? saved.analyses : [];
-    S.chat = Array.isArray(saved.chat) ? saved.chat : [];
+    S.index = Array.isArray(saved.index) ? saved.index : [];
+    S.indexFocus = saved.indexFocus || null;
+    S.qa = Array.isArray(saved.qa) ? saved.qa : [];
     S.reportMd = saved.reportMd || '';
     S.usage = Number(saved.usage) || 0;
-    renderChat();
+    renderAnswers();
+    renderEvents();
     renderRoute();
     renderReportEmpty();
-    if (S.analyses.length || S.track.length) toast('Recuperé el trabajo anterior con estos mismos videos.', 'ok');
+    if (S.analyses.length || S.track.length || S.index.length) toast('Recuperé el trabajo anterior con estos mismos videos.', 'ok');
   }
 
   // ---------------------------------------------------------------------------
@@ -2716,7 +2980,22 @@
     });
 
     $('#btnMoment').addEventListener('click', analyzeMoment);
-    $('#btnOverview').addEventListener('click', analyzeOverview);
+    $('#btnHere').addEventListener('click', analyzeMoment);
+    $('#btnPrep').addEventListener('click', runPipeline);
+    $('#autoRun').addEventListener('change', (e) => {
+      S.autoRun = e.target.checked;
+      store.set('cofcam:auto', S.autoRun);
+      if (S.autoRun) {
+        S.autoTried = false;
+        maybeAutoRun();
+      }
+    });
+    $('#idxEvery').addEventListener('change', renderPrep);
+    $('#searchForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const q = $('#q').value.trim();
+      if (q) search(q);
+    });
     $('#newFocusForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const nombre = $('#nfName').value.trim();
@@ -2743,7 +3022,6 @@
       ocrEstimate();
     });
     $('#ocrEvery').addEventListener('change', ocrEstimate);
-    $('#ovCount').addEventListener('change', updateEstimates);
     $('#trackFile').addEventListener('change', (e) => {
       const f = e.target.files && e.target.files[0];
       e.target.value = '';
@@ -2768,22 +3046,6 @@
         Mp.baseKey = null;
       }
       toast('Recorrido borrado.');
-    });
-
-    $('#askForm').addEventListener('submit', (e) => {
-      e.preventDefault();
-      const q = $('#askInput').value.trim();
-      if (!q || S.busy) return;
-      $('#askInput').value = '';
-      askQuestion(q);
-    });
-    $('#askInput').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('#askForm').requestSubmit();
-    });
-    $('#btnClearChat').addEventListener('click', () => {
-      S.chat = [];
-      persist();
-      renderChat();
     });
 
     $('#btnReport').addEventListener('click', writeReport);
@@ -2811,7 +3073,7 @@
     });
     $('#btnAddr').addEventListener('click', whereIsBus);
 
-    for (const k of ['a', 'r', 'q', 'i']) $(`#tab-${k}`).addEventListener('click', () => showTab(k));
+    for (const k of ['a', 'r', 'i']) $(`#tab-${k}`).addEventListener('click', () => showTab(k));
     if (window.ResizeObserver) new ResizeObserver(() => drawLane()).observe($('#lane'));
   }
 
@@ -2830,7 +3092,9 @@
     renderFocus();
     renderAll();
     renderReportEmpty();
-    renderChat();
+    renderQuick();
+    renderAnswers();
+    $('#autoRun').checked = S.autoRun;
     updatePlayBtn();
     let tab = 'a';
     try {
@@ -2838,7 +3102,7 @@
     } catch {
       /* sin almacenamiento */
     }
-    showTab(['a', 'r', 'q', 'i'].includes(tab) ? tab : 'a');
+    showTab(['a', 'r', 'i'].includes(tab) ? tab : 'a');
     initCaps();
   }
   start();
