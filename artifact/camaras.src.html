@@ -629,11 +629,11 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
             <textarea id="extraInstr" rows="2" placeholder="Ej. Revisa si alguien deja una mochila en los asientos del fondo."></textarea>
           </div>
           <div class="btn-row">
-            <span class="label">Profundidad</span>
-            <div class="seg" id="tierSeg" role="group" aria-label="Profundidad del análisis">
-              <button data-tier="quick" aria-pressed="false">Rápido</button>
-              <button data-tier="default" aria-pressed="true">Normal</button>
-              <button data-tier="complex" aria-pressed="false">Máxima</button>
+            <span class="label">Modelo</span>
+            <div class="seg" id="tierSeg" role="group" aria-label="Modelo de IA">
+              <button data-tier="quick" aria-pressed="true" title="El más rápido y el que menos gasta de tu plan">Ligero</button>
+              <button data-tier="default" aria-pressed="false" title="Más detallado, gasta más">Normal</button>
+              <button data-tier="complex" aria-pressed="false" title="El más capaz, gasta mucho más">Máximo</button>
             </div>
           </div>
           <div class="btn-row">
@@ -646,6 +646,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
               <option value="16">16 momentos</option>
             </select>
           </div>
+          <p class="hint" id="estAnalysis"></p>
           <p class="privacy">Se envían a Claude, desde tu cuenta, solo los fotogramas de cada consulta. El video completo no sale de tu equipo.</p>
           <div class="results" id="results"></div>
         </div>
@@ -660,7 +661,7 @@ table.pts tr:hover td { background: var(--accent-soft); cursor: pointer; }
           </div>
           <div class="step" id="bandStep" hidden>
             <h3><span class="n">2</span>Franja a leer</h3>
-            <p class="hint">Esta es la franja que se leerá en cada momento. Si no contiene todas las coordenadas, ajústala en porcentaje de la altura.</p>
+            <p class="hint">Este es el recuadro que se leerá en cada momento. Si no contiene todas las coordenadas, ajústalo en porcentaje del alto y del ancho del video.</p>
             <div class="field"><label class="label" for="osdCam">Cámara con coordenadas</label><select id="osdCam"></select></div>
             <canvas class="crop-preview" id="bandPreview"></canvas>
             <div class="band-grid" id="bandInputs"></div>

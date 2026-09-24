@@ -172,7 +172,7 @@
       instr: 'Enfócate en el estado del vehículo y de las cámaras: limpieza, daños visibles, asientos, iluminación, objetos sueltos, y cámaras borrosas, obstruidas o sin señal.',
     },
   ];
-  const TIERS = { quick: 'Rápido', default: 'Normal', complex: 'Máxima' };
+  const TIERS = { quick: 'Ligero', default: 'Normal', complex: 'Máximo' };
   const RULES =
     'Eres un analista profesional de video de seguridad para flotas de transporte público. Analizas grabaciones de las cámaras a bordo de un autobús (MDVR). ' +
     'Escribe siempre en español claro, profesional y concreto, como en un reporte de monitoreo. Describe solo lo que realmente se ve; si algo no se distingue bien, dilo ("no se distingue", "posiblemente"). ' +
@@ -199,7 +199,8 @@
     chat: [],
     reportMd: '',
     focusId: 'general',
-    tier: 'default',
+    tier: 'quick',
+    usage: 0,
     customFocus: store.get('cofcam:focus', []),
     sample: undefined,
     limits: null,
@@ -283,6 +284,8 @@
         } else {
           S.limits = await s.limits().catch(() => null);
           setPill('#aiPill', 'on', S.limits && S.limits.images ? 'Claude: listo' : 'Claude: listo, sin imágenes');
+          updateEstimates();
+          ocrEstimate();
         }
         refreshButtons();
       })
@@ -368,6 +371,18 @@
     }
     return true;
   }
+  // Estimación de tokens: una imagen cuesta aprox. ancho×alto/750 (la plataforma la reduce a ~1,15 MP).
+  function imgTokens(w, h) {
+    const s = Math.min(1, Math.sqrt(1150000 / Math.max(1, w * h)));
+    return Math.ceil((w * s * h * s) / 750);
+  }
+  const textTokens = (x) => Math.ceil(String(x || '').length / 3.5);
+  function spend(tokens) {
+    S.usage += Math.max(0, Math.round(tokens));
+    persist();
+    renderSession();
+  }
+  const kTok = (n) => (n < 1000 ? `${Math.max(100, Math.round(n / 100) * 100)} tokens` : `${(n / 1000).toFixed(n < 10000 ? 1 : 0)} mil tokens`);
   const maxImages = () => Math.max(1, (S.limits && S.limits.images && S.limits.images.maxCount) || 1);
 
   // ---------------------------------------------------------------------------
@@ -1261,13 +1276,13 @@
     }
     return frames;
   }
-  function mosaic(items, caption) {
+  function mosaic(items, caption, budget = 600000) {
     const n = items.length;
     const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
     const rows = Math.ceil(n / cols);
     const ar = items[0].canvas.width / items[0].canvas.height || 16 / 9;
     const capH = caption ? 36 : 0;
-    const tw = Math.min(1280, Math.floor(Math.sqrt((1150000 * ar) / (cols * rows))));
+    const tw = Math.min(1280, Math.floor(Math.sqrt((budget * ar) / (cols * rows))));
     const th = Math.round(tw / ar);
     const c = canvas(cols * tw, rows * th + capH);
     const g = c.getContext('2d');
@@ -1374,16 +1389,20 @@
     const t = S.t;
     const b = busyStart('Capturando las cámaras…');
     try {
-      const frames = await framesAt(t, 1280, b);
+      const frames = await framesAt(t, 768, b);
       if (!frames) return;
       if (!frames.length) throw { code: 'local', message: 'Ninguna cámara tiene grabación en este momento.' };
       let images;
       let layout;
+      let imgTok = 0;
       if (frames.length <= maxImages()) {
-        images = await Promise.all(frames.map((f) => toJpeg(f.canvas)));
+        images = await Promise.all(frames.map((f) => toJpeg(f.canvas, 0.8)));
+        imgTok = frames.reduce((a, f) => a + imgTokens(f.canvas.width, f.canvas.height), 0);
         layout = `${frames.length} imagen(es), una por cámara: ${frames.map((f, i) => `imagen ${i + 1} = ${f.cam.label}`).join(', ')}.`;
       } else {
-        images = [await toJpeg(mosaic(frames.map((f) => ({ canvas: f.canvas, label: f.cam.label }))))];
+        const mo = mosaic(frames.map((f) => ({ canvas: f.canvas, label: f.cam.label })));
+        images = [await toJpeg(mo, 0.8)];
+        imgTok = imgTokens(mo.width, mo.height);
         layout = `una imagen tipo mosaico con las cámaras rotuladas: ${frames.map((f) => f.cam.label).join(', ')}.`;
       }
       busySet('Claude está analizando las cámaras…', null);
@@ -1397,6 +1416,7 @@
         'Incluye un objeto en "camaras" por cada cámara. "personas" es el número aproximado de personas visibles en esa cámara (null si no aplica). En "datos_pantalla" copia lo que diga el texto sobreimpreso si existe: coordenadas en grados decimales con signo (sur y oeste negativos) y fecha_hora como AAAA-MM-DD HH:MM:SS. Si no hay alertas, deja la lista vacía.',
       ].join('\n\n');
       const data = await S.sample.json(prompt, { images, modelTier: S.tier, signal: b.ctl.signal });
+      spend(imgTok + textTokens(prompt) + textTokens(JSON.stringify(data)));
       const d = data && typeof data === 'object' ? data : {};
       const camaras = (Array.isArray(d.camaras) ? d.camaras : []).map((c, i) => ({
         camara: String((c && c.camara) || (frames[i] && frames[i].cam.label) || `Cámara ${i + 1}`),
@@ -1458,14 +1478,17 @@
     try {
       const images = [];
       const used = [];
+      let imgTok = 0;
       for (let i = 0; i < times.length; i++) {
         busySet(`Capturando momentos ${i + 1}/${K}…`, (i + 1) / K);
-        const frames = await framesAt(times[i], 960, b);
+        const frames = await framesAt(times[i], 640, b);
         if (!frames) return;
         if (!frames.length) continue;
         const clk = clockAt(times[i]);
         const caption = `Momento ${used.length + 1} · ${hms(times[i])}${clk != null ? ` · ${fmtClock(clk, false)}` : ''}`;
-        images.push(await toJpeg(mosaic(frames.map((f) => ({ canvas: f.canvas, label: f.cam.label })), caption), 0.82));
+        const mo = mosaic(frames.map((f) => ({ canvas: f.canvas, label: f.cam.label })), caption);
+        imgTok += imgTokens(mo.width, mo.height);
+        images.push(await toJpeg(mo, 0.8));
         used.push(times[i]);
       }
       if (!images.length) throw { code: 'local', message: 'No se pudieron capturar fotogramas del video.' };
@@ -1481,6 +1504,7 @@
         `Incluye un objeto por cada momento, del 1 al ${images.length}, en orden.`,
       ].join('\n\n');
       const data = await S.sample.json(prompt, { images, modelTier: S.tier, signal: b.ctl.signal });
+      spend(imgTok + textTokens(prompt) + textTokens(JSON.stringify(data)));
       const d = data && typeof data === 'object' ? data : {};
       const momentos = (Array.isArray(d.momentos) ? d.momentos : [])
         .map((m, i) => {
@@ -1530,11 +1554,14 @@
     try {
       let images;
       let note = '';
+      let askImgTok = 0;
       if (withImg) {
-        const frames = await framesAt(S.t, 960, b);
+        const frames = await framesAt(S.t, 640, b);
         if (!frames) return;
         if (frames.length) {
-          images = [await toJpeg(mosaic(frames.map((f) => ({ canvas: f.canvas, label: f.cam.label })), `Momento actual · ${hms(S.t)}`), 0.85)];
+          const mo = mosaic(frames.map((f) => ({ canvas: f.canvas, label: f.cam.label })), `Momento actual · ${hms(S.t)}`, 500000);
+          askImgTok = imgTokens(mo.width, mo.height);
+          images = [await toJpeg(mo, 0.8)];
           note = `\n\n(Adjunto un mosaico de las cámaras en el momento actual: ${momentText(S.t)}.)`;
         }
       }
@@ -1542,7 +1569,7 @@
         RULES,
         'Estás respondiendo preguntas del operador sobre este video. Usa los hallazgos registrados y, si se adjunta, la imagen del momento actual. Si la información no alcanza para responder, dilo y sugiere qué momento o cámara revisar o qué enfoque usar. Responde en texto normal (sin JSON), breve y útil; usa viñetas cuando ayude.',
         `Contexto:\n${contextText()}`,
-        `Hallazgos registrados hasta ahora:\n${digest(16000)}`,
+        `Hallazgos registrados hasta ahora:\n${digest(8000)}`,
       ].join('\n\n');
       const hist = S.chat.slice(-12).map((m) => ({ role: m.role, content: m.content }));
       if (hist[0] && hist[0].role !== 'user') hist.shift();
@@ -1559,7 +1586,7 @@
       if (images) opts.images = images;
       const { text } = await S.sample([{ role: 'user', content: rules }, ...hist], opts);
       S.chat.push({ role: 'assistant', content: text });
-      persist();
+      spend(askImgTok + textTokens(rules) + hist.reduce((a, m) => a + textTokens(m.content), 0) + textTokens(text));
     } catch (e) {
       if (e && e.text) S.chat.push({ role: 'assistant', content: `${e.text} …` });
       onAiError(e);
@@ -1586,9 +1613,16 @@
   // ---------------------------------------------------------------------------
   function normBands(fr) {
     let list = (Array.isArray(fr) ? fr : fr ? [fr] : [])
-      .map((b) => ({ top: num(b && (b.arriba ?? b.top)), bottom: num(b && (b.abajo ?? b.bottom)) }))
+      .map((b) => ({
+        top: num(b && (b.arriba ?? b.top)),
+        bottom: num(b && (b.abajo ?? b.bottom)),
+        left: num(b && (b.izquierda ?? b.left)),
+        right: num(b && (b.derecha ?? b.right)),
+      }))
       .filter((b) => isFinite(b.top) && isFinite(b.bottom));
-    if (list.some((b) => b.top > 1.5 || b.bottom > 1.5)) list = list.map((b) => ({ top: b.top / 100, bottom: b.bottom / 100 }));
+    if (list.some((b) => b.top > 1.5 || b.bottom > 1.5 || b.left > 1.5 || b.right > 1.5)) {
+      list = list.map((b) => ({ top: b.top / 100, bottom: b.bottom / 100, left: b.left / 100, right: b.right / 100 }));
+    }
     list = list
       .map((b) => {
         let top = clamp(Math.min(b.top, b.bottom) - 0.012, 0, 1);
@@ -1598,21 +1632,35 @@
           top = clamp(c - 0.02, 0, 0.96);
           bottom = top + 0.04;
         }
-        return { top: +top.toFixed(3), bottom: +bottom.toFixed(3) };
+        let left = isFinite(b.left) ? b.left : 0;
+        let right = isFinite(b.right) ? b.right : 1;
+        const l0 = Math.min(left, right);
+        const r0 = Math.max(left, right);
+        left = clamp(l0 - 0.05, 0, 1);
+        right = clamp(r0 + 0.08, 0, 1);
+        if (right - left < 0.15) {
+          left = 0;
+          right = 1;
+        }
+        return { top: +top.toFixed(3), bottom: +bottom.toFixed(3), left: +left.toFixed(3), right: +right.toFixed(3) };
       })
       .sort((a, b) => a.top - b.top);
     const merged = [];
     for (const b of list) {
       const last = merged[merged.length - 1];
-      if (last && b.top <= last.bottom + 0.01) last.bottom = Math.max(last.bottom, b.bottom);
-      else merged.push({ ...b });
+      if (last && b.top <= last.bottom + 0.01) {
+        last.bottom = Math.max(last.bottom, b.bottom);
+        last.left = Math.min(last.left, b.left);
+        last.right = Math.max(last.right, b.right);
+      } else merged.push({ ...b });
     }
     return merged.slice(0, 2);
   }
   const camByKey = (k) => S.cams.find((c) => c.key === k) || null;
   const osdItem = (k) => S.osd.items.find((i) => i.key === k) || null;
   function bandsFor(key) {
-    return S.osd.bands[key] || (osdItem(key) && osdItem(key).bands.length ? osdItem(key).bands : [{ top: 0, bottom: 0.1 }]);
+    const list = S.osd.bands[key] || (osdItem(key) && osdItem(key).bands.length ? osdItem(key).bands : [{ top: 0, bottom: 0.1, left: 0, right: 1 }]);
+    return list.map((b) => ({ left: 0, right: 1, ...b }));
   }
 
   async function detectOSD() {
@@ -1631,22 +1679,25 @@
         S.frameCache.set(cam.key, cv);
       }
       if (!frames.length) throw { code: 'local', message: 'No hay cámaras listas para revisar.' };
+      let detTok = 0;
       const images = await Promise.all(
         frames.map((f) => {
-          const c = f.canvas.width > 1600 ? drawCanvasScaled(f.canvas, 1600) : f.canvas;
-          return toJpeg(c, 0.92);
+          const c = f.canvas.width > 1024 ? drawCanvasScaled(f.canvas, 1024) : f.canvas;
+          detTok += imgTokens(c.width, c.height);
+          return toJpeg(c, 0.9);
         }),
       );
       busySet('Claude está leyendo el texto en pantalla…', null);
       const prompt = [
         `Te envío ${frames.length} imagen(es); cada una es un fotograma de una cámara distinta de un autobús: ${frames.map((f, i) => `imagen ${i + 1} = ${f.cam.label}`).join(', ')}.`,
         'Estas cámaras suelen tener texto sobreimpreso (OSD) con datos como el número de la unidad, el canal (CH), la fecha y hora, la velocidad y las coordenadas GPS.',
-        'Para cada imagen:\n- copia el texto sobreimpreso tal como aparece;\n- indica si contiene coordenadas GPS (latitud y longitud);\n- da la franja horizontal donde están las líneas de texto con coordenadas, fecha/hora y velocidad, como fracción de la altura de la imagen (0 = borde superior, 1 = borde inferior). Si esos datos están en dos zonas separadas, da hasta 2 franjas. Cada franja debe contener la línea de texto completa, con un poco de margen.',
+        'Para cada imagen:\n- copia el texto sobreimpreso tal como aparece;\n- indica si contiene coordenadas GPS (latitud y longitud);\n- da el recuadro donde están las líneas de texto con coordenadas, fecha/hora y velocidad: arriba y abajo como fracción de la altura (0 = borde superior, 1 = borde inferior) e izquierda y derecha como fracción del ancho (0 = borde izquierdo, 1 = borde derecho). Si esos datos están en dos zonas separadas, da hasta 2 recuadros. Cada recuadro debe contener las líneas de texto completas, con un poco de margen.',
         'Responde SOLO con JSON con esta forma:',
-        '{"camaras":[{"imagen":1,"canal":"CH1","bus":null,"texto":"texto sobreimpreso","tiene_coordenadas":false,"franjas":[{"arriba":0.0,"abajo":0.07}],"lat":null,"lon":null,"fecha_hora":null,"velocidad_kmh":null}]}',
+        '{"camaras":[{"imagen":1,"canal":"CH1","bus":null,"texto":"texto sobreimpreso","tiene_coordenadas":false,"franjas":[{"arriba":0.0,"abajo":0.07,"izquierda":0.0,"derecha":0.55}],"lat":null,"lon":null,"fecha_hora":null,"velocidad_kmh":null}]}',
         'Coordenadas en grados decimales con signo (sur y oeste negativos; convierte grados-minutos-segundos si hace falta). fecha_hora como AAAA-MM-DD HH:MM:SS.',
       ].join('\n\n');
-      const data = await S.sample.json(prompt, { images, modelTier: 'default', signal: b.ctl.signal });
+      const data = await S.sample.json(prompt, { images, modelTier: S.tier, signal: b.ctl.signal });
+      spend(detTok + textTokens(prompt) + textTokens(JSON.stringify(data)));
       const list = Array.isArray(data && data.camaras) ? data.camaras : Array.isArray(data) ? data : [];
       const items = [];
       list.forEach((it, i) => {
@@ -1694,15 +1745,18 @@
     c.getContext('2d').drawImage(src, 0, 0, c.width, c.height);
     return c;
   }
-  function cropBands(frame, bands, W) {
+  function cropBands(frame, bands) {
     const fw = frame.width;
     const fh = frame.height;
-    const s = W / fw;
     const parts = bands.map((b) => {
       const sy = Math.max(0, Math.floor(b.top * fh));
       const ey = Math.min(fh, Math.ceil(b.bottom * fh));
-      return { sy, sh: Math.max(4, ey - sy) };
+      const sx = Math.max(0, Math.floor((b.left ?? 0) * fw));
+      const ex = Math.min(fw, Math.ceil((b.right ?? 1) * fw));
+      return { sx, sy, sw: Math.max(8, ex - sx), sh: Math.max(4, ey - sy) };
     });
+    const s = Math.min(1, 1100 / Math.max(...parts.map((p) => p.sw)));
+    const W = Math.round(Math.max(...parts.map((p) => p.sw)) * s);
     const H = parts.reduce((a, p) => a + Math.round(p.sh * s), 0) + (parts.length - 1) * 3;
     const c = canvas(W, H);
     const g = c.getContext('2d');
@@ -1711,7 +1765,7 @@
     let y = 0;
     for (const p of parts) {
       const dh = Math.round(p.sh * s);
-      g.drawImage(frame, 0, p.sy, fw, p.sh, 0, y, W, dh);
+      g.drawImage(frame, p.sx, p.sy, p.sw, p.sh, 0, y, Math.round(p.sw * s), dh);
       y += dh + 3;
     }
     return c;
@@ -1756,11 +1810,26 @@
   function ocrPlan(cam) {
     const v = $('#ocrEvery').value;
     const dur = cam && isFinite(cam.duration) ? cam.duration : 0;
-    const every = v === 'auto' ? Math.max(5, Math.ceil(dur / 180)) : Number(v);
+    const every = v === 'auto' ? Math.max(5, Math.ceil(dur / 150)) : Number(v);
     const times = [];
     for (let t = Math.min(1, dur / 2); t < dur - 0.3; t += every) times.push(+t.toFixed(2));
     if (times.length > 400) times.length = 400;
     return { every, times };
+  }
+  function ocrCost(cam) {
+    const { every, times } = ocrPlan(cam);
+    const vw = cam.video.videoWidth || 1280;
+    const vh = cam.video.videoHeight || 720;
+    const bands = bandsFor(cam.key);
+    const sw = Math.max(...bands.map((b) => (b.right - b.left) * vw));
+    const sc = Math.min(1, 1100 / sw);
+    const rowW = 72 + sw * sc;
+    const rowH = bands.reduce((a, b) => a + (b.bottom - b.top) * vh * sc + 3, 0) + 6;
+    const perComp = clamp(Math.floor(1150000 / (rowW * rowH)), 1, 24);
+    const comps = Math.ceil(times.length / perComp);
+    const calls = Math.ceil(comps / Math.max(1, Math.min(maxImages(), 4)));
+    const tokens = Math.round(times.length * rowW * rowH / 750 + calls * 350 + times.length * 40);
+    return { every, n: times.length, calls, tokens };
   }
   function ocrEstimate() {
     const cam = camByKey(S.osd.camKey);
@@ -1769,12 +1838,25 @@
       out.textContent = '';
       return;
     }
-    const { every, times } = ocrPlan(cam);
-    const rowH = bandsFor(cam.key).reduce((a, b) => a + (b.bottom - b.top), 0) * (cam.video.videoHeight || 720) * (Math.min(1100, cam.video.videoWidth || 1280) / (cam.video.videoWidth || 1280));
-    const perComp = clamp(Math.floor(1150000 / ((1172) * (rowH + 6))), 1, 24);
-    const comps = Math.ceil(times.length / perComp);
-    const calls = Math.ceil(comps / Math.max(1, Math.min(maxImages(), 4)));
-    out.textContent = `${times.length} lecturas (cada ${every} s) · unas ${calls} consulta${calls === 1 ? '' : 's'} a Claude`;
+    const c = ocrCost(cam);
+    out.textContent = `${c.n} lecturas (cada ${c.every} s) · ${c.calls} consulta${c.calls === 1 ? '' : 's'} · ≈ ${kTok(c.tokens)}`;
+  }
+  function updateEstimates() {
+    const box = $('#estAnalysis');
+    if (!box) return;
+    const n = S.cams.filter((c) => !c.error).length;
+    if (!n) {
+      box.textContent = 'Consumo aproximado por acción: carga videos para calcularlo.';
+      return;
+    }
+    const cam = S.cams[0];
+    const vw = cam.video.videoWidth || 1280;
+    const vh = cam.video.videoHeight || 720;
+    const s = Math.min(1, 768 / vw);
+    const moment = (n <= maxImages() ? n * imgTokens(vw * s, vh * s) : 800) + 900 + 180 * n + 250;
+    const K = Math.min(Number($('#ovCount').value) || 8, maxImages());
+    const overview = K * 800 + 1100 + K * 110 + 350;
+    box.textContent = `Consumo aproximado (modelo ${TIERS[S.tier].toLowerCase()}): este momento ≈ ${kTok(moment)} · análisis general ≈ ${kTok(overview)}.`;
   }
 
   async function extractTrack() {
@@ -1788,13 +1870,12 @@
     if (times.length < 2) return toast('El video es demasiado corto para armar un recorrido.', 'err');
     const b = busyStart(`Leyendo el video 0/${times.length}…`);
     try {
-      const v = await ensureProbe(cam);
-      const W = Math.min(1100, v.videoWidth || 1100);
+      await ensureProbe(cam);
       const rows = [];
       for (let i = 0; i < times.length; i++) {
         const frame = await grabAt(cam, times[i]);
         if (b.stopped) return;
-        rows.push({ n: i + 1, t: times[i], canvas: cropBands(frame, bands, W) });
+        rows.push({ n: i + 1, t: times[i], canvas: cropBands(frame, bands) });
         if (i % 3 === 0 || i === times.length - 1) busySet(`Leyendo el video ${i + 1}/${times.length}…`, ((i + 1) / times.length) * 0.5);
       }
       const comps = buildComposites(rows);
@@ -1804,12 +1885,14 @@
       const results = new Map();
       let failed = 0;
       const ref = item && item.has ? `En una lectura previa este texto decía: "${item.texto.slice(0, 200)}", que corresponde a lat ${item.lat}, lon ${item.lon}.` : '';
+      let ocrTok = 0;
       for (let gi = 0; gi < groups.length; gi++) {
         if (b.stopped) return;
         busySet(`Claude está leyendo las coordenadas ${gi + 1}/${groups.length}…`, 0.5 + (gi / groups.length) * 0.5);
         const g = groups[gi];
         const ns = g.flatMap((c) => c.ns);
         const images = await Promise.all(g.map((c) => toJpeg(c.canvas, 0.92)));
+        ocrTok += g.reduce((a, c) => a + imgTokens(c.canvas.width, c.canvas.height), 0);
         const prompt = [
           `Cada imagen contiene franjas numeradas (#${ns[0]} a #${ns[ns.length - 1]}) recortadas del texto sobreimpreso de una cámara de autobús en distintos momentos. ${ref}`,
           'Lee en cada franja la latitud, la longitud, la fecha y hora, y la velocidad. Convierte las coordenadas a grados decimales con signo (sur y oeste negativos; convierte grados-minutos o grados-minutos-segundos si hace falta). Copia los dígitos con cuidado y no adivines.',
@@ -1818,6 +1901,7 @@
         ].join('\n\n');
         try {
           const data = await S.sample.json(prompt, { images, modelTier: 'quick', signal: b.ctl.signal });
+          ocrTok += textTokens(prompt) + textTokens(JSON.stringify(data));
           const list = Array.isArray(data) ? data : (data && (data.franjas || data.resultados || data.puntos)) || [];
           for (const r of list) {
             const n = Math.round(num(r && r.n));
@@ -1831,6 +1915,7 @@
           throw e;
         }
       }
+      spend(ocrTok);
       const pts = [];
       for (const row of rows) {
         const r = results.get(row.n);
@@ -2055,17 +2140,18 @@
       S.track.length > 1
         ? `Recorrido: ${S.track.length} puntos GPS, ${st.km.toFixed(1)} km, velocidad máxima ${st.vmax ?? 'sin dato'} km/h, velocidad promedio ${st.vavg ?? 'sin dato'} km/h, de ${S.track[0].lat.toFixed(5)}, ${S.track[0].lon.toFixed(5)} a ${S.track[S.track.length - 1].lat.toFixed(5)}, ${S.track[S.track.length - 1].lon.toFixed(5)}.`
         : 'Recorrido: sin datos GPS.',
-      `Hallazgos registrados:\n${digest(30000)}`,
+      `Hallazgos registrados:\n${digest(12000)}`,
     ].join('\n\n');
     try {
       const { text, truncated } = await S.sample(prompt, {
-        modelTier: S.tier === 'quick' ? 'default' : S.tier,
+        modelTier: S.tier,
         cache: false,
         signal: b.ctl.signal,
         onText: ({ text: t }) => renderMd(out, t),
       });
       S.reportMd = text;
       renderMd(out, text);
+      spend(textTokens(prompt) + textTokens(text));
       if (truncated) toast('El informe quedó cortado por su longitud. Puedes pedirlo de nuevo con menos análisis.', 'err');
       persist();
     } catch (e) {
@@ -2161,6 +2247,7 @@
     box.append(chip('Cámaras', String(S.cams.length)));
     if (S.duration) box.append(chip('Duración', hms(S.duration)));
     if (S.track.length) box.append(chip('GPS', `${S.track.length} pts`));
+    if (S.usage) box.append(chip('Uso aprox.', kTok(S.usage)));
   }
   function renderFocus() {
     const box = $('#focusChips');
@@ -2388,6 +2475,8 @@
       for (const [prop, name] of [
         ['top', 'arriba'],
         ['bottom', 'abajo'],
+        ['left', 'izquierda'],
+        ['right', 'derecha'],
       ]) {
         const id = `band-${i}-${prop}`;
         const input = el('input', { type: 'number', id, min: 0, max: 100, step: 0.5 });
@@ -2407,7 +2496,7 @@
           type: 'button',
           text: 'Agregar franja',
           onclick: () => {
-            bands.push({ top: 0.9, bottom: 1 });
+            bands.push({ top: 0.9, bottom: 1, left: 0, right: 1 });
             commit();
             renderBandInputs();
           },
@@ -2431,8 +2520,9 @@
   }
   function normBandsManual(list) {
     return list
-      .map((b) => ({ top: Math.min(b.top, b.bottom), bottom: Math.max(b.top, b.bottom) }))
-      .map((b) => (b.bottom - b.top < 0.01 ? { top: b.top, bottom: Math.min(1, b.top + 0.02) } : b));
+      .map((b) => ({ top: Math.min(b.top, b.bottom), bottom: Math.max(b.top, b.bottom), left: Math.min(b.left, b.right), right: Math.max(b.left, b.right) }))
+      .map((b) => (b.bottom - b.top < 0.01 ? { ...b, bottom: Math.min(1, b.top + 0.02) } : b))
+      .map((b) => (b.right - b.left < 0.05 ? { ...b, left: 0, right: 1 } : b));
   }
   let previewToken = 0;
   async function drawBandPreview() {
@@ -2452,7 +2542,7 @@
       }
     }
     if (token !== previewToken) return;
-    const crop = cropBands(frame, bandsFor(key), Math.min(1100, frame.width));
+    const crop = cropBands(frame, bandsFor(key));
     cv.width = crop.width;
     cv.height = crop.height;
     cv.getContext('2d').drawImage(crop, 0, 0);
@@ -2501,6 +2591,7 @@
     renderStats();
     renderGps();
     renderCounts();
+    updateEstimates();
     refreshButtons();
     onTime(true);
   }
@@ -2535,6 +2626,7 @@
       analyses: S.analyses.slice(0, 60),
       chat: S.chat.slice(-40),
       reportMd: S.reportMd,
+      usage: S.usage,
     });
   }
   function restoreSession() {
@@ -2558,6 +2650,7 @@
     S.analyses = Array.isArray(saved.analyses) ? saved.analyses : [];
     S.chat = Array.isArray(saved.chat) ? saved.chat : [];
     S.reportMd = saved.reportMd || '';
+    S.usage = Number(saved.usage) || 0;
     renderChat();
     renderRoute();
     renderReportEmpty();
@@ -2599,7 +2692,8 @@
     for (const b of document.querySelectorAll('#tierSeg button')) {
       b.addEventListener('click', () => {
         S.tier = b.dataset.tier;
-        store.set('cofcam:tier', S.tier);
+        store.set('cofcam:tier2', S.tier);
+        updateEstimates();
         for (const x of document.querySelectorAll('#tierSeg button')) x.setAttribute('aria-pressed', String(x === b));
       });
     }
@@ -2649,6 +2743,7 @@
       ocrEstimate();
     });
     $('#ocrEvery').addEventListener('change', ocrEstimate);
+    $('#ovCount').addEventListener('change', updateEstimates);
     $('#trackFile').addEventListener('change', (e) => {
       const f = e.target.files && e.target.files[0];
       e.target.value = '';
@@ -2724,7 +2819,7 @@
   // Inicio
   // ---------------------------------------------------------------------------
   function start() {
-    const tier = store.get('cofcam:tier', 'default');
+    const tier = store.get('cofcam:tier2', 'quick');
     if (TIERS[tier]) S.tier = tier;
     for (const x of document.querySelectorAll('#tierSeg button')) x.setAttribute('aria-pressed', String(x.dataset.tier === S.tier));
     const sel = store.get('cofcam:focusSel', 'general');
