@@ -326,7 +326,8 @@
     pro: ['gemini-pro-latest', 'gemini-3.1-pro-preview', 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-flash-lite-latest'],
   };
   const MODELS = {
-    quick: ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.6-flash', 'gemini-3-flash-preview', 'gemma-4-26b-a4b-it'],
+    // 3.5 Flash-Lite responde bien pero muy lento: queda al final.
+    quick: ['gemini-flash-lite-latest', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-3.6-flash', 'gemini-flash-latest', 'gemma-4-26b-a4b-it', 'gemini-3.5-flash-lite'],
     get main() { return MAIN[S.ai] || MAIN.flash; },
   };
   // Tarifas de Google en US$ por millón de tokens (entrada, salida), para estimar el gasto.
@@ -348,7 +349,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-10';
+  const VERSION = '2026.09.25-11';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1337,12 +1338,42 @@
   // Cuánto cambia la imagen de una cámara de puerta, cuadro a cuadro (4 por segundo), durante una detención.
   // Se ignoran las franjas del texto sobreimpreso y los cambios de brillo de toda la imagen.
   const MOTION_STEP = 0.25;
+  // Los cuadros se leen del archivo con WebCodecs (Mediabunny), decodificando en orden: no se mueve ningún
+  // video de la página, así la lectura de coordenadas y la reproducción no esperan. Si no se puede, se
+  // usa el método antiguo (saltar en el video).
+  const motionSinks = new WeakMap();
+  async function motionSink(c) {
+    if (!c.file || !window.VideoDecoder) return null;
+    if (!motionSinks.has(c)) {
+      motionSinks.set(c, (async () => {
+        const M = await mediabunny();
+        const track = await new M.Input({ formats: M.ALL_FORMATS, source: new M.BlobSource(c.file) }).getPrimaryVideoTrack();
+        if (!track || !(await track.canDecode())) return null;
+        return new M.CanvasSink(track, { width: 160, poolSize: 2 });
+      })().catch(() => null));
+    }
+    return motionSinks.get(c);
+  }
+  async function* motionFrames(c, times) {
+    const sink = await motionSink(c);
+    if (sink) {
+      const it = sink.canvasesAtTimestamps(times.map((t) => Math.max(0, t + c.off)));
+      let i = 0;
+      for await (const w of it) {
+        const t = times[i++];
+        yield { t, f: w && t + c.off >= 0 && t + c.off <= c.dur ? w.canvas : null };
+      }
+      return;
+    }
+    for (const t of times) yield { t, f: await frameOf(c, t, 160) };
+  }
   async function motionOf(c, t0, t1, run) {
     const out = [];
+    const times = [];
+    for (let t = t0; t <= t1 + 1e-6; t += MOTION_STEP) times.push(t);
     let prev = null;
-    for (let t = t0; t <= t1 + 1e-6; t += MOTION_STEP) {
+    for await (const { t, f } of motionFrames(c, times)) {
       if (run !== S.run) return out;
-      const f = await frameOf(c, t, 160);
       if (!f) { prev = null; continue; }
       const y0 = Math.round(f.height * 0.14);
       const h = Math.round(f.height * 0.86) - y0;
