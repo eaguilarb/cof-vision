@@ -262,7 +262,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   const BATCH = 8;
-  const STOP_IMAGES = 36;
+  const STOP_IMAGES = 24;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
     puerta_central: 'Puerta central',
@@ -534,16 +534,23 @@
     });
   }
   // Fotograma de una cámara en un instante de la línea de tiempo principal (null si no grabó).
-  async function frameOf(c, t, maxW) {
+  // El recorrido y el conteo leen en paralelo: cada cámara atiende una lectura a la vez.
+  const locks = new WeakMap();
+  function frameOf(c, t, maxW) {
     const tc = t + c.off;
-    if (c.bad || tc < 0 || tc > c.dur - 0.05) return null;
-    await seek(c.probe, tc);
-    const s = Math.min(1, maxW / (c.probe.videoWidth || maxW));
-    const cv = document.createElement('canvas');
-    cv.width = Math.round((c.probe.videoWidth || 1280) * s);
-    cv.height = Math.round((c.probe.videoHeight || 720) * s);
-    cv.getContext('2d').drawImage(c.probe, 0, 0, cv.width, cv.height);
-    return cv;
+    if (c.bad || tc < 0 || tc > c.dur - 0.05) return Promise.resolve(null);
+    const job = async () => {
+      await seek(c.probe, tc);
+      const s = Math.min(1, maxW / (c.probe.videoWidth || maxW));
+      const cv = document.createElement('canvas');
+      cv.width = Math.round((c.probe.videoWidth || 1280) * s);
+      cv.height = Math.round((c.probe.videoHeight || 720) * s);
+      cv.getContext('2d').drawImage(c.probe, 0, 0, cv.width, cv.height);
+      return cv;
+    };
+    const next = (locks.get(c.probe) || Promise.resolve()).then(job, job);
+    locks.set(c.probe, next.catch(() => null));
+    return next;
   }
   const jpeg = (cv, q) => cv.toDataURL('image/jpeg', q || 0.85).split(',')[1];
   // Mosaico rotulado con todas las cámaras en un instante.
@@ -677,14 +684,22 @@
     if (!S.D) return status('No se pudo leer la duración del video.', null, true);
     S.running = true;
     S.paused = false;
+    S.prog = null;
+    S.counting = null;
     renderControls();
     try {
       if (!(await identify(run))) return;
       S.step = S.D <= 120 ? 2 : S.D <= 900 ? 4 : 6;
       const m = mainCam();
       if (m && (tRef() < S.range.from - 1 || tRef() > S.range.to)) m.video.currentTime = clamp(S.range.from + m.off, 0, Math.max(0, m.dur - 0.1));
-      if (!(await tour(run))) return;
-      if (!(await countStops(run, false))) return;
+      // El conteo de pasajeros corre en paralelo con el recorrido (usa otro modelo, con su propio límite).
+      let tourDone = false;
+      const counting = counter(run, () => tourDone);
+      counting.catch(() => {});
+      const ok = await tour(run);
+      tourDone = true;
+      if (!ok) return;
+      if (!(await counting)) return;
       await addresses(run);
     } catch (e) {
       if (e.badKey) {
@@ -881,9 +896,10 @@
     for (let t = Math.min(1, D / 2); t < D - 0.2; t += S.step) if (t >= S.range.from - 0.01 && t <= S.range.to + 0.01) times.push(+t.toFixed(1));
     const done = new Set(S.moments.map((m) => m.t));
     const todo = times.filter((t) => !done.has(t));
-    // Hasta dónde está todo analizado, sin huecos, desde el inicio del rango.
+    // Hasta dónde está todo revisado desde el inicio del rango (aunque Gemini haya omitido algún momento).
+    const tried = new Set();
     const advance = () => {
-      const have = new Set(S.moments.map((m) => m.t));
+      const have = new Set([...S.moments.map((m) => m.t), ...tried]);
       let f = S.range.from;
       for (const t of times) { if (!have.has(t)) break; f = t + S.step / 2; }
       S.frontier = Math.min(f, S.range.to);
@@ -893,7 +909,8 @@
       if (run !== S.run) return false;
       const chunk = todo.slice(i, i + BATCH);
       const k = times.length - todo.length + i + chunk.length;
-      status(`Analizando: ${k} de ${times.length} momentos (video en el ${mmss(chunk[chunk.length - 1])})`, (k / times.length));
+      S.prog = { k, n: times.length, at: chunk[chunk.length - 1] };
+      progress();
       const prev = S.moments.filter((m) => m.t < chunk[0]).slice(-1)[0];
       const parts = [{ text: promptTour(chunk, multi, prev && prev.descripcion) }];
       for (let j = 0; j < chunk.length; j++) {
@@ -925,12 +942,11 @@
         });
       });
       S.moments.sort((a, b) => a.t - b.t);
+      chunk.forEach((t) => tried.add(t));
       advance();
       S.stops = mergeStops(findStops(), S.stops);
       save();
       rebuild();
-      // Los paraderos que ya quedaron atrás se cuentan de inmediato, así el resultado avanza con el video.
-      if (!(await countStops(run, true))) return false;
     }
     advance();
     S.stops = mergeStops(findStops(), S.stops);
@@ -951,7 +967,7 @@
       } else cur = null;
     }
     return segs
-      .filter((g) => g.some((m) => m.puertas || m.subiendo > 0) || g.length >= 3 || g.some((m) => m.lat != null && nearestParadero(m.lat, m.lon, 0.06)))
+      .filter((g) => g.some((m) => m.puertas || m.subiendo > 0) || g.length >= 3 || g.some((m) => m.lat != null && nearestParadero(m.lat, m.lon, 0.1)))
       .map((g) => ({
         t0: +Math.max(0, g[0].t - S.step * 0.6).toFixed(1),
         t1: +Math.min(S.D, g[g.length - 1].t + S.step * 0.6).toFixed(1),
@@ -960,7 +976,8 @@
   // Conserva los conteos ya hechos cuando un paradero no cambió.
   function mergeStops(found, old) {
     return found.map((s) => {
-      const prev = old.find((o) => (o.estado === 'listo' || o.zpManual != null) && Math.abs(o.t0 - s.t0) < 0.5 && Math.abs(o.t1 - s.t1) < 0.5);
+      // Se conserva el mismo paradero (contado, en conteo o pendiente) si no cambió su tramo.
+      const prev = old.find((o) => Math.abs(o.t0 - s.t0) < 0.5 && Math.abs(o.t1 - s.t1) < 0.5);
       if (prev) return prev;
       const ll = S.moments.filter((m) => m.t >= s.t0 && m.t <= s.t1 && m.lat != null);
       return {
@@ -974,13 +991,34 @@
   }
 
   // Paso 2: en cada paradero, mirar las puertas segundo a segundo: quién sube y si paga.
-  async function countStops(run, onlyPassed) {
-    const todo = S.stops.filter((s) => (onlyPassed ? s.estado === 'pendiente' : s.estado !== 'listo') && s.t0 >= S.range.from - S.step && s.t1 <= S.range.to + S.step && (!onlyPassed || s.t1 + S.step / 2 <= S.frontier));
-    for (let i = 0; i < todo.length; i++) {
+  function progress() {
+    const p = S.prog || { k: 0, n: 0 };
+    const inR = S.stops.filter(inRange);
+    const done = inR.filter((s) => s.estado === 'listo').length;
+    const T = totals();
+    const tourTxt = p.n && p.k < p.n ? `Recorriendo el video: ${p.k} de ${p.n} momentos (va en el ${mmss(p.at)})` : 'Recorrido listo';
+    const cnt = inR.length ? ` · Paraderos contados: ${done} de ${inR.length}${S.counting != null ? ` (contando el ${S.counting})` : ''}` : '';
+    status(`${tourTxt}${cnt} · suben ${T.suben}, pagan ${T.pagan}, evaden ${T.evaden}`, p.n ? p.k / p.n : null);
+  }
+  // Toma los paraderos que el bus ya dejó atrás y los cuenta uno a uno mientras sigue el recorrido.
+  async function counter(run, tourDone) {
+    for (;;) {
       if (run !== S.run) return false;
-      const s = todo[i];
-      const n = S.stops.indexOf(s) + 1;
-      status(`Contando pasajeros en el paradero ${n} (video en el ${mmss(s.t0)})…`, null);
+      const ready = (s) => s.estado === 'pendiente' && inRange(s) && (tourDone() || s.t1 + S.step / 2 <= S.frontier);
+      const s = S.stops.find(ready);
+      if (s) {
+        if (!(await countOne(s, run))) return false;
+        continue;
+      }
+      if (tourDone()) return true;
+      await wait(700);
+    }
+  }
+  async function countOne(s, run) {
+    {
+      if (run !== S.run) return false;
+      S.counting = stopLabel(s);
+      progress();
       const doors = doorCams();
       // La puerta con validador recibe más imágenes: ahí se decide si pagan.
       const weight = doors.map((c) => (hasValidator(c) ? 2 : 1));
@@ -991,20 +1029,20 @@
       const parts = [{ text: '' }];
       // Las cámaras exteriores ayudan a ver si el paradero es zona paga (andén cerrado).
       const outside = S.cams.filter((c) => !c.bad && c.tipo === 'exterior').slice(0, 2);
-      const groups = [...doors.map((c, d) => ({ c, count: clamp(Math.min(Math.round(per * weight[d]), Math.ceil(span / 1.2) + 1), 3, 16), door: true })), ...outside.map((c) => ({ c, count: 3, door: false }))];
+      const groups = [...doors.map((c, d) => ({ c, count: clamp(Math.min(Math.round(per * weight[d]), Math.ceil(span / 1.5) + 1), 3, 12), door: true })), ...outside.map((c) => ({ c, count: 2, door: false }))];
       for (let d = 0; d < groups.length; d++) {
         const { c, count, door } = groups[d];
         parts.push({ text: `Cámara ${labels[d]} = ${c.label}, ${TIPOS[c.tipo] || 'cámara'}${door ? `, ${hasValidator(c) ? 'con validador' : 'sin validador'}` : ' (sirve para ver cómo es el paradero)'}:` });
         for (let k = 0; k < count; k++) {
           const t = +(s.t0 + (span * k) / (count - 1)).toFixed(2);
-          const f = await frameOf(c, t, hasValidator(c) ? 1280 : 960);
+          const f = await frameOf(c, t, hasValidator(c) ? 1024 : 768);
           if (!f) continue;
           meta.push({ cam: c.key, t, label: labels[d], door });
           parts.push({ text: `Imagen ${meta.length} (cámara ${labels[d]}, ${mmss(t)}):` }, img(f));
         }
         if (run !== S.run) return false;
       }
-      if (!meta.some((m) => m.door)) { s.estado = 'error'; s.resumen = 'Ninguna cámara de puerta grabó este momento.'; save(); rebuild(); continue; }
+      if (!meta.some((m) => m.door)) { s.estado = 'error'; s.resumen = 'Ninguna cámara de puerta grabó este momento.'; S.counting = null; save(); rebuild(); return true; }
       parts[0].text = [
         'Eres un fiscalizador del transporte público de Santiago que revisa las cámaras de un bus mientras está detenido en un paradero.',
         `Te envío ${meta.length} imágenes numeradas de ${groups.length === 1 ? 'una cámara' : `${groups.length} cámaras`}, desde el ${mmss(s.t0)} hasta el ${mmss(s.t1)} del video.`,
@@ -1028,9 +1066,10 @@
         if (e.badKey) throw e;
         s.estado = 'error';
         s.resumen = `No se pudo analizar: ${e.message}`;
+        S.counting = null;
         save();
         rebuild();
-        continue;
+        return true;
       }
       if (!r || run !== S.run) return false;
       const personas = (Array.isArray(r.personas) ? r.personas : []).map((p) => {
@@ -1054,8 +1093,10 @@
         estado: 'listo', v: 2, personas, bajan: num(r.bajan) || 0, resumen: String(r.resumen || '').trim(),
         zpModel: truthy(zp.es), zpMotivo: String(zp.motivo || '').trim(),
       });
+      S.counting = null;
       save();
       rebuild();
+      progress();
     }
     return true;
   }
@@ -1308,7 +1349,7 @@
     }
     return bd <= maxKm ? best : null;
   }
-  const parOf = (s) => (s.lat != null ? nearestParadero(s.lat, s.lon, 0.06) : null);
+  const parOf = (s) => (s.lat != null ? nearestParadero(s.lat, s.lon, 0.1) : null);
   const parText = (p) => (p ? `${p.o ? `#${p.o} ` : ''}${[p.c, p.n].filter(Boolean).join(' · ')}` : '');
   // Sentido automático: el que recorre sus paraderos en orden creciente a lo largo del video.
   function detectDir() {
