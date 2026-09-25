@@ -2,7 +2,8 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#10181f">
 <title>COF Vision Simple</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
@@ -22,6 +23,24 @@
   .btn.small { padding: 5px 10px; font-size: 13px; }
   main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px; max-width: 1600px; margin: 0 auto; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px; } header .file { max-width: 90vw; } }
+  @media (max-width: 640px) {
+    header { padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); gap: 8px; }
+    header h1 { font-size: 16px; }
+    header .file { order: 3; flex-basis: 100%; max-width: 100%; font-size: 12px; }
+    main { padding: 8px; gap: 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+    .card { border-radius: 10px; }
+    .now { padding: 12px; min-height: 0; }
+    .now .text { font-size: 16px; }
+    #map { min-height: 0; height: 52vh; flex: none; }
+    .rows { max-height: none; }
+    .row { grid-template-columns: auto 1fr; gap: 2px 10px; padding: 10px 12px; }
+    .row > span:nth-child(3) { grid-column: 1 / -1; }
+    .row.alert { padding-left: 8px; }
+    .list h2 { flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; }
+    .drop b { font-size: 16px; }
+    .leaflet-control-layers { font-size: 13px; }
+  }
+  .key-box input { font-size: 16px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
   .video-wrap { background: #000; position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; }
   video { width: 100%; height: 100%; object-fit: contain; display: block; }
@@ -45,7 +64,7 @@
   .list { grid-column: 1 / -1; }
   .list h2 { font-size: 15px; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
   .list h2 span { font-weight: 400; color: var(--muted); font-size: 13px; }
-  .rows { max-height: 420px; overflow: auto; }
+  .rows { max-height: 420px; overflow: auto; position: relative; }
   .row { display: grid; grid-template-columns: 64px 80px 1fr; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--line); cursor: pointer; align-items: baseline; }
   .row:hover { background: #f6f8fa; }
   .row.cur { background: #fff6e0; }
@@ -121,6 +140,14 @@
   const mmss = (s) => `${pad(Math.floor(s / 60))}:${pad(Math.floor(s % 60))}`;
   const validLL = (a, o) => Number.isFinite(a) && Number.isFinite(o) && Math.abs(a) <= 90 && Math.abs(o) <= 180 && !(a === 0 && o === 0);
 
+  // Enlace personal: la clave puede venir tras el # (no se envía a ningún servidor); se guarda en
+  // este dispositivo y se borra de la barra de direcciones.
+  const fromLink = location.hash.match(/[#&]k=([^&]+)/);
+  if (fromLink) {
+    store.set('cofsimple:key', decodeURIComponent(fromLink[1]));
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+
   const S = {
     key: EMBED_KEY.startsWith('__') ? store.get('cofsimple:key', '') : EMBED_KEY,
     model: store.get('cofsimple:model', 0),
@@ -134,6 +161,9 @@
   probe.muted = true;
   probe.preload = 'auto';
   probe.playsInline = true;
+  // Los teléfonos solo cargan un video que está en la página.
+  probe.style.cssText = 'position:fixed;left:-10px;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+  document.body.append(probe);
 
   function pick(file) {
     if (!file) return;
@@ -147,6 +177,7 @@
     const url = URL.createObjectURL(file);
     video.src = url;
     probe.src = url;
+    probe.play().then(() => probe.pause()).catch(() => {});
     video.hidden = false;
     $('#dropHint').hidden = true;
     rebuild();
@@ -418,7 +449,12 @@
       const d = document.createElement('span'); d.textContent = m.descripcion || '—';
       if (m.lat == null) { const g = document.createElement('span'); g.className = 'nogps'; g.textContent = ' (sin coordenadas)'; d.append(g); }
       row.append(t, c, d);
-      row.onclick = () => { video.currentTime = m.t; video.play().catch(() => {}); $('#follow').checked = true; };
+      row.onclick = () => {
+        video.currentTime = m.t;
+        video.play().catch(() => {});
+        $('#follow').checked = true;
+        if (window.matchMedia('(max-width: 900px)').matches) $('#drop').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
       return row;
     }));
   }
@@ -439,7 +475,12 @@
     meta.replaceChildren();
     if (!m) { $('#nowText').textContent = S.file ? 'Analizando… en unos segundos aparece lo que se ve.' : 'Aquí verás lo que pasa en el video, momento a momento.'; $('#nowWhere').textContent = ''; return; }
     const row = document.querySelector(`.row[data-i="${k}"]`);
-    if (row) { row.classList.add('cur'); if (!video.paused) row.scrollIntoView({ block: 'nearest' }); }
+    if (row) {
+      row.classList.add('cur');
+      // Solo se desplaza la lista (en computador); en el teléfono la página no se mueve sola.
+      const box = $('#rows');
+      if (!video.paused && box.scrollHeight > box.clientHeight + 4) box.scrollTop = row.offsetTop - box.clientHeight / 3;
+    }
     const chip = (txt, cls) => { const s = document.createElement('span'); s.className = `chip ${cls || ''}`; s.textContent = txt; meta.append(s); };
     chip(`${mmss(m.t)} del video`);
     if (m.hora) chip(`Hora ${m.hora}`);
