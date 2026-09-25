@@ -70,7 +70,7 @@
   .map-foot label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
   h2 { font-size: 15px; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
   h2 span { font-weight: 400; color: var(--muted); font-size: 13px; }
-  .totals { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); }
+  .totals { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); }
   .tot { background: #fff; padding: 10px 12px; }
   .tot b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1.2; }
   .tot small { color: var(--muted); font-size: 12px; }
@@ -91,6 +91,12 @@
   .tag.paga { background: var(--ok-bg); color: var(--ok); }
   .tag.evade { background: var(--alert-bg); color: var(--alert); }
   .tag.dudoso { background: #fff4cc; color: var(--doubt); }
+  .tag.zp { background: #e4eefa; color: #2f6fb3; }
+  .zp-box { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 6px 0; font-size: 14px; }
+  .zp-box .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .zp-box .seg button { border: 0; background: #fff; padding: 4px 12px; font: inherit; cursor: pointer; }
+  .zp-box .seg button.on { background: #2f6fb3; color: #fff; font-weight: 600; }
+  .zp-badge { display: inline-block; margin-left: 4px; font-size: 11px; font-weight: 700; color: #2f6fb3; background: #e4eefa; border-radius: 4px; padding: 0 5px; }
   .table-wrap { overflow-x: auto; }
   .rows { max-height: 420px; overflow: auto; position: relative; }
   .row { display: grid; grid-template-columns: 64px 80px 1fr; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--line); cursor: pointer; align-items: baseline; }
@@ -107,8 +113,9 @@
   .stop-icon { width: 26px; height: 26px; border-radius: 50%; background: #fff; border: 3px solid var(--ok); color: var(--ink); font: 700 12px/20px system-ui, sans-serif; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
   .stop-icon.ev { border-color: var(--alert); }
   .stop-icon.wait { border-color: #9aa6b2; color: #9aa6b2; }
+  .stop-icon.zp { border-style: double; border-width: 4px; }
   #report { display: none; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px; } header .file { max-width: 90vw; } .totals { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px; } header .file { max-width: 90vw; } .totals { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
   @media (max-width: 640px) {
     header { padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); gap: 8px; }
     header h1 { font-size: 16px; }
@@ -265,6 +272,7 @@
     cams: [], main: 0, ref: 0, grid: false,
     id: null, run: 0, step: 4, D: 0,
     moments: [], stops: [], track: [], cur: -1, curStop: null, open: null, addr: {},
+    zpPlaces: store.get('cofsimple:zp', []),
   };
   const save = () => store.set(S.id, {
     v: 3, step: S.step, moments: S.moments, stops: S.stops,
@@ -274,6 +282,7 @@
   const refCam = () => S.cams[S.ref] || null;
   const camByKey = (k) => S.cams.find((c) => c.key === k) || null;
   const camName = (c) => `${c.label}${c.tipo ? ` · ${TIPOS[c.tipo] || c.tipo}` : ''}`;
+  const hasValidator = (c) => !!c && (c.validador || c.tipo === 'puerta_delantera');
   const doorCams = () => {
     const d = S.cams.filter((c) => !c.bad && /^puerta_/.test(c.tipo || ''));
     return d.length ? d : [refCam()].filter(Boolean);
@@ -338,7 +347,7 @@
     });
     S.main = 0;
     S.moments = Array.isArray(saved.moments) ? saved.moments : [];
-    S.stops = Array.isArray(saved.stops) ? saved.stops : [];
+    S.stops = (Array.isArray(saved.stops) ? saved.stops : []).map((s) => (s.estado === 'listo' && s.v !== 2 ? { ...s, estado: 'pendiente' } : s));
     S.cur = -1;
     S.open = null;
     $('#fileName').textContent = S.cams.length === 1 ? files[0].name : `${S.cams.length} cámaras: ${S.cams.map((c) => c.label).join(', ')}`;
@@ -796,7 +805,7 @@
   // Conserva los conteos ya hechos cuando un paradero no cambió.
   function mergeStops(found, old) {
     return found.map((s) => {
-      const prev = old.find((o) => o.estado === 'listo' && Math.abs(o.t0 - s.t0) < 0.5 && Math.abs(o.t1 - s.t1) < 0.5);
+      const prev = old.find((o) => (o.estado === 'listo' || o.zpManual != null) && Math.abs(o.t0 - s.t0) < 0.5 && Math.abs(o.t1 - s.t1) < 0.5);
       if (prev) return prev;
       const ll = S.moments.filter((m) => m.t >= s.t0 && m.t <= s.t1 && m.lat != null);
       return {
@@ -819,36 +828,42 @@
       status(`Paso 2 de 2 · contando pasajeros en el paradero ${n} de ${S.stops.length}…`, 0.5 + (i / todo.length) * 0.5);
       const doors = doorCams();
       // La puerta con validador recibe más imágenes: ahí se decide si pagan.
-      const weight = doors.map((c) => (c.validador || c.tipo === 'puerta_delantera' ? 2 : 1));
+      const weight = doors.map((c) => (hasValidator(c) ? 2 : 1));
       const per = STOP_IMAGES / weight.reduce((a, b) => a + b, 0);
       const span = s.t1 - s.t0;
       const labels = 'ABCDEFGH';
       const meta = [];
       const parts = [{ text: '' }];
-      for (let d = 0; d < doors.length; d++) {
-        const c = doors[d];
-        const count = clamp(Math.min(Math.round(per * weight[d]), Math.ceil(span / 1.2) + 1), 3, 16);
-        parts.push({ text: `Cámara ${labels[d]} = ${c.label}, ${TIPOS[c.tipo] || 'cámara'}, ${c.validador ? 'con validador' : 'sin validador a la vista'}:` });
+      // Las cámaras exteriores ayudan a ver si el paradero es zona paga (andén cerrado).
+      const outside = S.cams.filter((c) => !c.bad && c.tipo === 'exterior').slice(0, 2);
+      const groups = [...doors.map((c, d) => ({ c, count: clamp(Math.min(Math.round(per * weight[d]), Math.ceil(span / 1.2) + 1), 3, 16), door: true })), ...outside.map((c) => ({ c, count: 3, door: false }))];
+      for (let d = 0; d < groups.length; d++) {
+        const { c, count, door } = groups[d];
+        parts.push({ text: `Cámara ${labels[d]} = ${c.label}, ${TIPOS[c.tipo] || 'cámara'}${door ? `, ${hasValidator(c) ? 'con validador' : 'sin validador'}` : ' (sirve para ver cómo es el paradero)'}:` });
         for (let k = 0; k < count; k++) {
           const t = +(s.t0 + (span * k) / (count - 1)).toFixed(2);
-          const f = await frameOf(c, t, c.validador || c.tipo === 'puerta_delantera' ? 1280 : 960);
+          const f = await frameOf(c, t, hasValidator(c) ? 1280 : 960);
           if (!f) continue;
-          meta.push({ cam: c.key, t, label: labels[d] });
+          meta.push({ cam: c.key, t, label: labels[d], door });
           parts.push({ text: `Imagen ${meta.length} (cámara ${labels[d]}, ${mmss(t)}):` }, img(f));
         }
         if (run !== S.run) return false;
       }
-      if (!meta.length) { s.estado = 'error'; s.resumen = 'Ninguna cámara de puerta grabó este momento.'; save(); rebuild(); continue; }
+      if (!meta.some((m) => m.door)) { s.estado = 'error'; s.resumen = 'Ninguna cámara de puerta grabó este momento.'; save(); rebuild(); continue; }
       parts[0].text = [
-        'Eres un fiscalizador del transporte público que revisa las cámaras interiores de un bus mientras está detenido en un paradero.',
-        `Te envío ${meta.length} imágenes numeradas de ${doors.length === 1 ? 'una cámara' : `${doors.length} cámaras de puertas`}, desde el ${mmss(s.t0)} hasta el ${mmss(s.t1)} del video.`,
-        'Los pasajeros pagan acercando la tarjeta (bip!) o el celular al validador, el aparato lector junto al conductor o a la puerta. Pagar se ve como el gesto de acercar la tarjeta o el teléfono al validador.',
-        'Tarea: sigue a cada persona que SUBE al bus y decide si pagó:',
-        '- "paga": se ve que acerca tarjeta o celular al validador.',
-        '- "evade": pasa de largo sin validar, salta o pasa bajo el torniquete, o sube por una puerta que no tiene validador (en ese caso cuenta como evasión aunque después se pierda de vista).',
-        '- "dudoso": no se alcanza a ver si validó (tapado por otras personas, fuera de cuadro, muy rápido).',
-        'Cuenta a cada persona UNA sola vez aunque aparezca en varias imágenes o en varias cámaras: identifícala por su ropa y apariencia, y asígnala a la cámara de la puerta por la que sube. No cuentes a quien ya estaba arriba ni al conductor. Cuenta aparte el total de personas que BAJAN por todas las puertas.',
-        'Responde SOLO con JSON con esta forma: {"personas":[{"imagen":3,"camara":"A","descripcion":"mujer con chaqueta roja y mochila","resultado":"paga"}],"bajan":0,"resumen":"1 o 2 frases sobre lo ocurrido en este paradero"}',
+        'Eres un fiscalizador del transporte público de Santiago que revisa las cámaras de un bus mientras está detenido en un paradero.',
+        `Te envío ${meta.length} imágenes numeradas de ${groups.length === 1 ? 'una cámara' : `${groups.length} cámaras`}, desde el ${mmss(s.t0)} hasta el ${mmss(s.t1)} del video.`,
+        'Cómo se paga:',
+        '- Normalmente se paga al subir, acercando la tarjeta bip! o el celular al validador del bus (el aparato lector junto al conductor o a la puerta).',
+        '- En algunos paraderos hay ZONA PAGA: un andén cerrado con rejas o vallas, con torniquetes o validadores en el mismo paradero y a menudo personal con chaleco reflectante que controla la entrada. Ahí la gente paga ABAJO, en el paradero, antes de que llegue el bus, y después sube por TODAS las puertas, también las traseras, sin validar en el bus. En una zona paga, subir por una puerta trasera sin validar NO es evasión.',
+        'Primero decide si este paradero es zona paga. Fíjate bien en lo que se ve por las puertas abiertas y en las cámaras exteriores: rejas o vallas en el andén, torniquetes o validadores en el paradero, personal con chaleco en la puerta, o mucha gente subiendo a la vez por todas las puertas sin que nadie valide. Si no hay señales claras, no es zona paga.',
+        'Después sigue a cada persona que SUBE al bus e indica:',
+        '- "camara": la letra de la cámara de la puerta por la que sube.',
+        '- "valida": true si se ve que acerca tarjeta o celular al validador del bus; false si claramente pasa sin validar, salta o pasa bajo el torniquete; null si no se alcanza a ver (tapado, fuera de cuadro, muy rápido).',
+        '- "fuera_zona": solo si es zona paga: true si se ve que la persona no venía desde el andén cerrado (por ejemplo, llega corriendo desde la calle por fuera de la reja); si no, false.',
+        '- "resultado": "paga" (valida en el bus), "zona_paga" (sube en zona paga, pagó en el paradero), "evade" o "dudoso".',
+        'Cuenta a cada persona UNA sola vez aunque aparezca en varias imágenes o en varias cámaras: identifícala por su ropa y apariencia, y asígnala a la puerta por la que sube. No cuentes a quien ya estaba arriba ni al conductor. Cuenta aparte el total de personas que BAJAN por todas las puertas.',
+        'Responde SOLO con JSON con esta forma: {"zona_paga":{"es":false,"motivo":"qué viste para decidirlo"},"personas":[{"imagen":3,"camara":"A","descripcion":"mujer con chaqueta roja y mochila","valida":true,"fuera_zona":false,"resultado":"paga"}],"bajan":0,"resumen":"1 o 2 frases sobre lo ocurrido en este paradero"}',
         'Si nadie sube, "personas" es []. En "imagen" pon el número de la imagen donde mejor se ve si pagó o no.',
       ].join('\n');
       let r;
@@ -865,16 +880,25 @@
       if (!r || run !== S.run) return false;
       const personas = (Array.isArray(r.personas) ? r.personas : []).map((p) => {
         const mi = meta[clamp(Math.round(num(p && p.imagen) || 1), 1, meta.length) - 1];
-        const byLabel = meta.find((m) => m.label === String((p && p.camara) || '').toUpperCase());
+        const byLabel = meta.find((m) => m.door && m.label === String((p && p.camara) || '').toUpperCase());
+        const cam = camByKey(byLabel ? byLabel.cam : mi.cam);
         const res = String((p && p.resultado) || '').toLowerCase();
+        const v = p && p.valida;
         return {
           t: mi.t,
-          cam: byLabel ? byLabel.cam : mi.cam,
+          cam: cam ? cam.key : mi.cam,
           desc: String((p && p.descripcion) || 'persona').trim(),
-          res: /^pag/.test(res) ? 'paga' : /^ev/.test(res) ? 'evade' : 'dudoso',
+          valida: v === true || v === 'true' ? true : v === false || v === 'false' ? false : null,
+          sinValidador: !!cam && !hasValidator(cam),
+          fueraZona: truthy(p && p.fuera_zona),
+          res: /^pag/.test(res) ? 'paga' : /zona/.test(res) ? 'zp' : /^ev/.test(res) ? 'evade' : 'dudoso',
         };
       });
-      Object.assign(s, { estado: 'listo', personas, bajan: num(r.bajan) || 0, resumen: String(r.resumen || '').trim() });
+      const zp = (r.zona_paga && typeof r.zona_paga === 'object') ? r.zona_paga : { es: r.zona_paga };
+      Object.assign(s, {
+        estado: 'listo', v: 2, personas, bajan: num(r.bajan) || 0, resumen: String(r.resumen || '').trim(),
+        zpModel: truthy(zp.es), zpMotivo: String(zp.motivo || '').trim(),
+      });
       save();
       rebuild();
     }
@@ -904,19 +928,49 @@
   }
 
   // ---------------------------------------------------------------- cifras
+  // Zona paga: lo que diga la persona manda; si no, un lugar ya marcado; si no, lo que vio la IA.
+  const nearZp = (s) => s.lat != null && S.zpPlaces.some((z) => distKm(z, s) < 0.08);
+  const zpOf = (s) => (s.zpManual != null ? s.zpManual : nearZp(s) || !!s.zpModel);
+  const zpWhy = (s) => (s.zpManual != null ? 'marcado a mano' : nearZp(s) ? 'lugar guardado como zona paga' : s.zpModel ? `detectado en el video${s.zpMotivo ? `: ${s.zpMotivo}` : ''}` : s.zpMotivo || 'no se vieron señales de zona paga');
+  function setZp(s, on) {
+    s.zpManual = on;
+    if (s.lat != null) {
+      S.zpPlaces = S.zpPlaces.filter((z) => distKm(z, s) >= 0.08);
+      if (on) S.zpPlaces.push({ lat: +s.lat.toFixed(6), lon: +s.lon.toFixed(6) });
+      store.set('cofsimple:zp', S.zpPlaces);
+    }
+    save();
+    rebuild();
+  }
+  // Resultado de cada persona según si el paradero es zona paga.
+  function resOf(p, zp) {
+    if (p.valida === undefined) return p.res;
+    if (p.valida === true) return 'paga';
+    if (zp) return p.fueraZona ? 'evade' : 'zp';
+    if (p.valida === false || p.sinValidador) return 'evade';
+    return p.res === 'evade' ? 'evade' : 'dudoso';
+  }
   const counts = (s) => {
-    const c = { suben: s.personas.length, pagan: 0, evaden: 0, dudosos: 0, bajan: s.bajan || 0 };
-    for (const p of s.personas) c[p.res === 'paga' ? 'pagan' : p.res === 'evade' ? 'evaden' : 'dudosos']++;
+    const zp = zpOf(s);
+    const c = { suben: s.personas.length, pagan: 0, zp: 0, evaden: 0, dudosos: 0, bajan: s.bajan || 0 };
+    for (const p of s.personas) {
+      const r = resOf(p, zp);
+      if (r === 'paga') c.pagan++;
+      else if (r === 'zp') { c.pagan++; c.zp++; }
+      else if (r === 'evade') c.evaden++;
+      else c.dudosos++;
+    }
     return c;
   };
   const moving = (s) => s.estado === 'listo' && (s.personas.length || s.bajan);
   function totals() {
-    const T = { paraderos: 0, suben: 0, pagan: 0, evaden: 0, dudosos: 0, bajan: 0 };
+    const T = { paraderos: 0, zonas: 0, suben: 0, pagan: 0, zp: 0, evaden: 0, dudosos: 0, bajan: 0 };
     for (const s of S.stops) {
       if (!moving(s)) continue;
       T.paraderos++;
+      if (zpOf(s)) T.zonas++;
       const c = counts(s);
-      for (const k of ['suben', 'pagan', 'evaden', 'dudosos', 'bajan']) T[k] += c[k];
+      for (const k of ['suben', 'pagan', 'zp', 'evaden', 'dudosos', 'bajan']) T[k] += c[k];
     }
     return T;
   }
@@ -932,7 +986,8 @@
   }
   const stopLabel = (s) => `${S.stops.indexOf(s) + 1}`;
   const personCam = (p) => { const c = camByKey(p.cam); return c ? camName(c) : ''; };
-  const resText = (r) => (r === 'paga' ? 'Paga' : r === 'evade' ? 'Evade' : 'Dudoso');
+  const resText = (r) => (r === 'paga' ? 'Paga' : r === 'zp' ? 'Pagó en zona paga' : r === 'evade' ? 'Evade' : 'Dudoso');
+  const resTag = (r) => (r === 'paga' ? 'PAGA' : r === 'zp' ? 'ZONA PAGA' : r === 'evade' ? 'EVADE' : 'DUDOSO');
 
   // ---------------------------------------------------------------- recorrido y mapa
   function cleanTrack(pts) {
@@ -998,10 +1053,10 @@
     for (const s of S.stops) {
       if (s.lat == null || (s.estado === 'listo' && !moving(s))) continue;
       const c = counts(s);
-      const cls = s.estado !== 'listo' ? 'wait' : c.evaden ? 'ev' : '';
+      const cls = `${s.estado !== 'listo' ? 'wait' : c.evaden ? 'ev' : ''}${zpOf(s) ? ' zp' : ''}`;
       const mk = L.marker([s.lat, s.lon], { icon: L.divIcon({ className: '', html: `<div class="stop-icon ${cls}">${stopLabel(s)}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] }) });
       const pop = el('div');
-      pop.append(el('b', null, `Paradero ${stopLabel(s)} · ${horaAt(s.t0) || mmss(s.t0)}`), el('br'));
+      pop.append(el('b', null, `Paradero ${stopLabel(s)}${zpOf(s) ? ' (zona paga)' : ''} · ${horaAt(s.t0) || mmss(s.t0)}`), el('br'));
       pop.append(s.estado === 'listo' ? `Suben ${c.suben} · pagan ${c.pagan} · evaden ${c.evaden}${c.dudosos ? ` · dudosos ${c.dudosos}` : ''}` : 'Analizando…');
       mk.bindPopup(pop);
       mk.on('click', () => goTo(s.t0));
@@ -1057,6 +1112,7 @@
       tot(T.paraderos, 'Paraderos'),
       tot(T.suben, 'Suben'),
       tot(T.pagan, 'Pagan', 'pay'),
+      tot(T.zp, 'Pagan en zona paga', 'pay'),
       tot(T.evaden, 'Evaden', 'evade'),
       tot(pct(T.evaden, T.suben), 'Evasión', 'evade'),
       tot(T.dudosos, 'Dudosos', 'doubt'),
@@ -1078,7 +1134,7 @@
       const ready = s.estado === 'listo';
       const lugar = s.dir || (s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : '—');
       tr.append(
-        el('td', null, stopLabel(s)),
+        (() => { const td = el('td', null, stopLabel(s)); if (zpOf(s)) td.append(el('span', 'zp-badge', 'ZP')); return td; })(),
         el('td', null, horaAt(s.t0) || mmss(s.t0)),
         el('td', 'hide-sm', lugar),
         el('td', 'n', ready ? String(c.suben) : s.estado === 'error' ? '!' : '…'),
@@ -1101,10 +1157,23 @@
         else {
           td.append(el('div', 'muted', `${lugar} · video ${mmss(s.t0)}–${mmss(s.t1)}`));
           if (s.resumen) td.append(el('div', null, s.resumen));
+          // Zona paga: quien validó en el paradero y sube por atrás no es evasión.
+          const zp = zpOf(s);
+          const box = el('div', 'zp-box');
+          const seg = el('span', 'seg');
+          for (const [label, on] of [['Sí', true], ['No', false]]) {
+            const b = el('button', zp === on ? 'on' : '', label);
+            b.type = 'button';
+            b.onclick = (e) => { e.stopPropagation(); if (zp !== on || s.zpManual == null) setZp(s, on); };
+            seg.append(b);
+          }
+          box.append(el('b', null, 'Zona paga:'), seg, el('span', 'muted', zpWhy(s)));
+          td.append(box);
           const ul = el('ul', 'people');
           for (const p of s.personas) {
             const li = el('li');
-            li.append(el('span', `tag ${p.res}`, resText(p.res).toUpperCase()), el('span', null, `${p.desc} · ${horaAt(p.t) || mmss(p.t)}${S.cams.length > 1 ? ` · ${personCam(p)}` : ''}`));
+            const r = resOf(p, zp);
+            li.append(el('span', `tag ${r}`, resTag(r)), el('span', null, `${p.desc} · ${horaAt(p.t) || mmss(p.t)}${S.cams.length > 1 ? ` · ${personCam(p)}` : ''}`));
             li.onclick = (e) => { e.stopPropagation(); goTo(p.t - 1, p.cam); };
             ul.append(li);
           }
@@ -1160,7 +1229,8 @@
       else if (stop.estado !== 'listo') fare.append(el('span', 'muted', 'Contando pasajeros en este paradero…'));
       else {
         const c = counts(stop);
-        fare.append(`Suben ${c.suben}: `, el('span', 'pay', `${c.pagan} pagan`), ' · ', el('span', 'evade', `${c.evaden} evaden`));
+        if (zpOf(stop)) fare.append(el('span', 'zp-badge', 'ZONA PAGA'), ' ');
+        fare.append(`Suben ${c.suben}: `, el('span', 'pay', `${c.pagan} pagan${c.zp ? ` (${c.zp} en zona paga)` : ''}`), ' · ', el('span', 'evade', `${c.evaden} evaden`));
         if (c.dudosos) fare.append(' · ', el('span', 'doubt', `${c.dudosos} dudosos`));
         if (c.bajan) fare.append(` · bajan ${c.bajan}`);
       }
@@ -1217,21 +1287,21 @@
   };
   $('#btnCsvStops').onclick = () => {
     if (!ready()) return;
-    const rows = [['Paradero', 'Hora llegada', 'Hora salida', 'Minuto video', 'Dirección', 'Latitud', 'Longitud', 'Suben', 'Suben por puerta con validador', 'Suben por otras puertas', 'Pagan', 'Evaden', 'Dudosos', 'Bajan', '% evasión', 'Observación']];
+    const rows = [['Paradero', 'Hora llegada', 'Hora salida', 'Minuto video', 'Dirección', 'Latitud', 'Longitud', 'Zona paga', 'Motivo zona paga', 'Suben', 'Suben por puerta con validador', 'Suben por otras puertas', 'Pagan (total)', 'Pagan en zona paga', 'Evaden', 'Dudosos', 'Bajan', '% evasión', 'Observación']];
     for (const s of S.stops) {
       if (!moving(s)) continue;
       const c = counts(s);
       const d = byDoor(s);
-      rows.push([stopLabel(s), horaAt(s.t0), horaAt(s.t1), mmss(s.t0), s.dir || '', dec(s.lat, 6), dec(s.lon, 6), c.suben, d.front, d.other, c.pagan, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben), s.resumen]);
+      rows.push([stopLabel(s), horaAt(s.t0), horaAt(s.t1), mmss(s.t0), s.dir || '', dec(s.lat, 6), dec(s.lon, 6), zpOf(s) ? 'Sí' : 'No', zpWhy(s), c.suben, d.front, d.other, c.pagan, c.zp, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben), s.resumen]);
     }
     const T = totals();
-    rows.push(['TOTAL', '', '', '', '', '', '', T.suben, '', '', T.pagan, T.evaden, T.dudosos, T.bajan, pct(T.evaden, T.suben), '']);
+    rows.push(['TOTAL', '', '', '', '', '', '', `${T.zonas} zonas pagas`, '', T.suben, '', '', T.pagan, T.zp, T.evaden, T.dudosos, T.bajan, pct(T.evaden, T.suben), '']);
     download(`${baseName()}-paraderos.csv`, csv(rows));
   };
   $('#btnCsvPeople').onclick = () => {
     if (!ready()) return;
-    const rows = [['Paradero', 'Hora', 'Minuto video', 'Dirección', 'Cámara', 'Resultado', 'Descripción de la persona']];
-    for (const s of S.stops) for (const p of s.personas) rows.push([stopLabel(s), horaAt(p.t), mmss(p.t), s.dir || '', personCam(p), resText(p.res), p.desc]);
+    const rows = [['Paradero', 'Zona paga', 'Hora', 'Minuto video', 'Dirección', 'Cámara', 'Resultado', 'Descripción de la persona']];
+    for (const s of S.stops) for (const p of s.personas) rows.push([stopLabel(s), zpOf(s) ? 'Sí' : 'No', horaAt(p.t), mmss(p.t), s.dir || '', personCam(p), resText(resOf(p, zpOf(s))), p.desc]);
     download(`${baseName()}-detalle-personas.csv`, csv(rows));
   };
   $('#btnPdf').onclick = () => {
@@ -1242,7 +1312,7 @@
     r.append(el('h1', null, 'Informe de pasajes y evasión'));
     const first = S.moments.find((m) => m.hora);
     r.append(el('div', null, `Cámaras: ${S.cams.filter((c) => !c.bad).map(camName).join(', ')}${first ? ` · desde ${first.hora}` : ''} · generado ${new Date().toLocaleString('es-CL')}`));
-    r.append(el('div', null, `Paraderos con pasajeros: ${T.paraderos} · Suben: ${T.suben} · Pagan: ${T.pagan} · Evaden: ${T.evaden} (${pct(T.evaden, T.suben)}) · Dudosos: ${T.dudosos} · Bajan: ${T.bajan}`));
+    r.append(el('div', null, `Paraderos con pasajeros: ${T.paraderos} (${T.zonas} en zona paga) · Suben: ${T.suben} · Pagan: ${T.pagan} (${T.zp} en zona paga) · Evaden: ${T.evaden} (${pct(T.evaden, T.suben)}) · Dudosos: ${T.dudosos} · Bajan: ${T.bajan}`));
     r.append(el('div', 'muted', 'Conteo automático hecho por IA a partir de las imágenes de las cámaras; los casos dudosos deben revisarse en el video.'));
     const table = (head, rows) => {
       const t = el('table');
@@ -1256,11 +1326,11 @@
       return t;
     };
     r.append(el('h3', null, 'Resumen por paradero'));
-    r.append(table(['#', 'Llegada', 'Salida', 'Lugar', 'Suben', 'Pagan', 'Evaden', 'Dudosos', 'Bajan', 'Evasión'],
-      S.stops.filter(moving).map((s) => { const c = counts(s); return [stopLabel(s), horaAt(s.t0), horaAt(s.t1), s.dir || (s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : ''), c.suben, c.pagan, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben)]; })));
+    r.append(table(['#', 'Llegada', 'Salida', 'Lugar', 'Zona paga', 'Suben', 'Pagan', 'En ZP', 'Evaden', 'Dudosos', 'Bajan', 'Evasión'],
+      S.stops.filter(moving).map((s) => { const c = counts(s); return [stopLabel(s), horaAt(s.t0), horaAt(s.t1), s.dir || (s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : ''), zpOf(s) ? 'Sí' : 'No', c.suben, c.pagan, c.zp, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben)]; })));
     r.append(el('h3', null, 'Detalle por persona'));
     r.append(table(['Paradero', 'Hora', 'Minuto video', 'Cámara', 'Resultado', 'Persona'],
-      S.stops.flatMap((s) => s.personas.map((p) => [stopLabel(s), horaAt(p.t), mmss(p.t), personCam(p), resText(p.res), p.desc]))));
+      S.stops.flatMap((s) => s.personas.map((p) => [stopLabel(s), horaAt(p.t), mmss(p.t), personCam(p), resText(resOf(p, zpOf(s))), p.desc]))));
     window.print();
   };
 
