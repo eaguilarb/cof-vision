@@ -291,7 +291,7 @@
     </div>
     <div class="staff-row">
       <label>IA para contar <select id="aiModel" class="svc-sel"><option value="gratis">Gratis: rota entre los modelos gratuitos de Google (Flash y Gemma)</option><option value="flash">Gemini Flash de pago (~US$ 1 por expedición)</option><option value="pro">Gemini Pro de pago (más preciso · ~US$ 2,5 por expedición)</option><option value="haiku">Claude Haiku (clave de Claude · ~US$ 0,7 por expedición)</option><option value="sonnet">Claude Sonnet (clave de Claude · ~US$ 1,4 por expedición)</option></select></label>
-      <span id="claudeKey" hidden><input id="ckeyInput" type="password" autocomplete="off" placeholder="Clave de Claude (sk-ant-…)" style="width:220px"> <button class="btn small" id="btnCkey" type="button">Guardar</button></span>
+      <span id="claudeKey" hidden><input id="ckeyInput" type="password" autocomplete="off" placeholder="Clave de Claude (sk-ant-…)" style="width:220px"> <button class="btn small" id="btnCkey" type="button">Guardar</button> <label title="Al llegar a este gasto en el día, el conteo se detiene">Tope diario US$ <input id="topeInput" type="number" min="0" step="0.5" style="width:64px;min-width:0;flex:none"></label></span>
       <span class="muted" id="costInfo"></span>
     </div>
     <div class="exports" id="modelNote" hidden></div>
@@ -358,7 +358,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-15';
+  const VERSION = '2026.09.25-16';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -406,6 +406,7 @@
     // Una copia personal puede traer la clave de Claude incorporada: entonces cuenta con Claude Haiku salvo que se elija otra IA.
     ai: ({ flash: 'flash', pro: 'pro', haiku: 'haiku', sonnet: 'sonnet', gratis: 'gratis' })[store.get('cofsimple:ai', EMBED_CKEY.startsWith('__') ? 'gratis' : 'haiku')] || 'gratis',
     ckey: store.get('cofsimple:ckey', '') || (EMBED_CKEY.startsWith('__') ? '' : EMBED_CKEY),
+    tope: store.get('cofsimple:tope', 1),
     spend: store.get('cofsimple:gasto', null),
     staff: store.get('cofsimple:staff2', 'Agentes de la empresa con uniforme negro (chaqueta y pantalón negros con franjas reflectantes, a menudo gorro negro), que suben al bus en el terminal antes de iniciar el recorrido o se paran en las puertas mientras el bus está detenido'),
     auto: store.get('cofsimple:auto', true), userPaused: false, autoPausing: false, waiting: false, rate: 1,
@@ -770,6 +771,19 @@
     return claudeClient;
   }
   async function claude(parts, run) {
+    // Tope de gasto diario: al llegar, se detiene el conteo en vez de seguir gastando.
+    // Se cuentan también las consultas en curso (se cuentan varios paraderos a la vez), con su costo aproximado.
+    const sp = (S.spend && S.spend.dia === today() ? S.spend.usd : 0) + claudeInFlight * (S.ai === 'sonnet' ? 0.04 : 0.02);
+    if (S.tope > 0 && sp >= S.tope) {
+      const err = new Error(`Se llegó al tope de gasto de hoy (US$ ${S.tope.toFixed(2)}). Súbelo junto a «IA para contar» o elige «Gratis» para seguir.`);
+      err.stop = true;
+      throw err;
+    }
+    claudeInFlight++;
+    try { return await claudeCall(parts, run); } finally { claudeInFlight--; }
+  }
+  let claudeInFlight = 0;
+  async function claudeCall(parts, run) {
     const { Anthropic, client } = await claudeApi();
     const model = CLAUDE[S.ai];
     // Las partes vienen en formato Gemini (texto e imágenes en base64): se pasan al formato de Claude.
@@ -901,6 +915,8 @@
       await addresses(run);
     } catch (e) {
       if (e.claudeKey) { $('#ckeyInput').value = ''; return status(e.message, null, true); }
+      // Tope de gasto: se detiene todo (también lo que corre en segundo plano) para que el aviso quede a la vista.
+      if (e.stop) { S.run++; S.running = false; S.paused = true; renderControls(); return status(e.message, null, true); }
       if (e.badKey) {
         if (SERVER) return status(`La clave de Gemini del servidor no funciona: revisa GEMINI_API_KEY en Railway. (${e.message})`, null, true);
         $('#keyBox').hidden = false;
@@ -1022,6 +1038,8 @@
   };
   $('#aiModel').value = S.ai;
   $('#ckeyInput').value = S.ckey ? '••••••••' : '';
+  $('#topeInput').value = String(S.tope);
+  $('#topeInput').onchange = (e) => { const v = num(e.target.value); S.tope = v != null && v >= 0 ? v : 1; store.set('cofsimple:tope', S.tope); e.target.value = String(S.tope); };
   $('#btnCkey').onclick = () => {
     const k = $('#ckeyInput').value.trim();
     if (k === '••••••••') return;
@@ -1345,7 +1363,7 @@
       try {
         list = await gemini(parts, run, 'quick');
       } catch (e) {
-        if (e.badKey || e.claudeKey) throw e;
+        if (e.badKey || e.claudeKey || e.stop) throw e;
         continue;
       }
       if (!list || run !== S.run) return false;
@@ -1443,7 +1461,7 @@
         countOne(one, run)
           .then((ok) => { if (!ok) stopped = true; })
           .catch((e) => { failure = e; })
-          .finally(() => { busy.delete(one); S.counting = busy.size ? stopLabel([...busy][0]) : null; progress(); });
+          .finally(() => { busy.delete(one); S.counting = busy.size ? stopLabel([...busy][0]) : null; if (S.running && run === S.run) progress(); });
       }
       if (!busy.size && !S.stops.some(ready) && tourDone()) return true;
       await wait(300);
@@ -1588,9 +1606,10 @@
         '- "fuera_zona": solo si es zona paga: true si se ve que la persona no venía desde el andén cerrado (por ejemplo, llega corriendo desde la calle por fuera de la reja); si no, false.',
         '- "resultado": "paga" (validó: luz verde o acercó la tarjeta), "zona_paga" (sube en zona paga, pagó en el paradero), "evade" (se ve que no acerca nada al validador) o "dudoso" (su último intento quedó en rojo, o no se alcanza a ver). Evita "dudoso" cuando las imágenes permiten decidir.',
         'Cuenta a cada persona UNA sola vez aunque aparezca en varias imágenes o en varias cámaras: identifícala por su ropa y apariencia, y asígnala a la puerta por la que sube. No cuentes a quien ya estaba arriba ni al conductor.',
+        'Personas con movilidad reducida (silla de ruedas, bastón, coche de guagua, adulto mayor): a menudo validan adelante (o un agente valida por ellas) y después suben por la puerta de atrás, donde está la rampa, muchas veces ayudadas por un agente. Es UNA sola persona: cuéntala una vez, como "paga" si ella o alguien por ella validó, y nunca como evasión por subir atrás. Lo mismo si alguien valida adelante, baja y vuelve a subir por otra puerta.',
         'Antes de contar, revisa CADA cámara por separado, imagen por imagen y en orden, y anota en "por_camara" qué pasa en ella (quién sube, quién baja, quién solo se mueve adentro). Una persona sube solo si en una imagen se ve afuera o en el escalón y en una imagen posterior de la misma cámara ya está adentro.',
         'Personas que BAJAN: anota en "bajan_detalle" solo a quien se ve SALIR del bus: en una imagen está adentro o en el escalón y en una imagen posterior de la misma cámara ya está afuera, en la calle o el andén, alejándose. NO es bajar: moverse o caminar dentro del bus, pararse o acercarse a la puerta, estar sentado, ni la gente que está afuera en el paradero sin haber estado adentro. Si no estás seguro, no la anotes. Si nadie baja, "bajan_detalle" es [].',
-        `MUY IMPORTANTE: el personal NO son pasajeros y no se cuenta, ni en "personas" ni en "bajan". En estos buses el personal es: ${S.staff}. También son personal los guardias, fiscalizadores, inspectores, anfitriones de zona paga y el conductor. Pistas: se quedan de pie en la puerta, el escalón o junto al validador durante toda la detención sin avanzar hacia adentro, se asoman hacia afuera, ayudan u ordenan la subida, o bajan y vuelven a subir. Solo cuenta a quien entra de verdad al bus y avanza hacia el pasillo o los asientos. Si dudas si alguien es personal o pasajero, no lo cuentes como pasajero y menciónalo en "personal_visto".`,
+        `MUY IMPORTANTE: el personal NO son pasajeros y no se cuenta NUNCA, ni en "personas" ni en "bajan", aunque acerque una tarjeta al validador (los agentes también validan, prueban el validador o validan por un pasajero), aunque suba, baje o cambie de puerta. En estos buses el personal es: ${S.staff}. También son personal los guardias, fiscalizadores, inspectores, anfitriones de zona paga y el conductor. Pistas: se quedan de pie en la puerta, el escalón o junto al validador durante toda la detención sin avanzar hacia adentro, se asoman hacia afuera, ayudan u ordenan la subida, o bajan y vuelven a subir. Solo cuenta a quien entra de verdad al bus y avanza hacia el pasillo o los asientos. Si dudas si alguien es personal o pasajero, no lo cuentes como pasajero y menciónalo en "personal_visto".`,
         S.staffN ? `Durante todo el recorrido van ${S.staffN} agente${S.staffN === 1 ? '' : 's'} a bordo: si ves ${S.staffN === 1 ? 'a una persona' : `${S.staffN} personas`} con ese uniforme subiendo, bajando o en las puertas, ${S.staffN === 1 ? 'es el agente' : 'son ellos'}.` : '',
         S.staffRef ? 'Te envío además una IMAGEN DE REFERENCIA (antes de las imágenes numeradas) donde se ven los agentes: compara la ropa y apariencia de cada persona con ellos antes de contarla.' : '',
         'Responde SOLO con JSON con esta forma: {"por_camara":[{"camara":"A","que_pasa":"sube una mujer con chaqueta roja y valida; nadie baja"}],"zona_paga":{"es":false,"motivo":"qué viste para decidirlo"},"personal_visto":"agente de negro en la puerta delantera","personas":[{"imagen":3,"camara":"A","descripcion":"mujer con chaqueta roja y mochila","luz":"verde","valida":true,"fuera_zona":false,"resultado":"paga"}],"bajan_detalle":[{"imagen":7,"camara":"C","descripcion":"hombre con polerón gris sale a la vereda"}],"resumen":"1 o 2 frases sobre lo ocurrido en este paradero"}',
@@ -1600,7 +1619,7 @@
       try {
         r = await gemini(parts, run, 'main');
       } catch (e) {
-        if (e.badKey || e.claudeKey) throw e;
+        if (e.badKey || e.claudeKey || e.stop) throw e;
         s.estado = 'error';
         s.resumen = `No se pudo analizar: ${e.message}`;
         S.counting = null;
