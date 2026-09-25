@@ -343,7 +343,6 @@
   const SERVER = !!window.COF_SERVER;
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
-  const STOP_IMAGES = 20;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
   const COUNT_V = 3;
   const TIPOS = {
@@ -358,7 +357,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-16';
+  const VERSION = '2026.09.25-17';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1297,7 +1296,7 @@
         'Responde SOLO con un JSON array, una entrada por fila: [{"n":1,"hora":"17:04:44","velocidad":0,"coord_texto":"33.23.29100S 70.37.15500W","lat":-33.3882,"lon":-70.6193}]',
       ].join('\n') }];
       for (let k = 0; k < rows.length; k += OSD_ROWS) parts.push(img(stackRows(rows.slice(k, k + OSD_ROWS)), 0.85));
-      window.__cofDebug = { osdTimes: used }; // solo para pruebas automáticas
+      window.__cofDebug = { osdTimes: used, stops: () => S.stops.map((x) => [x.t0, x.estado, inRange(x), beforeStart(x)]), running: () => [S.running, S.run, S.frontier] }; // solo para pruebas automáticas
       const list = await gemini(parts, run, 'quick');
       if (!list || run !== S.run) return false;
       const arr = Array.isArray(list) ? list : list.filas || list.resultados || [];
@@ -1528,13 +1527,13 @@
   // Elige los instantes a mirar. La detención se divide en tramos cortos; cada tramo con movimiento
   // (alguien que sube, baja o se acerca) aporta su instante de más movimiento, y luego un segundo, por turnos.
   // Así un movimiento largo (autos que pasan detrás del vidrio) no se lleva todas las fotos.
-  function pickTimes(mot, t0, t1, n) {
+  function pickTimes(mot, t0, t1, n, gap = 0.9) {
     const span = Math.max(0, t1 - t0);
     const times = [t0 + span * 0.25, t0 + span * 0.75].slice(0, Math.min(2, n));
     const far = (t, gap) => times.every((x) => Math.abs(x - t) >= gap);
     const sorted = mot.map((m) => m.e).sort((a, b) => a - b);
     const thr = Math.max(0.8, 3 * (sorted[Math.floor(sorted.length / 4)] || 0));
-    const win = Math.max(1.5, span / n);
+    const win = Math.max(gap * 1.5, span / n);
     const slots = [];
     for (const m of mot) {
       if (m.e < thr) continue;
@@ -1546,7 +1545,7 @@
       added = false;
       for (const q of queues) {
         if (times.length >= n) break;
-        while (q.length && !far(q[0].t, 0.9)) q.shift();
+        while (q.length && !far(q[0].t, gap)) q.shift();
         if (q.length) { times.push(q.shift().t); added = true; }
       }
     }
@@ -1560,19 +1559,19 @@
       S.counting = stopLabel(s);
       progress();
       const doors = doorCams();
-      // La puerta con validador recibe más imágenes: ahí se decide si pagan.
-      const weight = doors.map((c) => (hasValidator(c) ? 2 : 1));
-      const per = STOP_IMAGES / weight.reduce((a, b) => a + b, 0);
+      // La puerta con validador recibe muchas más imágenes (hasta una cada medio segundo con movimiento): ahí se
+      // decide si pagan y es donde más gente sube seguida. Las otras puertas, menos y más livianas.
       const span = s.t1 - s.t0;
       const labels = 'ABCDEFGH';
       const meta = [];
       const parts = [{ text: '' }];
       // Las cámaras exteriores ayudan a ver si el paradero es zona paga (andén cerrado).
       const outside = S.cams.filter((c) => !c.bad && c.tipo === 'exterior').slice(0, 2);
-      const groups = [...doors.map((c, d) => ({ c, count: clamp(Math.min(Math.round(per * weight[d]), Math.ceil(span / 0.8) + 1), 3, 18), door: true })), ...outside.map((c) => ({ c, count: 2, door: false }))];
+      const nVal = doors.filter((c) => hasValidator(c)).length || 1;
+      const groups = [...doors.map((c) => ({ c, count: hasValidator(c) ? clamp(Math.round(span / 0.6), 6, Math.round(24 / nVal)) : clamp(Math.round(span / 2), 3, 8), door: true, gap: hasValidator(c) ? 0.5 : 0.9 })), ...outside.map((c) => ({ c, count: 2, door: false }))];
       // En las puertas se miran los momentos en que algo se mueve, no fotos parejas en el tiempo:
       // así no se escapa quien sube entre una foto y otra.
-      const plans = await Promise.all(groups.map(async (g) => (g.door ? pickTimes(await motionOf(g.c, s.t0, s.t1, run), s.t0, s.t1, g.count) : null)));
+      const plans = await Promise.all(groups.map(async (g) => (g.door ? pickTimes(await motionOf(g.c, s.t0, s.t1, run), s.t0, s.t1, g.count, g.gap) : null)));
       if (run !== S.run) return false;
       for (let d = 0; d < groups.length; d++) {
         const { c, count, door } = groups[d];
@@ -1607,12 +1606,13 @@
         '- "resultado": "paga" (validó: luz verde o acercó la tarjeta), "zona_paga" (sube en zona paga, pagó en el paradero), "evade" (se ve que no acerca nada al validador) o "dudoso" (su último intento quedó en rojo, o no se alcanza a ver). Evita "dudoso" cuando las imágenes permiten decidir.',
         'Cuenta a cada persona UNA sola vez aunque aparezca en varias imágenes o en varias cámaras: identifícala por su ropa y apariencia, y asígnala a la puerta por la que sube. No cuentes a quien ya estaba arriba ni al conductor.',
         'Personas con movilidad reducida (silla de ruedas, bastón, coche de guagua, adulto mayor): a menudo validan adelante (o un agente valida por ellas) y después suben por la puerta de atrás, donde está la rampa, muchas veces ayudadas por un agente. Es UNA sola persona: cuéntala una vez, como "paga" si ella o alguien por ella validó, y nunca como evasión por subir atrás. Lo mismo si alguien valida adelante, baja y vuelve a subir por otra puerta.',
-        'Antes de contar, revisa CADA cámara por separado, imagen por imagen y en orden, y anota en "por_camara" qué pasa en ella (quién sube, quién baja, quién solo se mueve adentro). Una persona sube solo si en una imagen se ve afuera o en el escalón y en una imagen posterior de la misma cámara ya está adentro.',
+        'Antes de contar, revisa CADA cámara por separado, imagen por imagen y en orden, y anota en "por_camara" qué pasa en ella (quién sube, quién baja, quién solo se mueve adentro) y en "suben" cuántas personas suben por esa puerta. Una persona sube solo si en una imagen se ve afuera o en el escalón y en una imagen posterior de la misma cámara ya está adentro.',
+        'En la cámara con validador, numera a cada persona NUEVA que aparece en el escalón o frente al validador (distínguela por ropa, pelo, bolso, estatura): cada una es un pasajero distinto aunque suban muy seguidas o en grupo (un adulto con un niño son 2). Revisa todas las imágenes de esa cámara: es fácil que se escape alguien que sube justo detrás de otra persona. Cada persona contada en "suben" debe aparecer en "personas".',
         'Personas que BAJAN: anota en "bajan_detalle" solo a quien se ve SALIR del bus: en una imagen está adentro o en el escalón y en una imagen posterior de la misma cámara ya está afuera, en la calle o el andén, alejándose. NO es bajar: moverse o caminar dentro del bus, pararse o acercarse a la puerta, estar sentado, ni la gente que está afuera en el paradero sin haber estado adentro. Si no estás seguro, no la anotes. Si nadie baja, "bajan_detalle" es [].',
         `MUY IMPORTANTE: el personal NO son pasajeros y no se cuenta NUNCA, ni en "personas" ni en "bajan", aunque acerque una tarjeta al validador (los agentes también validan, prueban el validador o validan por un pasajero), aunque suba, baje o cambie de puerta. En estos buses el personal es: ${S.staff}. También son personal los guardias, fiscalizadores, inspectores, anfitriones de zona paga y el conductor. Pistas: se quedan de pie en la puerta, el escalón o junto al validador durante toda la detención sin avanzar hacia adentro, se asoman hacia afuera, ayudan u ordenan la subida, o bajan y vuelven a subir. Solo cuenta a quien entra de verdad al bus y avanza hacia el pasillo o los asientos. Si dudas si alguien es personal o pasajero, no lo cuentes como pasajero y menciónalo en "personal_visto".`,
         S.staffN ? `Durante todo el recorrido van ${S.staffN} agente${S.staffN === 1 ? '' : 's'} a bordo: si ves ${S.staffN === 1 ? 'a una persona' : `${S.staffN} personas`} con ese uniforme subiendo, bajando o en las puertas, ${S.staffN === 1 ? 'es el agente' : 'son ellos'}.` : '',
         S.staffRef ? 'Te envío además una IMAGEN DE REFERENCIA (antes de las imágenes numeradas) donde se ven los agentes: compara la ropa y apariencia de cada persona con ellos antes de contarla.' : '',
-        'Responde SOLO con JSON con esta forma: {"por_camara":[{"camara":"A","que_pasa":"sube una mujer con chaqueta roja y valida; nadie baja"}],"zona_paga":{"es":false,"motivo":"qué viste para decidirlo"},"personal_visto":"agente de negro en la puerta delantera","personas":[{"imagen":3,"camara":"A","descripcion":"mujer con chaqueta roja y mochila","luz":"verde","valida":true,"fuera_zona":false,"resultado":"paga"}],"bajan_detalle":[{"imagen":7,"camara":"C","descripcion":"hombre con polerón gris sale a la vereda"}],"resumen":"1 o 2 frases sobre lo ocurrido en este paradero"}',
+        'Responde SOLO con JSON con esta forma: {"por_camara":[{"camara":"A","suben":1,"que_pasa":"sube una mujer con chaqueta roja y valida; nadie baja"}],"zona_paga":{"es":false,"motivo":"qué viste para decidirlo"},"personal_visto":"agente de negro en la puerta delantera","personas":[{"imagen":3,"camara":"A","descripcion":"mujer con chaqueta roja y mochila","luz":"verde","valida":true,"fuera_zona":false,"resultado":"paga"}],"bajan_detalle":[{"imagen":7,"camara":"C","descripcion":"hombre con polerón gris sale a la vereda"}],"resumen":"1 o 2 frases sobre lo ocurrido en este paradero"}',
         'Si nadie sube, "personas" es []. En "imagen" pon el número de la imagen donde mejor se ve si pagó o no.',
       ].join('\n');
       let r;
@@ -1649,6 +1649,19 @@
           res: /^pag/.test(res) ? 'paga' : /zona/.test(res) ? 'zp' : /^ev/.test(res) && !roja ? 'evade' : 'dudoso',
         };
       });
+      // Si la IA dijo que por una puerta subieron más personas de las que describió, las que faltan
+      // se agregan como «dudoso» para revisarlas (así no desaparecen del conteo).
+      for (const x of Array.isArray(r.por_camara) ? r.por_camara : []) {
+        const m = meta.find((q) => q.door && q.label === String((x && x.camara) || '').toUpperCase());
+        const n = Math.round(num(x && x.suben) || 0);
+        if (!m || n <= 0) continue;
+        const have = personas.filter((p) => p.cam === m.cam).length;
+        const cam = camByKey(m.cam);
+        const mid = meta.filter((q) => q.cam === m.cam);
+        for (let k = have; k < Math.min(n, have + 10); k++) {
+          personas.push({ t: (mid[Math.floor(mid.length / 2)] || m).t, cam: m.cam, desc: 'Persona que la IA vio subir por esta puerta sin describirla: revisar', valida: null, sinValidador: false, fueraZona: false, res: 'dudoso', luz: null });
+        }
+      }
       // Quién baja: se exige el detalle (imagen y cámara) para no contar a quien solo se mueve adentro.
       const camOf = (x) => {
         const mi = meta[clamp(Math.round(num(x && x.imagen) || 1), 1, meta.length) - 1];
@@ -2301,6 +2314,11 @@
           if (s.porCamara && s.porCamara.length) td.append(el('div', 'muted', `Qué vio en cada cámara: ${s.porCamara.join(' · ')}`));
           if (s.personal) td.append(el('div', 'muted', `Personal visto (no contado): ${s.personal}`));
           if (s.modelo) td.append(el('div', 'muted', `Contado con ${MODEL_NAMES[s.modelo] || s.modelo}`));
+          // Recontar solo este paradero (sirve para probar otra IA o las reglas nuevas sin gastar en todo el video).
+          const again1 = el('button', 'btn small ghost', '↻ Contar de nuevo este paradero');
+          again1.type = 'button';
+          again1.onclick = (e) => { e.stopPropagation(); s.estado = 'pendiente'; s.bajanManual = null; save(); rebuild(); if (!S.running) restart(); };
+          td.append(again1);
         }
         dt.append(td);
         rows.push(dt);
