@@ -348,7 +348,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-6';
+  const VERSION = '2026.09.25-7';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -2450,6 +2450,7 @@
     g.fillText(txt || mmss(t), 10, bar / 2);
   }
   // En el cuadro que sobra del mosaico: los datos del momento (sirve de respaldo en el video o la foto).
+  // No lleva el conteo de pasajes: el video y la foto se comparten y solo muestran lo que se ve.
   function drawInfo(g, t, x, y, cw, ch) {
     g.fillStyle = '#10181f';
     g.fillRect(x, y, cw, ch);
@@ -2463,10 +2464,6 @@
       [par ? `Paradero ${par.o ? `#${par.o} ` : ''}${par.c || ''}` : '', 20],
       [par ? shortName(par.n) : m && m.lat != null ? `${m.lat.toFixed(5)}, ${m.lon.toFixed(5)}` : '', 17],
     ];
-    if (stop && stop.estado === 'listo') {
-      const c = counts(stop);
-      lines.push([`Suben ${c.suben} · Pagan ${c.pagan} · Evaden ${c.evaden}${zpOf(stop) ? ' · ZP' : ''}`, 20]);
-    }
     let yy = y + 36;
     g.textBaseline = 'alphabetic';
     for (const [txt, size] of lines) {
