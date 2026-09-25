@@ -287,6 +287,10 @@
       <img id="staffRefImg" alt="Referencia de los agentes" hidden style="height:44px;border-radius:4px;border:1px solid var(--line)">
       <button class="btn small ghost" id="btnStaffRefDel" type="button" hidden>Quitar</button>
     </div>
+    <div class="staff-row">
+      <label>IA para contar <select id="aiModel" class="svc-sel"><option value="flash">Gemini Flash (recomendado · ~US$ 2 por bus)</option><option value="pro">Gemini Pro (más preciso · ~US$ 5 por bus)</option><option value="lite">Gemini Flash-Lite (gratis, básico)</option></select></label>
+      <span class="muted" id="costInfo"></span>
+    </div>
     <div class="exports" id="modelNote" hidden></div>
     <div class="table-wrap">
       <table>
@@ -312,10 +316,19 @@
   const EMBED_KEY = '__GEMINI_KEY__';
   // Alias que Google mantiene apuntando al modelo vigente; los demás son respaldo.
   // «quick» recorre el video; «main» cuenta pasajeros, donde importa más la precisión.
+  // Lecturas rápidas (coordenadas, descripciones) siempre con el modelo liviano; el conteo, con el que se elija.
+  // Si el elegido no está disponible (por ejemplo, clave sin facturación), se baja al siguiente.
+  const MAIN = {
+    pro: ['gemini-pro-latest', 'gemini-3.1-pro-preview', 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-flash-lite-latest'],
+    flash: ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest'],
+    lite: ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite'],
+  };
   const MODELS = {
     quick: ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-flash-latest'],
-    main: ['gemini-pro-latest', 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest'],
+    get main() { return MAIN[S.ai] || MAIN.flash; },
   };
+  // Tarifas de Google en US$ por millón de tokens (entrada, salida), para estimar el gasto.
+  const PRICE = (m) => (/pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
   // En Railway la página la entrega el servidor, que agrega la clave: el navegador nunca la ve.
   const SERVER = !!window.COF_SERVER;
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -333,7 +346,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-4';
+  const VERSION = '2026.09.25-5';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -378,6 +391,8 @@
     range: null, frontier: 0, running: false, paused: false,
     staffRef: store.get('cofsimple:staffref', null),
     staffN: store.get('cofsimple:staffn', null),
+    ai: store.get('cofsimple:ai', 'flash'),
+    spend: store.get('cofsimple:gasto', null),
     staff: store.get('cofsimple:staff2', 'Agentes de la empresa con uniforme negro (chaqueta y pantalón negros con franjas reflectantes, a menudo gorro negro), que suben al bus en el terminal antes de iniciar el recorrido o se paran en las puertas mientras el bus está detenido'),
     auto: store.get('cofsimple:auto', true), userPaused: false, autoPausing: false, waiting: false, rate: 1,
   };
@@ -696,6 +711,21 @@
   const COOL = {};
   const MODEL_NAMES = { 'gemini-flash-lite-latest': 'Gemini Flash-Lite (básico)', 'gemini-3.5-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-flash-latest': 'Gemini Flash', 'gemini-3.8-flash': 'Gemini Flash', 'gemini-3.5-flash': 'Gemini Flash', 'gemini-pro-latest': 'Gemini Pro', 'gemini-3.1-pro-preview': 'Gemini Pro' };
   const isLite = (m) => /lite/.test(m || '');
+  // Gasto estimado del día según los tokens que informa Google (si la clave tiene facturación activa).
+  const today = () => new Date().toLocaleDateString('sv');
+  function addSpend(model, u) {
+    if (!u) return;
+    const [pin, pout] = PRICE(model);
+    if (!S.spend || S.spend.dia !== today()) S.spend = { dia: today(), usd: 0, n: 0 };
+    S.spend.usd += ((u.promptTokenCount || 0) * pin + ((u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0)) * pout) / 1e6;
+    S.spend.n++;
+    store.set('cofsimple:gasto', S.spend);
+    renderSpend();
+  }
+  function renderSpend() {
+    const sp = S.spend && S.spend.dia === today() ? S.spend : null;
+    $('#costInfo').textContent = sp ? `Gasto estimado hoy: US$ ${sp.usd.toFixed(2)} en ${sp.n} consultas (solo se cobra si tu clave tiene facturación activa).` : '';
+  }
   async function gemini(parts, run, tier) {
     const list = MODELS[tier];
     for (let attempt = 0; attempt < 16; attempt++) {
@@ -731,6 +761,7 @@
       if (res.ok) {
         const text = ((body.candidates && body.candidates[0] && body.candidates[0].content && body.candidates[0].content.parts) || []).map((p) => p.text || '').join('');
         S.lastModel = model;
+        addSpend(model, body.usageMetadata);
         try { return JSON.parse(text); } catch {
           const m = text.match(/[[{][\s\S]*[\]}]/);
           if (m) try { return JSON.parse(m[0]); } catch { /* reintenta */ }
@@ -880,6 +911,20 @@
     if (!S.stops.some((x) => x.estado === 'listo')) return;
     if (!confirm('¿Volver a contar los paraderos con esta descripción del personal? Las correcciones hechas a mano en esos paraderos se reemplazan por el nuevo conteo.')) return;
     for (const x of S.stops) if (x.estado === 'listo') x.estado = 'pendiente';
+    save();
+    restart();
+  };
+  $('#aiModel').value = S.ai;
+  renderSpend();
+  $('#aiModel').onchange = (e) => {
+    S.ai = e.target.value;
+    store.set('cofsimple:ai', S.ai);
+    for (const k of Object.keys(COOL)) delete COOL[k]; // por si se activó la facturación: se vuelve a probar todo
+    // Solo se ofrece recontar lo que se contó con un modelo más básico que el elegido.
+    const rank = (m) => (/pro/.test(m) ? 2 : /lite/.test(m) ? 0 : 1);
+    const redo = S.stops.filter((x) => x.estado === 'listo' && x.modelo && rank(x.modelo) < rank(S.ai));
+    if (!redo.length || !confirm(`¿Volver a contar ${redo.length === 1 ? 'el paradero ya contado' : `los ${redo.length} paraderos ya contados`} con ${$('#aiModel').selectedOptions[0].textContent.split(' (')[0]}? Las correcciones hechas a mano en esos paraderos se reemplazan.`)) return;
+    for (const x of redo) x.estado = 'pendiente';
     save();
     restart();
   };
@@ -1928,7 +1973,7 @@
     if (typeof renderMeta === 'function' && S.range) renderMeta();
     const lite = S.stops.filter((x) => x.estado === 'listo' && isLite(x.modelo)).length;
     $('#modelNote').hidden = !lite;
-    $('#modelNote').textContent = lite ? `⚠ ${lite} ${lite === 1 ? 'paradero se contó' : 'paraderos se contaron'} con Gemini Flash-Lite, el modelo básico: con la clave gratuita Google no entrega Gemini Pro y Flash suele estar saturado. Revisa esos conteos, o activa la facturación de Google para que se cuenten con Pro.` : '';
+    $('#modelNote').textContent = lite ? `⚠ ${lite} ${lite === 1 ? 'paradero se contó' : 'paraderos se contaron'} con Gemini Flash-Lite, el modelo básico (Google no entregó el modelo elegido: sin facturación activa no hay Pro y Flash suele estar saturado). Revisa esos conteos, o activa la facturación y vuelve a elegir la IA para contar.` : '';
     const T = totals();
     const pend = S.stops.filter((s) => s.estado !== 'listo' && inRange(s) && !beforeStart(s)).length;
     const quiet = S.stops.filter((s) => s.estado === 'listo' && inRange(s) && !beforeStart(s) && !moving(s)).length;
