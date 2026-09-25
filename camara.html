@@ -79,6 +79,8 @@
   #map { height: 100%; min-height: 420px; flex: 1; }
   .map-foot { padding: 8px 12px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .map-foot label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .svc-sel { font: inherit; font-size: 14px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); max-width: 100%; }
+  #stopsInfo { flex-basis: 100%; }
   h2 { font-size: 15px; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
   h2 span { font-weight: 400; color: var(--muted); font-size: 13px; }
   .totals { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); }
@@ -210,10 +212,11 @@
       <span id="mapInfo">El recorrido aparece cuando se leen las coordenadas del video.</span>
     </div>
     <div class="map-foot">
-      <button class="btn small ghost" id="btnStops" type="button">Cargar paraderos</button>
-      <input type="file" id="stopsInput" accept=".csv,.txt,.xlsx,.xls,.ods,.kml,.kmz,.geojson,.json,.gpx" hidden>
+      <select id="svcSel" class="svc-sel" title="Servicio"></select>
+      <select id="dirSel" class="svc-sel" title="Sentido"></select>
       <span id="stopsInfo"></span>
-      <button class="btn small ghost" id="btnStopsClear" type="button" hidden>Quitar</button>
+      <button class="btn small ghost" id="btnStops" type="button" title="Agregar otro servicio desde Excel, CSV o KML">+ Servicio</button>
+      <input type="file" id="stopsInput" accept=".csv,.txt,.xlsx,.xls,.ods,.kml,.kmz,.geojson,.json,.gpx" hidden>
     </div>
   </section>
 
@@ -1146,7 +1149,11 @@
 
   // ---------------------------------------------------------------- paraderos oficiales (archivo)
   // Se guardan en este navegador: basta cargarlos una vez.
-  const PAR = { list: store.get('cofsimple:paraderos', []), layer: null, want: true };
+  // Servicios con sus paraderos en orden (Ida / Regreso). Vienen incorporados y se pueden agregar otros desde un archivo.
+  const BUILTIN_SERVICES = {"107":{"Ida":[{"o":1,"c":"PB101","ts":"T-3-13-NS-5","n":"Avenida Del Parque / esq. Av. Del Cóndor","co":"HUECHURABA","lat":-33.388416,"lon":-70.615973},{"o":2,"c":"PB102","ts":"T-3-13-NS-10","n":"Avenida Del Parque / esq. Av. Del Cóndor","co":"HUECHURABA","lat":-33.390973,"lon":-70.619498},{"o":3,"c":"PB103","ts":"T-3-13-NS-15","n":"Avenida Del Parque / esq. Av. Del Valle","co":"HUECHURABA","lat":-33.392545,"lon":-70.619794},{"o":4,"c":"PB104","ts":"T-3-13-NS-20","n":"Avenida Del Parque / esq. La Rinconada","co":"HUECHURABA","lat":-33.393833,"lon":-70.620871},{"o":5,"c":"PB1580","ts":"T-3-433-OP-85","n":"Parada 4 / Palacio Riesco","co":"HUECHURABA","lat":-33.393251,"lon":-70.623222},{"o":6,"c":"PB105","ts":"T-4-16-NS-2","n":"El Salto / esq. Julio Moya Pena","co":"RECOLETA","lat":-33.395031,"lon":-70.626322},{"o":7,"c":"PB106","ts":"T-4-16-NS-5","n":"Parada 1 / Plaza El Salto","co":"RECOLETA","lat":-33.396534,"lon":-70.626615},{"o":8,"c":"PB107","ts":"T-4-16-NS-10","n":"El Salto / esq. Santa Mónica","co":"RECOLETA","lat":-33.398461,"lon":-70.628039},{"o":9,"c":"PB4","ts":"T-4-23-OP-5","n":"Pedro Donoso / esq. Santa Ana","co":"RECOLETA","lat":-33.39936,"lon":-70.633047},{"o":10,"c":"PB5","ts":"T-4-23-OP-10","n":"Pedro Donoso / esq. María del Pilar","co":"RECOLETA","lat":-33.39848,"lon":-70.636848},{"o":11,"c":"PB6","ts":"T-4-23-OP-15","n":"Pedro Donoso / esq. Las Orquídeas","co":"RECOLETA","lat":-33.397676,"lon":-70.640255},{"o":12,"c":"PB7","ts":"E-4-9-OP-5","n":"Parada 4 / (M) Dorsal","co":"RECOLETA","lat":-33.39677,"lon":-70.643284},{"o":13,"c":"PB8","ts":"T-4-9-OP-10","n":"Avenida Dorsal / esq. Atlántida","co":"RECOLETA","lat":-33.396093,"lon":-70.646193},{"o":14,"c":"PB10","ts":"T-4-9-OP-17","n":"Avenida Dorsal / esq. José Miguel Carrera","co":"RECOLETA","lat":-33.395743,"lon":-70.649515},{"o":15,"c":"PB11","ts":"T-4-9-OP-20","n":"Avenida Dorsal / esq. Diag. José M. Caro","co":"RECOLETA","lat":-33.395299,"lon":-70.652892},{"o":16,"c":"PB1587","ts":"T-4-9-OP-25","n":"Avenida Dorsal / esq. El Guanaco","co":"RECOLETA","lat":-33.395774,"lon":-70.657048},{"o":17,"c":"PB14","ts":"T-2-9-OP-10","n":"Avenida Dorsal / esq. Araguayas","co":"CONCHALÍ","lat":-33.396356,"lon":-70.661508},{"o":18,"c":"PB15","ts":"T-2-9-OP-15","n":"Avenida Dorsal / esq. Cencerro","co":"CONCHALÍ","lat":-33.396904,"lon":-70.665031},{"o":19,"c":"PB16","ts":"T-2-9-OP-20","n":"Parada 2 / (M) Conchalí","co":"CONCHALÍ","lat":-33.397562,"lon":-70.669069},{"o":20,"c":"PB18","ts":"T-2-9-OP-30","n":"Roma / esq. La Primavera","co":"CONCHALÍ","lat":-33.399225,"lon":-70.673689},{"o":21,"c":"PB1469","ts":"T-2-9-OP-35","n":"Roma / esq. B. de Juras Reales","co":"CONCHALÍ","lat":-33.400258,"lon":-70.676527},{"o":22,"c":"PB1563","ts":"E-2-9-OP-55","n":"Parada 4 / Norte Sur - Dorsal","co":"CONCHALÍ","lat":-33.402209,"lon":-70.681946},{"o":23,"c":"PB2024","ts":"T-5-42-OP-125","n":"Avenida Dorsal / esq. Camino Lo Ruiz","co":"RENCA","lat":-33.402753,"lon":-70.685704},{"o":24,"c":"PB2022","ts":"T-5-42-OP-90","n":"Avenida Dorsal / esq. Colón","co":"RENCA","lat":-33.400341,"lon":-70.693476},{"o":25,"c":"PB2018","ts":"T-5-42-OP-60","n":"Avenida Dorsal / esq. Av.Apóstol Santiago","co":"RENCA","lat":-33.399988,"lon":-70.696621},{"o":26,"c":"PB2015","ts":"T-5-42-OP-30","n":"Avenida Dorsal / esq. Caupolicán","co":"RENCA","lat":-33.40202,"lon":-70.701368},{"o":27,"c":"PB2012","ts":"E-5-42-OP-5","n":"Parada 3 / Plaza Renca","co":"RENCA","lat":-33.40517,"lon":-70.703977},{"o":28,"c":"PJ1","ts":"T-8-65-NS-5","n":"Lo Espinoza / esq. Samuel Izquierdo","co":"QUINTA NORMAL","lat":-33.409533,"lon":-70.707431},{"o":29,"c":"PJ2","ts":"T-8-65-NS-10","n":"Lo Espinoza / esq. Carmen Lidia","co":"QUINTA NORMAL","lat":-33.412133,"lon":-70.706268},{"o":30,"c":"PJ3","ts":"T-8-65-NS-15","n":"Lo Espinoza / esq. Calle 7","co":"QUINTA NORMAL","lat":-33.41585,"lon":-70.704666},{"o":31,"c":"PJ4","ts":"T-8-65-NS-20","n":"Lo Espinoza / esq. Pasaje Antártica","co":"QUINTA NORMAL","lat":-33.418302,"lon":-70.703587},{"o":32,"c":"PJ5","ts":"T-8-61-PO-20","n":"Parada 1 / Escuela Lo Franco","co":"QUINTA NORMAL","lat":-33.420765,"lon":-70.70212},{"o":33,"c":"PJ6","ts":"T-8-70-NS-3","n":"Parada / Escuela Diego Portales","co":"QUINTA NORMAL","lat":-33.421696,"lon":-70.702106},{"o":34,"c":"PJ7","ts":"T-8-70-NS-5","n":"Radal / esq. Salvador Gutiérrez","co":"QUINTA NORMAL","lat":-33.42446,"lon":-70.702912},{"o":35,"c":"PJ8","ts":"T-8-70-NS-10","n":"Radal / esq. Avenida Mapocho","co":"QUINTA NORMAL","lat":-33.428208,"lon":-70.70398},{"o":36,"c":"PJ9","ts":"T-8-74-NS-5","n":"Sergio Valdovinos / esq. Cónsul Poinsett","co":"QUINTA NORMAL","lat":-33.428979,"lon":-70.706618},{"o":37,"c":"PJ10","ts":"E-8-74-NS-10","n":"Parada 1 / Las Rejas - José J. Pérez","co":"QUINTA NORMAL","lat":-33.43188,"lon":-70.707171},{"o":38,"c":"PJ11","ts":"T-8-74-NS-15","n":"Sergio Valdovinos / esq. Vicuña Rozas","co":"QUINTA NORMAL","lat":-33.435989,"lon":-70.70715},{"o":39,"c":"PJ12","ts":"T-9-74-NS-5","n":"Sergio Valdovinos / esq. 9 de Julio","co":"LO PRADO","lat":-33.438552,"lon":-70.707124},{"o":40,"c":"PJ13","ts":"T-9-74-NS-10","n":"Parada 7 / (M) Blanqueado","co":"LO PRADO","lat":-33.441331,"lon":-70.70741},{"o":41,"c":"PJ14","ts":"T-9-52-NS-3","n":"Avenida Las Rejas / esq. Santa Laura","co":"LO PRADO","lat":-33.443829,"lon":-70.707384},{"o":42,"c":"PJ15","ts":"T-9-52-NS-5","n":"Avenida Las Rejas / esq. Avenida Portales","co":"LO PRADO","lat":-33.445779,"lon":-70.707368},{"o":43,"c":"PJ1582","ts":"L-9-28-10-NS","n":"Av. Las Rejas-Norte / esq. Ciudadela","co":"LO PRADO","lat":-33.447728,"lon":-70.707295},{"o":44,"c":"PJ16","ts":"T-9-52-NS-10","n":"Avenida Las Rejas / esq. Avenida Dorsal","co":"LO PRADO","lat":-33.449177,"lon":-70.707107},{"o":45,"c":"PJ17","ts":"T-9-52-NS-15","n":"Avenida Las Rejas / esq. Perú","co":"LO PRADO","lat":-33.451801,"lon":-70.706496},{"o":46,"c":"PJ18","ts":"E-9-52-NS-20","n":"Parada 11 / (M) Las Rejas","co":"LO PRADO","lat":-33.456797,"lon":-70.705708},{"o":47,"c":"PI1","ts":"T-7-52-NS-5","n":"Avenida Las Rejas / esq. Agustín López","co":"ESTACIÓN CENTRAL","lat":-33.460707,"lon":-70.705341},{"o":48,"c":"PI2","ts":"T-7-52-NS-10","n":"Parada 1 / 5 de Abril - Las Rejas","co":"ESTACIÓN CENTRAL","lat":-33.46412,"lon":-70.705116},{"o":49,"c":"PI49","ts":"T-7-52-NS-15","n":"Avenida Las Rejas / esq. Quitralco","co":"ESTACIÓN CENTRAL","lat":-33.467233,"lon":-70.704836},{"o":50,"c":"PI50","ts":"T-7-52-NS-20","n":"Avenida Las Rejas / esq. Colu","co":"ESTACIÓN CENTRAL","lat":-33.471278,"lon":-70.704409},{"o":51,"c":"PI51","ts":"T-7-52-NS-25","n":"Avenida Las Rejas / esq. Mailef","co":"ESTACIÓN CENTRAL","lat":-33.475636,"lon":-70.703206},{"o":52,"c":"PI53","ts":"T-12-90-PO-5","n":"Avenida Suiza / esq. Cam. a Melipilla","co":"CERRILLOS","lat":-33.482547,"lon":-70.69729},{"o":53,"c":"PI1375","ts":"T-12-89-PO-3","n":"Parada 3 / (M) Cerrillos","co":"CERRILLOS","lat":-33.483858,"lon":-70.694674},{"o":54,"c":"PI55","ts":"T-12-89-PO-5","n":"Av. Departamental / esq. Los Libertadores","co":"CERRILLOS","lat":-33.484606,"lon":-70.692344},{"o":55,"c":"PI56","ts":"T-12-89-PO-10","n":"Av. Departamental / esq. Av. Gral. Velásquez","co":"CERRILLOS","lat":-33.484648,"lon":-70.688576},{"o":56,"c":"PH2","ts":"T-28-89-PO-10","n":"Av. Departamental / esq. Haití","co":"PEDRO AGUIRRE CERDA","lat":-33.488006,"lon":-70.684381},{"o":57,"c":"PH3","ts":"T-28-89-PO-12","n":"Av. Departamental / esq. Ranquil","co":"PEDRO AGUIRRE CERDA","lat":-33.491546,"lon":-70.68018},{"o":58,"c":"PH4","ts":"T-28-89-PO-15","n":"Av. Departamental / esq. Av. Clotario Blest","co":"PEDRO AGUIRRE CERDA","lat":-33.493937,"lon":-70.676843},{"o":59,"c":"PH5","ts":"T-28-89-PO-20","n":"Av. Departamental / esq. Félix Mendelssohn","co":"PEDRO AGUIRRE CERDA","lat":-33.496041,"lon":-70.67403},{"o":60,"c":"PH6","ts":"T-28-89-PO-25","n":"Av. Departamental / esq. Club Hípico","co":"PEDRO AGUIRRE CERDA","lat":-33.497476,"lon":-70.672069},{"o":61,"c":"PH1454","ts":"T-28-89-PO-27","n":"Av. Departamental / esq. Alcibiades","co":"PEDRO AGUIRRE CERDA","lat":-33.499236,"lon":-70.669747},{"o":62,"c":"PH7","ts":"T-28-89-PO-30","n":"Parada 1 / Departamental - Panamericana","co":"PEDRO AGUIRRE CERDA","lat":-33.50028,"lon":-70.666966},{"o":63,"c":"PH8","ts":"T-25-89-PO-5","n":"Av. Departamental / esq. Pasaje 1","co":"SAN MIGUEL","lat":-33.500938,"lon":-70.6644},{"o":64,"c":"PH9","ts":"T-25-89-PO-10","n":"Av. Departamental / esq. 3ª Transversal","co":"SAN MIGUEL","lat":-33.501955,"lon":-70.66061},{"o":65,"c":"PH10","ts":"T-25-89-PO-15","n":"Av. Departamental / esq. 1ª Transversal","co":"SAN MIGUEL","lat":-33.502651,"lon":-70.658064},{"o":66,"c":"PH11","ts":"E-25-89-PO-16","n":"Parada 4 / (M) Departamental","co":"SAN MIGUEL","lat":-33.503421,"lon":-70.655678},{"o":67,"c":"PH12","ts":"T-25-89-PO-20","n":"Av. Departamental / esq. Departamental Int.","co":"SAN MIGUEL","lat":-33.504468,"lon":-70.651355},{"o":68,"c":"PH13","ts":"T-25-89-PO-25","n":"Av. Departamental / esq. Miguel Luis Cerda","co":"SAN MIGUEL","lat":-33.505094,"lon":-70.648514},{"o":69,"c":"PH14","ts":"T-25-89-PO-30","n":"Av. Departamental / esq. San Mauricio","co":"SAN MIGUEL","lat":-33.505812,"lon":-70.645323},{"o":70,"c":"PH15","ts":"T-25-89-PO-35","n":"Av. Departamental / esq. Río de Janeiro","co":"SAN MIGUEL","lat":-33.506734,"lon":-70.64109},{"o":71,"c":"PH16","ts":"E-25-89-PO-36","n":"Parada 6 / Departamental - Santa Rosa","co":"SAN MIGUEL","lat":-33.507131,"lon":-70.639463},{"o":72,"c":"PH17","ts":"T-21-89-PO-10","n":"Parada / INFOCAP","co":"SAN JOAQUÍN","lat":-33.507165,"lon":-70.635527},{"o":73,"c":"PH18","ts":"T-21-89-PO-15","n":"Av. Departamental / esq. Juan Planas","co":"SAN JOAQUÍN","lat":-33.507136,"lon":-70.633644},{"o":74,"c":"PH19","ts":"T-21-89-PO-20","n":"Av. Departamental / esq. Benozzo Gozzoli","co":"SAN JOAQUÍN","lat":-33.50744,"lon":-70.629156},{"o":75,"c":"PH1456","ts":"T-21-89-PO-25","n":"Av. Departamental / esq. Av. Las Industrias","co":"SAN JOAQUÍN","lat":-33.507605,"lon":-70.626742},{"o":76,"c":"PH1491","ts":"T-21-89-PO-27","n":"Av. Departamental / esq. Vecinal-Norte","co":"SAN JOAQUÍN","lat":-33.507835,"lon":-70.623339},{"o":77,"c":"PH21","ts":"T-21-89-PO-30","n":"Av. Departamental / esq. Avenida Haydn","co":"SAN JOAQUÍN","lat":-33.50796,"lon":-70.621311},{"o":78,"c":"PH22","ts":"T-21-89-PO-35","n":"Parada / Persa Departamental","co":"SAN JOAQUÍN","lat":-33.508014,"lon":-70.618469},{"o":79,"c":"PE1500","ts":"E-33-89-PO-3","n":"Parada 9 / (M) Pedrero","co":"LA FLORIDA","lat":-33.508441,"lon":-70.611284},{"o":80,"c":"PE2","ts":"T-33-89-PO-5","n":"Parada / Estadio Monumental","co":"LA FLORIDA","lat":-33.508631,"lon":-70.607481},{"o":81,"c":"PE3","ts":"T-33-89-PO-20","n":"Av. Departamental / esq. Buenaventura","co":"LA FLORIDA","lat":-33.509224,"lon":-70.600583},{"o":82,"c":"PE4","ts":"T-33-89-PO-25","n":"Av. Departamental / esq. Nueva 1","co":"LA FLORIDA","lat":-33.509455,"lon":-70.596357},{"o":83,"c":"PE5","ts":"T-33-89-PO-30","n":"Av. Departamental / esq. Av. A. Vespucio","co":"LA FLORIDA","lat":-33.509699,"lon":-70.59283},{"o":84,"c":"PE874","ts":"T-33-89-PO-31","n":"Av. Departamental / esq. Av. A. Vespucio","co":"LA FLORIDA","lat":-33.510395,"lon":-70.590748},{"o":85,"c":"PE1410","ts":"T-33-89-PO-32","n":"Parada / Estación de Buses (M) Macul -Oriente","co":"LA FLORIDA","lat":-33.510801,"lon":-70.589413},{"o":86,"c":"PE35","ts":"T-33-89-PO-35","n":"Av. Departamental / esq. Los Retamos","co":"LA FLORIDA","lat":-33.510385,"lon":-70.583057},{"o":87,"c":"PE36","ts":"T-33-89-PO-40","n":"Parada / Escuela Sn.Valentín","co":"LA FLORIDA","lat":-33.510579,"lon":-70.579594},{"o":88,"c":"PE1284","ts":"T-33-89-PO-41","n":"Av. Departamental / esq. Punitaqui","co":"LA FLORIDA","lat":-33.510942,"lon":-70.574969},{"o":89,"c":"PE1286","ts":"T-33-89-PO-42","n":"Av. Departamental / esq. Volcán Llaima","co":"LA FLORIDA","lat":-33.511323,"lon":-70.571158},{"o":90,"c":"PE1285","ts":"T-33-89-PO-43","n":"Av. Departamental / esq. Volcán Calbuco","co":"LA FLORIDA","lat":-33.511576,"lon":-70.568051},{"o":91,"c":"PE1413","ts":"T-33-89-PO-44","n":"Av. Departamental / esq. Avenida Tobalaba","co":"LA FLORIDA","lat":-33.511362,"lon":-70.564228},{"o":92,"c":"PD1409","ts":"L-32-33-95-SN","n":"Avenida Tobalaba / esq. Jorge Prieto L.","co":"PEÑALOLÉN","lat":-33.510125,"lon":-70.560701},{"o":93,"c":"PD618","ts":"L-32-33-90-SN","n":"Avenida Tobalaba / esq. Av. Sn. Luis de Macul","co":"PEÑALOLÉN","lat":-33.508438,"lon":-70.56085},{"o":94,"c":"PD1452","ts":"L-32-19-85-OP","n":"Avenida Las Torres / esq. Nueva 1","co":"PEÑALOLÉN","lat":-33.50508,"lon":-70.561913},{"o":95,"c":"PD620","ts":"L-32-19-80-OP","n":"Avenida Las Torres / esq. Los Verduleros","co":"PEÑALOLÉN","lat":-33.504527,"lon":-70.564422}],"Regreso":[{"o":1,"c":"PD614","ts":"L-32-19-85-PO","n":"Avenida Las Torres / esq. Avenida Tobalaba","co":"PEÑALOLÉN","lat":-33.50537,"lon":-70.561272},{"o":2,"c":"PD462","ts":"L-32-33-80-NS","n":"Avenida Tobalaba / esq. Peatones A","co":"PEÑALOLÉN","lat":-33.506923,"lon":-70.561031},{"o":3,"c":"PD463","ts":"L-32-33-85-NS","n":"Avenida Tobalaba / esq. Av. Sn. Luis de Macul","co":"PEÑALOLÉN","lat":-33.508379,"lon":-70.560948},{"o":4,"c":"PD137","ts":"T-32-170-NS-40","n":"Avenida Tobalaba / esq. Av. Ramón Carnicer","co":"PEÑALOLÉN","lat":-33.510379,"lon":-70.560774},{"o":5,"c":"PD138","ts":"L-32-33-95-NS","n":"Avenida Tobalaba / esq. Av. Departamental","co":"PEÑALOLÉN","lat":-33.51131,"lon":-70.560677},{"o":6,"c":"PD169","ts":"T-32-89-OP-5","n":"Av. Departamental / esq. Gabriela Mistral","co":"PEÑALOLÉN","lat":-33.511396,"lon":-70.563493},{"o":7,"c":"PD171","ts":"T-32-89-OP-10","n":"Av. Departamental / esq. Caupolicán","co":"PEÑALOLÉN","lat":-33.511541,"lon":-70.567743},{"o":8,"c":"PD172","ts":"T-32-89-OP-15","n":"Av. Departamental / esq. Los Boteros","co":"PEÑALOLÉN","lat":-33.511344,"lon":-70.570562},{"o":9,"c":"PD170","ts":"T-32-89-OP-20","n":"Av. Departamental / esq. Los Torneros","co":"PEÑALOLÉN","lat":-33.510819,"lon":-70.575334},{"o":10,"c":"PD145","ts":"T-32-89-OP-25","n":"Parada / Escuela Sn.Valentín","co":"PEÑALOLÉN","lat":-33.510498,"lon":-70.580018},{"o":11,"c":"PD146","ts":"T-32-89-OP-30","n":"Av. Departamental / esq. Embalse La Palma","co":"PEÑALOLÉN","lat":-33.510324,"lon":-70.582126},{"o":12,"c":"PD1374","ts":"T-32-89-OP-35","n":"Av. Departamental / esq. Las Tejas","co":"PEÑALOLÉN","lat":-33.51008,"lon":-70.585797},{"o":13,"c":"PD1443","ts":"T-31-89-OP-1","n":"Av. Departamental / esq. Nueva 1","co":"MACUL","lat":-33.510436,"lon":-70.589758},{"o":14,"c":"PD1444","ts":"T-31-89-OP-2","n":"Parada / Estación de Buses (M) Macul -Poniente","co":"MACUL","lat":-33.509929,"lon":-70.591},{"o":15,"c":"PD1","ts":"T-31-89-OP-5","n":"Av. Departamental / esq. Reinalda Pereira","co":"MACUL","lat":-33.509446,"lon":-70.594814},{"o":16,"c":"PD2","ts":"T-31-89-OP-10","n":"Av. Departamental / esq. Carab.Daniel Silva","co":"MACUL","lat":-33.509241,"lon":-70.598007},{"o":17,"c":"PD1161","ts":"T-31-89-OP-20","n":"Av. Departamental / esq. E. Fernández","co":"MACUL","lat":-33.508854,"lon":-70.60298},{"o":18,"c":"PD4","ts":"T-31-89-OP-30","n":"Parada / Estadio Monumental","co":"MACUL","lat":-33.508586,"lon":-70.606545},{"o":19,"c":"PD904","ts":"E-31-89-OP-35","n":"Parada 2 / (M) Pedrero","co":"MACUL","lat":-33.508341,"lon":-70.611358},{"o":20,"c":"PH23","ts":"T-21-89-OP-5","n":"Parada / Persa Departamental","co":"SAN JOAQUÍN","lat":-33.507818,"lon":-70.618828},{"o":21,"c":"PH24","ts":"T-21-89-OP-10","n":"Av. Departamental / esq. Vecinal","co":"SAN JOAQUÍN","lat":-33.507576,"lon":-70.622821},{"o":22,"c":"PH1455","ts":"T-21-89-OP-15","n":"Av. Departamental / esq. Av. Las Industrias","co":"SAN JOAQUÍN","lat":-33.507411,"lon":-70.625387},{"o":23,"c":"PH26","ts":"T-21-89-OP-20","n":"Av. Departamental / esq. Pintor Murillo","co":"SAN JOAQUÍN","lat":-33.507131,"lon":-70.62945},{"o":24,"c":"PH27","ts":"T-21-89-OP-25","n":"Av. Departamental / esq. Juan Griego","co":"SAN JOAQUÍN","lat":-33.506971,"lon":-70.632736},{"o":25,"c":"PH28","ts":"T-21-89-OP-30","n":"Parada / INFOCAP","co":"SAN JOAQUÍN","lat":-33.507,"lon":-70.635116},{"o":26,"c":"PH29","ts":"E-21-89-OP-35","n":"Parada 2 / Departamental - Santa Rosa","co":"SAN JOAQUÍN","lat":-33.50699,"lon":-70.637861},{"o":27,"c":"PH30","ts":"T-25-89-OP-5","n":"Av. Departamental / esq. Montreal","co":"SAN MIGUEL","lat":-33.506381,"lon":-70.641638},{"o":28,"c":"PH31","ts":"T-25-89-OP-10","n":"Av. Departamental / esq. Montreal","co":"SAN MIGUEL","lat":-33.505814,"lon":-70.644494},{"o":29,"c":"PH32","ts":"T-25-89-OP-15","n":"Av. Departamental / esq. San Francisco","co":"SAN MIGUEL","lat":-33.504803,"lon":-70.648959},{"o":30,"c":"PH33","ts":"T-25-89-OP-20","n":"Av. Departamental / esq. Chiloé","co":"SAN MIGUEL","lat":-33.504197,"lon":-70.651623},{"o":31,"c":"PH34","ts":"E-25-89-OP-21","n":"Parada 1 / (M) Departamental","co":"SAN MIGUEL","lat":-33.503612,"lon":-70.654041},{"o":32,"c":"PH35","ts":"T-25-89-OP-25","n":"Av. Departamental / esq. San Jerónimo","co":"SAN MIGUEL","lat":-33.502657,"lon":-70.65746},{"o":33,"c":"PH36","ts":"T-25-89-OP-30","n":"Av. Departamental / esq. Gauss","co":"SAN MIGUEL","lat":-33.502017,"lon":-70.659867},{"o":34,"c":"PH37","ts":"T-25-89-OP-35","n":"Av. Departamental / esq. Monja Alférez","co":"SAN MIGUEL","lat":-33.5011,"lon":-70.6633},{"o":35,"c":"PH38","ts":"T-28-89-OP-5","n":"Parada 2 / Departamental - Panamericana","co":"PEDRO AGUIRRE CERDA","lat":-33.500055,"lon":-70.666925},{"o":36,"c":"PH1453","ts":"T-28-89-OP-7","n":"Av. Departamental / esq. Alcibiades","co":"PEDRO AGUIRRE CERDA","lat":-33.49919,"lon":-70.66939},{"o":37,"c":"PH39","ts":"T-28-89-OP-10","n":"Av. Departamental / esq. Club Hípico","co":"PEDRO AGUIRRE CERDA","lat":-33.497914,"lon":-70.671421},{"o":38,"c":"PH40","ts":"T-28-89-OP-15","n":"Av. Departamental / esq. Félix Mendelssohn","co":"PEDRO AGUIRRE CERDA","lat":-33.496118,"lon":-70.673584},{"o":39,"c":"PH41","ts":"T-28-89-OP-20","n":"Av. Departamental / esq. Av. Clotario Blest","co":"PEDRO AGUIRRE CERDA","lat":-33.494093,"lon":-70.6762},{"o":40,"c":"PH42","ts":"T-28-89-OP-25","n":"Av. Departamental / esq. Ranquil","co":"PEDRO AGUIRRE CERDA","lat":-33.491919,"lon":-70.679043},{"o":41,"c":"PH43","ts":"T-28-89-OP-30","n":"Av. Departamental / esq. Haití","co":"PEDRO AGUIRRE CERDA","lat":-33.488466,"lon":-70.683469},{"o":42,"c":"PH44","ts":"T-28-89-OP-35","n":"Av. Departamental / esq. Avenida Cerrillos","co":"PEDRO AGUIRRE CERDA","lat":-33.485853,"lon":-70.686803},{"o":43,"c":"PI57","ts":"T-12-89-OP-5","n":"Av. Departamental / esq. Avenida 7","co":"CERRILLOS","lat":-33.484414,"lon":-70.691194},{"o":44,"c":"PI58","ts":"T-12-89-OP-10","n":"Parada 6 / (M) Cerrillos","co":"CERRILLOS","lat":-33.48346,"lon":-70.695041},{"o":45,"c":"PI60","ts":"T-12-90-OP-10","n":"Avenida Suiza / esq. Los Alpes","co":"CERRILLOS","lat":-33.481965,"lon":-70.697909},{"o":46,"c":"PI61","ts":"T-7-52-SN-5","n":"Avenida Las Rejas / esq. Mailef","co":"ESTACIÓN CENTRAL","lat":-33.476314,"lon":-70.702913},{"o":47,"c":"PI62","ts":"T-7-52-SN-10","n":"Avenida Las Rejas / esq. Quenac","co":"ESTACIÓN CENTRAL","lat":-33.472614,"lon":-70.704023},{"o":48,"c":"PI63","ts":"T-7-52-SN-15","n":"Avenida Las Rejas / esq. Quintralco","co":"ESTACIÓN CENTRAL","lat":-33.468029,"lon":-70.704715},{"o":49,"c":"PI64","ts":"T-7-52-SN-20","n":"Parada 2 / 5 de Abril - Las Rejas","co":"ESTACIÓN CENTRAL","lat":-33.465042,"lon":-70.705011},{"o":50,"c":"PI45","ts":"T-7-52-SN-25","n":"Avenida Las Rejas / esq. Psje. Las.Rejas-Sur","co":"ESTACIÓN CENTRAL","lat":-33.461968,"lon":-70.705217},{"o":51,"c":"PI46","ts":"E-7-52-SN-30","n":"Parada 1 / (M) Las Rejas","co":"ESTACIÓN CENTRAL","lat":-33.457719,"lon":-70.705483},{"o":52,"c":"PI47","ts":"T-7-52-SN-35","n":"Avenida Las Rejas / esq. Embajador Quintana","co":"ESTACIÓN CENTRAL","lat":-33.452285,"lon":-70.706233},{"o":53,"c":"PI48","ts":"T-7-52-SN-40","n":"Avenida Las Rejas / esq. Avenida Dorsal","co":"ESTACIÓN CENTRAL","lat":-33.449712,"lon":-70.706936},{"o":54,"c":"PJ19","ts":"T-8-52-SN-5","n":"Avenida Las Rejas / esq. Nueva Imperial","co":"QUINTA NORMAL","lat":-33.446727,"lon":-70.707257},{"o":55,"c":"PJ20","ts":"T-8-52-SN-10","n":"Avenida Las Rejas / esq. Catedral","co":"QUINTA NORMAL","lat":-33.444159,"lon":-70.707298},{"o":56,"c":"PJ21","ts":"T-8-52-SN-15","n":"Parada 4 / (M) Blanqueado","co":"QUINTA NORMAL","lat":-33.441682,"lon":-70.707251},{"o":57,"c":"PJ22","ts":"T-8-74-SN-5","n":"Sergio Valdovinos / esq. Manso de Velasco","co":"QUINTA NORMAL","lat":-33.438721,"lon":-70.707054},{"o":58,"c":"PJ23","ts":"T-8-74-SN-10","n":"Sergio Valdovinos / esq. Vicuña Rozas","co":"QUINTA NORMAL","lat":-33.436407,"lon":-70.70706},{"o":59,"c":"PJ24","ts":"E-8-74-SN-15","n":"Parada 3 / Las Rejas - José J. Pérez","co":"QUINTA NORMAL","lat":-33.433397,"lon":-70.707107},{"o":60,"c":"PJ25","ts":"T-8-74-SN-20","n":"Sergio Valdovinos / esq. Cónsul Poinsett","co":"QUINTA NORMAL","lat":-33.429432,"lon":-70.706629},{"o":61,"c":"PJ26","ts":"T-8-70-SN-2","n":"Radal / esq. Padre Tadeo","co":"QUINTA NORMAL","lat":-33.42765,"lon":-70.703752},{"o":62,"c":"PJ27","ts":"T-8-70-SN-3","n":"Radal / esq. Salvador Gutiérrez","co":"QUINTA NORMAL","lat":-33.424939,"lon":-70.70295},{"o":63,"c":"PJ28","ts":"T-8-70-SN-5","n":"Parada 4 / Escuela Lo Franco","co":"QUINTA NORMAL","lat":-33.421002,"lon":-70.701822},{"o":64,"c":"PJ29","ts":"T-8-65-SN-5","n":"Lo Espinoza / esq. Oscar Chanks","co":"QUINTA NORMAL","lat":-33.417917,"lon":-70.703661},{"o":65,"c":"PJ30","ts":"T-8-65-SN-10","n":"Lo Espinoza / esq. Los Sauces","co":"QUINTA NORMAL","lat":-33.415117,"lon":-70.704872},{"o":66,"c":"PJ31","ts":"T-8-65-SN-15","n":"Lo Espinoza / esq. Platón","co":"QUINTA NORMAL","lat":-33.411568,"lon":-70.706421},{"o":67,"c":"PJ32","ts":"T-8-65-SN-20","n":"Lo Espinoza / esq. Samuel Izquierdo","co":"QUINTA NORMAL","lat":-33.409772,"lon":-70.707218},{"o":68,"c":"PB2013","ts":"E-5-42-PO-10","n":"Parada 2 / Plaza Renca","co":"RENCA","lat":-33.404872,"lon":-70.703617},{"o":69,"c":"PB2014","ts":"T-5-42-PO-20","n":"Avenida Dorsal / esq. Caupolicán","co":"RENCA","lat":-33.402817,"lon":-70.702295},{"o":70,"c":"PB2016","ts":"T-5-42-PO-45","n":"Avenida Dorsal / esq. Av.Apóstol Santiago","co":"RENCA","lat":-33.400727,"lon":-70.698614},{"o":71,"c":"PB2020","ts":"T-5-42-PO-75","n":"Avenida Dorsal / esq. Colón","co":"RENCA","lat":-33.400203,"lon":-70.694617},{"o":72,"c":"PB2023","ts":"T-5-42-PO-115","n":"Avenida Dorsal / esq. Camino Lo Ruiz","co":"RENCA","lat":-33.402568,"lon":-70.686972},{"o":73,"c":"PB2025","ts":"E-5-42-PO-140","n":"Parada 3 / Norte Sur - Dorsal","co":"RENCA","lat":-33.403155,"lon":-70.682353},{"o":74,"c":"PB32","ts":"T-1-1-PO-5","n":"14 de La Fama / esq. B. de Juras Reales","co":"INDEPENDENCIA","lat":-33.401481,"lon":-70.676927},{"o":75,"c":"PB1586","ts":"T-1-1-PO-15","n":"14 de La Fama / esq. Av. Fermín Vivaceta","co":"INDEPENDENCIA","lat":-33.399893,"lon":-70.672589},{"o":76,"c":"PB35","ts":"T-2-9-PO-10","n":"Parada 6 / (M) Conchalí","co":"CONCHALÍ","lat":-33.398292,"lon":-70.670173},{"o":77,"c":"PB36","ts":"T-2-9-PO-15","n":"Avenida Dorsal / esq. Pasaje Barnechea","co":"CONCHALÍ","lat":-33.397135,"lon":-70.665802},{"o":78,"c":"PB37","ts":"T-2-9-PO-20","n":"Avenida Dorsal / esq. Francisco Hinojosa","co":"CONCHALÍ","lat":-33.396592,"lon":-70.662335},{"o":79,"c":"PB38","ts":"T-2-9-PO-25","n":"Avenida Dorsal / esq. Av. El Guanaco","co":"CONCHALÍ","lat":-33.395964,"lon":-70.658315},{"o":80,"c":"PB40","ts":"T-4-9-PO-10","n":"Avenida Dorsal / esq. Unión 21 de Mayo","co":"RECOLETA","lat":-33.395524,"lon":-70.653947},{"o":81,"c":"PB41","ts":"T-4-9-PO-12","n":"Avenida Dorsal / esq. Evaristo Lillo","co":"RECOLETA","lat":-33.395787,"lon":-70.650501},{"o":82,"c":"PB43","ts":"T-4-9-PO-20","n":"Avenida Dorsal / esq. Santa Alicia","co":"RECOLETA","lat":-33.396128,"lon":-70.646832},{"o":83,"c":"PB44","ts":"E-4-9-PO-25","n":"Parada 3 / (M) Dorsal","co":"RECOLETA","lat":-33.396887,"lon":-70.643458},{"o":84,"c":"PB45","ts":"T-4-23-PO-5","n":"Pedro Donoso / esq. América","co":"RECOLETA","lat":-33.397307,"lon":-70.641221},{"o":85,"c":"PB46","ts":"T-4-23-PO-10","n":"Pedro Donoso / esq. María del Pilar","co":"RECOLETA","lat":-33.398355,"lon":-70.637898},{"o":86,"c":"PB47","ts":"T-4-23-PO-15","n":"Pedro Donoso / esq. Las Violetas","co":"RECOLETA","lat":-33.399008,"lon":-70.63504},{"o":87,"c":"PB1878","ts":"T-4-23-PO-20","n":"Pedro Donoso / esq. Sofía","co":"RECOLETA","lat":-33.400467,"lon":-70.630674},{"o":88,"c":"PB109","ts":"T-4-16-SN-5","n":"El Salto / esq. Duque de Kent","co":"RECOLETA","lat":-33.39879,"lon":-70.628147},{"o":89,"c":"PB110","ts":"T-4-16-SN-10","n":"Parada 2 / Plaza El Salto","co":"RECOLETA","lat":-33.397123,"lon":-70.626952},{"o":90,"c":"PB111","ts":"T-4-16-SN-15","n":"El Salto / esq. Los Turistas","co":"RECOLETA","lat":-33.395224,"lon":-70.625557},{"o":91,"c":"PB1581","ts":"T-3-433-PO-80","n":"Parada 3 / Palacio Riesco","co":"HUECHURABA","lat":-33.393376,"lon":-70.623268},{"o":92,"c":"PB113","ts":"T-3-14-SN-5","n":"Avenida Del Valle / esq. Av. Santa Clara","co":"HUECHURABA","lat":-33.393325,"lon":-70.619205},{"o":93,"c":"PB114","ts":"T-3-14-SN-10","n":"Avenida Del Valle / esq. Av. Santa Clara","co":"HUECHURABA","lat":-33.393349,"lon":-70.61492},{"o":94,"c":"PB115","ts":"T-3-14-SN-15","n":"Avenida Del Valle / esq. Av. Del Parque","co":"HUECHURABA","lat":-33.390335,"lon":-70.61343}]}};
+  const PAR = { layer: null, want: true, list: [], auto: null, user: store.get('cofsimple:servicios', {}) };
+  PAR.services = { ...BUILTIN_SERVICES, ...PAR.user };
+  PAR.sel = store.get('cofsimple:sel', { svc: '107', dir: 'auto' });
   // UTM (WGS84) a latitud/longitud; en Chile continental la zona es 19 Sur.
   function utmToLL(E, N, zone, south) {
     const a = 6378137, f = 1 / 298.257223563, k0 = 0.9996;
@@ -1181,7 +1188,7 @@
     if (cell || row.length) { row.push(cell); rows.push(row); }
     return rows.filter((r) => r.some((c) => String(c).trim()));
   }
-  const plain = (v) => String(v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  const plain = (v) => String(v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
   const yes = (v) => /^(si|s|1|true|x|yes|y|zp|zona paga)$/.test(plain(v));
   function numv(v) {
     if (typeof v === 'number') return v;
@@ -1210,13 +1217,26 @@
       const lat = find(/^(stop_)?lat(itud|itude)?$/, /latitud|latitude|^lat/, /^y$|^coord_?y|^norte|northing|utm_?n|^y_/);
       const lon = find(/^(stop_)?(lon|lng)(gitud|gitude)?$/, /longitud|longitude|^lon|^lng/, /^x$|^coord_?x|^este|easting|utm_?e|^x_/);
       if (lat < 0 || lon < 0 || lat === lon) continue;
-      const code = find(/^stop_code$/, /^(codigo|cod|code)$/, /codigo|^cod_/, /^(paradero|parada)$/, /^stop_id$|^id$/);
-      const name = find(/^stop_name$/, /^(nombre|name)$/, /nombre|name|descripcion|direccion|ubicacion/);
+      const code = find(/^stop_code$/, /codigo paradero usuario/, /^codigo paradero$/, /^(codigo|cod|code)$/, /codigo paradero/, /^(paradero|parada)$/, /^stop_id$|^id$/);
+      const name = find(/^stop_name$/, /nombre paradero/, /^(nombre|name)$/, /nombre|name|descripcion|direccion|ubicacion/);
       const zp = find(/zona.?paga|^zp$/);
+      const svc = find(/^codigo usuario$/, /^servicio$/, /^recorrido$/, /route_short_name/);
+      const dir = find(/^sentido/);
+      const vari = find(/^varian/);
+      const ord = find(/^orden/, /stop_sequence/);
+      const ts = find(/codigo paradero ts/);
+      const co = find(/^comuna/);
+      const sentido = (v) => { const x = plain(v); return /^i/.test(x) ? 'Ida' : /^(r|v)/.test(x) ? 'Regreso' : String(v || '').trim(); };
       const out = [];
       for (const r of rows.slice(i + 1)) {
         const p = toParadero(r[lat], r[lon], code >= 0 ? r[code] : '', name >= 0 ? r[name] : '', zp >= 0 ? yes(r[zp]) : null);
-        if (p) out.push(p);
+        if (!p) continue;
+        if (ord >= 0 && Number.isFinite(numv(r[ord]))) p.o = numv(r[ord]);
+        if (svc >= 0 && String(r[svc]).trim()) p.svc = String(r[svc]).trim();
+        if (dir >= 0 && String(r[dir]).trim()) p.dir = sentido(r[dir]) + (vari >= 0 && String(r[vari]).trim() ? ` (${String(r[vari]).trim()})` : '');
+        if (ts >= 0) p.ts = String(r[ts]).trim();
+        if (co >= 0) p.co = String(r[co]).trim();
+        out.push(p);
       }
       return out;
     }
@@ -1275,12 +1295,13 @@
     }
     return rowsToParaderos(parseCsv(text));
   }
-  // El paradero oficial más cercano a un punto (dentro de un radio en km).
-  function nearestParadero(lat, lon, maxKm) {
-    if (!PAR.list.length || lat == null) return null;
+  // El paradero del servicio más cercano a un punto (dentro de un radio en km).
+  function nearestParadero(lat, lon, maxKm, list) {
+    const L0 = list || PAR.list;
+    if (!L0.length || lat == null) return null;
     const dLat = maxKm / 111, dLon = maxKm / (111 * Math.cos((lat * Math.PI) / 180));
     let best = null, bd = Infinity;
-    for (const p of PAR.list) {
+    for (const p of L0) {
       if (Math.abs(p.lat - lat) > dLat || Math.abs(p.lon - lon) > dLon) continue;
       const d = distKm(p, { lat, lon });
       if (d < bd) { bd = d; best = p; }
@@ -1288,27 +1309,81 @@
     return bd <= maxKm ? best : null;
   }
   const parOf = (s) => (s.lat != null ? nearestParadero(s.lat, s.lon, 0.06) : null);
-  const parText = (p) => (p ? [p.c, p.n].filter(Boolean).join(' · ') : '');
+  const parText = (p) => (p ? `${p.o ? `#${p.o} ` : ''}${[p.c, p.n].filter(Boolean).join(' · ')}` : '');
+  // Sentido automático: el que recorre sus paraderos en orden creciente a lo largo del video.
+  function detectDir() {
+    const svc = PAR.services[PAR.sel.svc];
+    if (!svc || PAR.sel.dir !== 'auto') return;
+    const dirs = Object.keys(svc);
+    let best = null, bestScore = 0;
+    for (const d of dirs) {
+      const idx = S.track.map((p) => nearestParadero(p.lat, p.lon, 0.15, svc[d])).filter(Boolean).map((p) => p.o);
+      let score = 0;
+      for (let i = 1; i < idx.length; i++) score += Math.sign(idx[i] - idx[i - 1]);
+      if (idx.length >= 3 && score > bestScore) { bestScore = score; best = d; }
+    }
+    if (best && best !== PAR.auto) { PAR.auto = best; applyService(); }
+  }
+  function currentDir() {
+    const svc = PAR.services[PAR.sel.svc];
+    if (!svc) return null;
+    if (PAR.sel.dir !== 'auto' && svc[PAR.sel.dir]) return PAR.sel.dir;
+    return PAR.auto && svc[PAR.auto] ? PAR.auto : Object.keys(svc)[0];
+  }
+  function applyService() {
+    const svc = PAR.services[PAR.sel.svc];
+    const dir = currentDir();
+    PAR.list = svc && dir ? svc[dir] : [];
+    renderServiceBar();
+    drawParaderos();
+    if (S.moments.length) rebuild();
+  }
+  function renderServiceBar() {
+    const sSel = $('#svcSel');
+    const dSel = $('#dirSel');
+    const names = Object.keys(PAR.services).sort((a, b) => a.localeCompare(b, 'es', { numeric: true }));
+    sSel.replaceChildren(...names.map((n) => { const o = el('option', null, `Servicio ${n}`); o.value = n; return o; }), (() => { const o = el('option', null, 'Sin paraderos'); o.value = ''; return o; })());
+    sSel.value = PAR.services[PAR.sel.svc] ? PAR.sel.svc : '';
+    const svc = PAR.services[PAR.sel.svc];
+    const opts = [];
+    if (svc) {
+      const auto = el('option', null, `Automático${PAR.auto && PAR.sel.dir === 'auto' ? ` (${PAR.auto})` : ' (según el recorrido)'}`);
+      auto.value = 'auto';
+      opts.push(auto);
+      for (const [d, list] of Object.entries(svc)) {
+        const o = el('option', null, `${d}: hacia ${list[list.length - 1].n.split(' / ')[0]} (${list.length})`);
+        o.value = d;
+        opts.push(o);
+      }
+    }
+    dSel.replaceChildren(...opts);
+    dSel.hidden = !svc;
+    dSel.value = svc ? PAR.sel.dir : '';
+    const dir = currentDir();
+    $('#stopsInfo').textContent = svc ? `${PAR.list.length} paraderos · ${dir}: ${PAR.list[0].n} → ${PAR.list[PAR.list.length - 1].n}` : '';
+  }
   function drawParaderos() {
     if (!M.map) return;
     if (PAR.layer) { M.layers.removeLayer(PAR.layer); PAR.layer.remove(); PAR.layer = null; }
-    const n = PAR.list.length;
-    $('#stopsInfo').textContent = n ? `${n.toLocaleString('es-CL')} paraderos cargados` : '';
-    $('#btnStopsClear').hidden = !n;
-    if (!n) return;
+    if (!PAR.list.length) return;
     const renderer = L.canvas({ padding: 0.5 });
-    PAR.layer = L.layerGroup(PAR.list.map((p) => L.circleMarker([p.lat, p.lon], { renderer, radius: 5, weight: 1.5, color: '#fff', fillColor: p.zp ? '#2f6fb3' : '#7a3fb0', fillOpacity: 0.95 })
-      .bindTooltip(`${parText(p) || 'Paradero'}${p.zp ? ' · zona paga' : ''}`)));
-    M.layers.addOverlay(PAR.layer, 'Paraderos');
+    const line = L.polyline(PAR.list.map((p) => [p.lat, p.lon]), { color: '#7a3fb0', weight: 3, opacity: 0.5, dashArray: '6 6', interactive: false, renderer });
+    const dots = PAR.list.map((p) => L.circleMarker([p.lat, p.lon], { renderer, radius: 5, weight: 1.5, color: '#fff', fillColor: p.zp ? '#2f6fb3' : '#7a3fb0', fillOpacity: 0.95 })
+      .bindTooltip(`${parText(p)}${p.co ? ` · ${p.co}` : ''}${p.zp ? ' · zona paga' : ''}`));
+    PAR.layer = L.layerGroup([line, ...dots]);
+    M.layers.addOverlay(PAR.layer, 'Paraderos del servicio');
     showParaderos();
+    if (!S.track.length) M.map.fitBounds(line.getBounds(), { padding: [20, 20] });
   }
-  // Con muchos paraderos se muestran solo al acercarse, para que el mapa siga ágil.
   function showParaderos() {
     if (!PAR.layer) return;
     const on = PAR.want && (PAR.list.length <= 1500 || M.map.getZoom() >= 14);
     if (on && !M.map.hasLayer(PAR.layer)) { PAR.silent = true; PAR.layer.addTo(M.map); PAR.silent = false; }
     if (!on && M.map.hasLayer(PAR.layer)) { PAR.silent = true; PAR.layer.remove(); PAR.silent = false; }
   }
+  $('#svcSel').onchange = (e) => { PAR.sel = { svc: e.target.value, dir: 'auto' }; PAR.auto = null; store.set('cofsimple:sel', PAR.sel); applyService(); detectDir(); };
+  $('#dirSel').onchange = (e) => { PAR.sel = { ...PAR.sel, dir: e.target.value }; store.set('cofsimple:sel', PAR.sel); applyService(); detectDir(); };
+  // Agregar otros servicios desde un archivo (Excel, CSV, KML…): se agrupan por servicio y sentido.
   $('#btnStops').onclick = () => $('#stopsInput').click();
   $('#stopsInput').onchange = async (e) => {
     const file = e.target.files[0];
@@ -1317,25 +1392,28 @@
     try {
       const list = await readParaderos(file);
       if (!list.length) throw new Error('El archivo no tiene paraderos con coordenadas válidas.');
-      const seen = new Set();
-      PAR.list = list.filter((p) => { const k = p.c || `${p.lat},${p.lon}`; if (seen.has(k)) return false; seen.add(k); return true; });
-      store.set('cofsimple:paraderos', PAR.list);
-      drawParaderos();
-      const b = L.latLngBounds(PAR.list.map((p) => [p.lat, p.lon]));
-      if (!S.track.length) M.map.fitBounds(b, { padding: [20, 20] });
-      rebuild();
-      const zp = PAR.list.filter((p) => p.zp).length;
-      status(`Se cargaron ${PAR.list.length.toLocaleString('es-CL')} paraderos${zp ? ` (${zp} con zona paga)` : ''}. Cada detención del bus toma el código y nombre del paradero más cercano.`, null);
+      const added = {};
+      const fallback = file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() || 'Paraderos';
+      list.forEach((p, i) => {
+        const svc = String(p.svc || fallback).trim();
+        const dir = p.dir || 'Todos';
+        const s = (added[svc] = added[svc] || {});
+        (s[dir] = s[dir] || []).push({ ...p, o: p.o || i + 1, svc: undefined, dir: undefined });
+      });
+      for (const s of Object.values(added)) for (const d of Object.keys(s)) s[d].sort((a, b) => a.o - b.o);
+      PAR.user = { ...PAR.user, ...added };
+      store.set('cofsimple:servicios', PAR.user);
+      PAR.services = { ...BUILTIN_SERVICES, ...PAR.user };
+      const first = Object.keys(added)[0];
+      PAR.sel = { svc: first, dir: 'auto' };
+      PAR.auto = null;
+      store.set('cofsimple:sel', PAR.sel);
+      applyService();
+      detectDir();
+      status(`Se agregó ${Object.keys(added).map((k) => `el servicio ${k} (${Object.entries(added[k]).map(([d, l]) => `${d}: ${l.length}`).join(', ')})`).join(' y ')}. Queda disponible en la lista de servicios.`, null);
     } catch (err) {
       status(`No se pudieron leer los paraderos: ${err.message}`, null, true);
     }
-  };
-  $('#btnStopsClear').onclick = () => {
-    if (!confirm('¿Quitar los paraderos cargados?')) return;
-    PAR.list = [];
-    store.set('cofsimple:paraderos', []);
-    drawParaderos();
-    rebuild();
   };
 
   // ---------------------------------------------------------------- recorrido y mapa
@@ -1427,7 +1505,9 @@
 
   // ---------------------------------------------------------------- pantalla
   function rebuild() {
+    const n0 = S.track.length;
     S.track = cleanTrack(S.moments.filter((m) => m.lat != null).map((m) => ({ t: m.t, lat: m.lat, lon: m.lon })));
+    if (S.track.length !== n0 && PAR.sel.dir === 'auto') { const before = PAR.auto; detectDir(); if (PAR.auto !== before) return; }
     if (M.line && !S.track.length) { M.line.setLatLngs([]); M.done.setLatLngs([]); }
     if (!S.moments.length) M.fitted = false;
     drawRoute();
@@ -1620,7 +1700,9 @@
   const scopeText = () => {
     const to = Math.min(S.frontier, S.range.to);
     const clk = (t) => (horaAt(t) ? ` (${horaAt(t)})` : '');
-    return `${partial() ? 'Análisis parcial' : 'Análisis completo'}: del ${mmss(S.range.from)}${clk(S.range.from)} al ${mmss(to)}${clk(to)} del video`;
+    const dir = currentDir();
+    const svc = PAR.services[PAR.sel.svc] ? ` · Servicio ${PAR.sel.svc}${dir ? ` ${dir}` : ''}` : '';
+    return `${partial() ? 'Análisis parcial' : 'Análisis completo'}: del ${mmss(S.range.from)}${clk(S.range.from)} al ${mmss(to)}${clk(to)} del video${svc}`;
   };
   function csv(rows) {
     const cell = (v) => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -1646,24 +1728,24 @@
   };
   $('#btnCsvStops').onclick = () => {
     if (!ready()) return;
-    const rows = [['Paradero', 'Hora llegada', 'Hora salida', 'Minuto video', 'Código paradero', 'Nombre paradero', 'Dirección', 'Latitud', 'Longitud', 'Zona paga', 'Motivo zona paga', 'Suben', 'Suben por puerta con validador', 'Suben por otras puertas', 'Pagan (total)', 'Pagan en zona paga', 'Evaden', 'Dudosos', 'Bajan', '% evasión', 'Observación']];
+    const rows = [['Paradero', 'Hora llegada', 'Hora salida', 'Minuto video', 'Orden paradero', 'Código paradero', 'Nombre paradero', 'Dirección', 'Latitud', 'Longitud', 'Zona paga', 'Motivo zona paga', 'Suben', 'Suben por puerta con validador', 'Suben por otras puertas', 'Pagan (total)', 'Pagan en zona paga', 'Evaden', 'Dudosos', 'Bajan', '% evasión', 'Observación']];
     for (const s of S.stops) {
       if (!moving(s)) continue;
       const c = counts(s);
       const d = byDoor(s);
       const po = parOf(s);
-      rows.push([stopLabel(s), horaAt(s.t0), horaAt(s.t1), mmss(s.t0), po ? po.c : '', po ? po.n : '', s.dir || '', dec(s.lat, 6), dec(s.lon, 6), zpOf(s) ? 'Sí' : 'No', zpWhy(s), c.suben, d.front, d.other, c.pagan, c.zp, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben), s.resumen]);
+      rows.push([stopLabel(s), horaAt(s.t0), horaAt(s.t1), mmss(s.t0), po ? po.o : '', po ? po.c : '', po ? po.n : '', s.dir || '', dec(s.lat, 6), dec(s.lon, 6), zpOf(s) ? 'Sí' : 'No', zpWhy(s), c.suben, d.front, d.other, c.pagan, c.zp, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben), s.resumen]);
     }
     const T = totals();
-    rows.push(['TOTAL', '', '', '', '', '', '', '', '', `${T.zonas} zonas pagas`, '', T.suben, '', '', T.pagan, T.zp, T.evaden, T.dudosos, T.bajan, pct(T.evaden, T.suben), scopeText()]);
+    rows.push(['TOTAL', '', '', '', '', '', '', '', '', '', `${T.zonas} zonas pagas`, '', T.suben, '', '', T.pagan, T.zp, T.evaden, T.dudosos, T.bajan, pct(T.evaden, T.suben), scopeText()]);
     download(`${baseName()}-paraderos.csv`, csv(rows));
   };
   $('#btnCsvPeople').onclick = () => {
     if (!ready()) return;
-    const rows = [['Paradero', 'Código paradero', 'Nombre paradero', 'Zona paga', 'Hora', 'Minuto video', 'Dirección', 'Cámara', 'Resultado', 'Descripción de la persona']];
+    const rows = [['Paradero', 'Orden paradero', 'Código paradero', 'Nombre paradero', 'Zona paga', 'Hora', 'Minuto video', 'Dirección', 'Cámara', 'Resultado', 'Descripción de la persona']];
     for (const s of S.stops.filter(moving)) {
       const po = parOf(s);
-      for (const p of s.personas) rows.push([stopLabel(s), po ? po.c : '', po ? po.n : '', zpOf(s) ? 'Sí' : 'No', horaAt(p.t), mmss(p.t), s.dir || '', personCam(p), resText(resOf(p, zpOf(s))), p.desc]);
+      for (const p of s.personas) rows.push([stopLabel(s), po ? po.o : '', po ? po.c : '', po ? po.n : '', zpOf(s) ? 'Sí' : 'No', horaAt(p.t), mmss(p.t), s.dir || '', personCam(p), resText(resOf(p, zpOf(s))), p.desc]);
     }
     download(`${baseName()}-detalle-personas.csv`, csv(rows));
   };
@@ -1710,7 +1792,7 @@
   };
 
   initMap();
-  drawParaderos();
+  applyService();
   renderStops();
   if (!S.key) $('#keyBox').hidden = false;
   $('#btnOut').hidden = !SERVER;
