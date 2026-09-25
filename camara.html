@@ -359,7 +359,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-18';
+  const VERSION = '2026.09.25-20';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -767,11 +767,11 @@
   async function claudeApi() {
     if (!claudeClient || claudeClient.key !== S.ckey) {
       const { default: Anthropic } = await import(ANTHROPIC_SDK);
-      claudeClient = { key: S.ckey, Anthropic, client: new Anthropic({ apiKey: S.ckey, dangerouslyAllowBrowser: true, maxRetries: 4 }) };
+      claudeClient = { key: S.ckey, Anthropic, client: new Anthropic({ apiKey: S.ckey, dangerouslyAllowBrowser: true, maxRetries: 4, timeout: 120000 }) };
     }
     return claudeClient;
   }
-  async function claude(parts, run) {
+  async function claude(parts, run, forceModel) {
     // Tope de gasto diario: al llegar, se detiene el conteo en vez de seguir gastando.
     // Se cuentan también las consultas en curso (se cuentan varios paraderos a la vez), con su costo aproximado.
     const sp = (S.spend && S.spend.dia === today() ? S.spend.usd : 0) + claudeInFlight * (S.ai === 'sonnet' ? 0.04 : 0.02);
@@ -781,12 +781,12 @@
       throw err;
     }
     claudeInFlight++;
-    try { return await claudeCall(parts, run); } finally { claudeInFlight--; }
+    try { return await claudeCall(parts, run, forceModel); } finally { claudeInFlight--; }
   }
   let claudeInFlight = 0;
-  async function claudeCall(parts, run) {
+  async function claudeCall(parts, run, forceModel) {
     const { Anthropic, client } = await claudeApi();
-    const model = CLAUDE[S.ai];
+    const model = forceModel || CLAUDE[S.ai];
     // Las partes vienen en formato Gemini (texto e imágenes en base64): se pasan al formato de Claude.
     const content = parts.map((p) => (p.inlineData ? { type: 'image', source: { type: 'base64', media_type: p.inlineData.mimeType, data: p.inlineData.data } } : { type: 'text', text: p.text || ' ' }));
     for (let attempt = 0; attempt < 6; attempt++) {
@@ -831,6 +831,8 @@
       const now = Date.now();
       let model = list.find((m) => !(COOL[m] > now));
       if (!model) {
+        // Con clave de Claude, las lecturas no se quedan esperando el cupo gratuito de Google: siguen con Claude Haiku.
+        if (S.ckey && tier === 'quick') return claude(parts, run, CLAUDE.haiku);
         const next = Math.min(...list.map((m) => COOL[m]));
         if (!Number.isFinite(next)) throw new Error('Ningún modelo de Gemini está disponible con esta clave.');
         const s = Math.ceil((next - now) / 1000);
@@ -841,6 +843,7 @@
       let res;
       try {
         res = await fetch(`${API}/${model}:generateContent`, {
+          signal: AbortSignal.timeout(120000),
           method: 'POST',
           headers: SERVER ? { 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json', 'x-goog-api-key': S.key },
           // Gemma no tiene modo JSON: se le pide en el texto y se extrae de la respuesta.
@@ -1459,8 +1462,12 @@
       while (busy.size < limit && (s = S.stops.find(ready))) {
         const one = s;
         busy.add(one);
-        countOne(one, run)
-          .then((ok) => { if (!ok) stopped = true; })
+        // Tope de tiempo por paradero: si uno se queda pegado, se marca para reintentar y se sigue con los demás.
+        withTimeout(countOne(one, run).catch((e) => { failure = e; return true; }), 240000, 'tiempo')
+          .then((ok) => {
+            if (ok === 'tiempo') { if (one.estado === 'pendiente') { one.estado = 'error'; one.resumen = 'Este paradero tardó demasiado en contarse. Toca «Reintentar».'; save(); rebuild(); } return; }
+            if (!ok) stopped = true;
+          })
           .catch((e) => { failure = e; })
           .finally(() => { busy.delete(one); S.counting = busy.size ? stopLabel([...busy][0]) : null; if (S.running && run === S.run) progress(); });
       }
@@ -1555,6 +1562,8 @@
     for (let k = 0; times.length < n && k < n * 2; k++) { const t = t0 + (span * k) / Math.max(1, n * 2 - 1); if (far(t, 0.5)) times.push(t); }
     return times.sort((a, b) => a - b);
   }
+  // Espera una promesa con un tiempo máximo: si no termina, se sigue con el valor de respaldo.
+  const withTimeout = (pr, ms, fallback) => new Promise((ok) => { let done = false; const tm = setTimeout(() => { if (!done) { done = true; ok(fallback); } }, ms); pr.then((v) => { if (!done) { done = true; clearTimeout(tm); ok(v); } }, () => { if (!done) { done = true; clearTimeout(tm); ok(fallback); } }); });
   // Foto chica de cada imagen enviada, para mostrar en el detalle la persona contada (solo en memoria).
   const THUMBS = new WeakMap();
   function thumbOf(cv) {
@@ -1583,7 +1592,14 @@
       const groups = [...doors.map((c) => ({ c, count: hasValidator(c) ? clamp(Math.round(span / 0.6), 6, Math.round(24 / nVal)) : clamp(Math.round(span / 2), 3, 8), door: true, gap: hasValidator(c) ? 0.5 : 0.9 })), ...outside.map((c) => ({ c, count: 2, door: false }))];
       // En las puertas se miran los momentos en que algo se mueve, no fotos parejas en el tiempo:
       // así no se escapa quien sube entre una foto y otra.
-      const plans = await Promise.all(groups.map(async (g) => (g.door ? pickTimes(await motionOf(g.c, s.t0, s.t1, run), s.t0, s.t1, g.count, g.gap) : null)));
+      // Si el análisis de movimiento de una cámara se demora (video muy pesado), esa cámara usa fotos parejas
+      // y las próximas paradas usan el método simple: así ningún paradero queda esperando para siempre.
+      const plans = await Promise.all(groups.map(async (g) => {
+        if (!g.door) return null;
+        const mot = await withTimeout(motionOf(g.c, s.t0, s.t1, run), Math.max(20000, span * 1500), null);
+        if (!mot) { motionSinks.set(g.c, Promise.resolve(null)); return null; }
+        return pickTimes(mot, s.t0, s.t1, g.count, g.gap);
+      }));
       if (run !== S.run) return false;
       for (let d = 0; d < groups.length; d++) {
         const { c, count, door } = groups[d];
