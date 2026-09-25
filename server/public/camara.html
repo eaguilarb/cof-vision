@@ -221,9 +221,9 @@
       <summary>⬇ Descargar video o foto</summary>
       <div class="controls dl-body">
         <span class="range">Desde <input id="dFrom" inputmode="numeric" title="mm:ss o h:mm:ss"> <button type="button" id="dFromHere">aquí</button> hasta <input id="dTo" inputmode="numeric" title="mm:ss o h:mm:ss"> <button type="button" id="dToHere">aquí</button></span>
-        <label class="chk">Cámaras <select id="dMode" class="svc-sel"><option value="all">Todas las cámaras (mosaico)</option><option value="one">Solo la que estoy viendo</option></select></label>
-        <label class="chk">Formato <select id="dFmt" class="svc-sel"></select></label>
-        <label class="chk">Velocidad <select id="dSpeed" class="svc-sel"><option value="1">Normal</option><option value="2">2x</option><option value="4">4x</option></select></label>
+        <label class="chk">Cámaras <select id="dMode" class="svc-sel"><option value="all">Todas las cámaras (mosaico)</option><option value="one">Solo la que estoy viendo</option><option value="orig">Solo la que estoy viendo, archivo original (instantáneo)</option></select></label>
+        <label class="chk">Sonido <select id="dAudio" class="svc-sel"></select></label>
+        <label class="chk">Velocidad <select id="dSpeed" class="svc-sel"><option value="1">Normal</option><option value="2">2x (sin sonido)</option><option value="4">4x (sin sonido)</option></select></label>
         <button class="btn small" id="btnClip" type="button">Descargar video</button>
         <button class="btn small ghost" id="btnPhoto" type="button">📷 Foto de este momento</button>
         <span class="muted" id="dlInfo"></span>
@@ -426,7 +426,7 @@
     S.cams = files.map((f, i) => {
       const url = URL.createObjectURL(f);
       const key = `${f.name}|${f.size}`;
-      const c = { key, name: f.name, label: chLabel(f.name, i), url, video: makeVideo(url, false), probe: makeVideo(url, true), off: 0, tipo: null, validador: null, desc: '', coords: null, manual: false, dur: 0, bad: false, ...(cfg[key] || {}) };
+      const c = { key, name: f.name, label: chLabel(f.name, i), url, video: makeVideo(url, false), probe: makeVideo(url, true), off: 0, tipo: null, validador: null, desc: '', coords: null, manual: false, dur: 0, bad: false, ...(cfg[key] || {}), file: f };
       const tile = el('div', 'tile');
       tile.append(c.video, el('span', 'lbl', c.label));
       tile.onclick = () => { if (S.grid && S.main !== S.cams.indexOf(c)) setMain(S.cams.indexOf(c)); };
@@ -2339,14 +2339,17 @@
   renderDay();
 
   // ---------------------------------------------------------------- descargar video o foto
-  // Se graba en el navegador: las cámaras se reproducen sincronizadas en un lienzo y se guarda como video.
+  // El video se arma leyendo los archivos directamente (mucho más rápido que reproducirlos): se decodifica cada
+  // cámara, se dibuja el mosaico cuadro a cuadro y se codifica a MP4, con el sonido de la cámara elegida.
+  // Si el navegador no puede (sin WebCodecs), se graba reproduciendo, como respaldo.
+  const MEDIABUNNY = 'https://cdn.jsdelivr.net/npm/mediabunny@1.60.0/dist/bundles/mediabunny.min.mjs';
+  let mbLoad = null;
+  const mediabunny = () => (mbLoad = mbLoad || import(MEDIABUNNY).catch((e) => { mbLoad = null; throw e; }));
   const FORMATS = [
     ['mp4', 'MP4 (WhatsApp, Windows, celulares)', ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4']],
     ['webm', 'WebM', ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']],
   ].map(([k, label, types]) => [k, label, window.MediaRecorder ? types.find((t) => MediaRecorder.isTypeSupported(t)) : null]).filter((f) => f[2]);
   const CLIP = { busy: false, cancel: false };
-  $('#dFmt').replaceChildren(...FORMATS.map(([k, label]) => { const o = el('option', null, label); o.value = k; return o; }));
-  if (!FORMATS.length) { $('#btnClip').disabled = true; $('#dlInfo').textContent = 'Este navegador no permite grabar video; usa Chrome o Edge.'; }
   const clipName = (ext, t) => `${(S.meta.patente || 'bus').replace(/[^A-Za-z0-9-]/g, '')}_${(S.meta.fecha || '').replace(/\//g, '-')}_${(horaAt(t) || mmss(t)).replace(/:/g, '-')}.${ext}`.replace(/_+/g, '_');
   function clipLayout(n, w0) {
     const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
@@ -2417,17 +2420,10 @@
     g.textBaseline = 'middle';
     g.fillText(label, x + 12, y + ch - 16);
   }
-  async function exportClip() {
-    const from = parseTime($('#dFrom').value);
-    const to = parseTime($('#dTo').value);
-    if (from == null || to == null || to - from < 1) return ($('#dlInfo').textContent = 'Revisa el rango: «hasta» debe ser mayor que «desde».');
-    const fmt = FORMATS.find((f) => f[0] === $('#dFmt').value) || FORMATS[0];
-    const speed = Number($('#dSpeed').value) || 1;
-    const cams = $('#dMode').value === 'one' ? [mainCam()] : S.cams.filter((c) => !c.bad);
-    CLIP.busy = true;
-    CLIP.cancel = false;
-    $('#btnClip').textContent = 'Cancelar';
-    $('#dlInfo').textContent = 'Preparando…';
+  // Respaldo: grabar mientras se reproduce (tarda lo mismo que el video y no lleva sonido).
+  async function recordClip(from, to, cams, speed) {
+    const fmt = FORMATS[0];
+    if (!fmt) throw new Error('este navegador no permite armar videos; usa Chrome o Edge');
     const vids = cams.map((c) => {
       const v = document.createElement('video');
       v.muted = true;
@@ -2481,21 +2477,131 @@
       const blob = new Blob(chunks, { type: fmt[2].split(';')[0] });
       download(clipName(fmt[0], from), blob);
       $('#dlInfo').textContent = `Listo: video de ${mmss(to - from)}${speed > 1 ? ` a ${speed}x` : ''} (${(blob.size / 1048576).toFixed(1)} MB).`;
-    } catch (e) {
-      $('#dlInfo').textContent = `No se pudo grabar: ${e.message}`;
     } finally {
       vids.forEach((v) => { v.pause(); v.remove(); });
+    }
+  }
+  const fmtMB = (n) => `${(n / 1048576).toFixed(1)} MB`;
+  const audioCam = () => camByKey($('#dAudio').value);
+  // Sonido de una cámara en el tramo pedido, copiado tal cual al archivo nuevo (sin volver a codificarlo).
+  async function addAudio(M, output, c, from, to) {
+    if (!c || !c.file) return null;
+    const input = new M.Input({ formats: M.ALL_FORMATS, source: new M.BlobSource(c.file) });
+    if (!(await input.getPrimaryAudioTrack())) return { none: true };
+    const start = Math.max(0, from + c.off);
+    const end = Math.min(c.dur || Infinity, to + c.off);
+    if (end - start < 0.2) return { none: true };
+    const conv = await M.Conversion.init({ input, output, composable: true, tracks: 'primary', video: { discard: true }, trim: { start, end }, showWarnings: false });
+    return conv.utilizedTracks.length ? { conv } : { none: true };
+  }
+  // Mosaico (o una cámara) con la franja de datos, decodificado y codificado directamente.
+  async function buildClip(M, from, to, cams, speed) {
+    const FPS = 25;
+    const L0 = clipLayout(cams.length, cams[0].probe.videoWidth);
+    const W = L0.cols * L0.cw;
+    const H = L0.rows * L0.ch + L0.bar;
+    const cv = newCanvas(W + (W % 2), H + (H % 2));
+    const g = cv.getContext('2d');
+    const codec = await M.getFirstEncodableVideoCodec(['avc', 'vp9', 'av1'], { width: cv.width, height: cv.height });
+    if (!codec) throw new Error('este navegador no puede codificar video');
+    const target = new M.BufferTarget();
+    const output = new M.Output({ format: new M.Mp4OutputFormat(), target });
+    const video = new M.CanvasSource(cv, { codec, bitrate: 5e6 });
+    output.addVideoTrack(video, { frameRate: FPS });
+    const ac = speed === 1 ? audioCam() : null;
+    const audio = ac ? await addAudio(M, output, ac, from, to) : null;
+    await output.start();
+    const audioDone = audio && audio.conv ? audio.conv.execute() : Promise.resolve();
+    audioDone.catch(() => {});
+    const inputs = cams.map((c) => new M.Input({ formats: M.ALL_FORMATS, source: new M.BlobSource(c.file) }));
+    const tracks = await Promise.all(inputs.map((i) => i.getPrimaryVideoTrack()));
+    const dt = speed / FPS;
+    const n = Math.max(1, Math.round((to - from) / dt));
+    // Cada cámara entrega sus cuadros en orden; las que no grabaron en ese instante quedan en negro.
+    const iters = tracks.map((tr, i) => {
+      if (!tr) return null;
+      const sink = new M.CanvasSink(tr, { width: L0.cw, height: L0.ch, fit: 'contain', poolSize: 3 });
+      const c = cams[i];
+      const times = function* () { for (let k = 0; k < n; k++) yield Math.max(0, from + k * dt + c.off); };
+      return sink.canvasesAtTimestamps(times());
+    });
+    const t0 = performance.now();
+    for (let k = 0; k < n; k++) {
+      if (CLIP.cancel) { await output.cancel(); return null; }
+      const t = from + k * dt;
+      const frames = await Promise.all(iters.map((it) => (it ? it.next() : null)));
+      drawBar(g, cv.width, L0.bar, t);
+      if (cams.length < L0.cols * L0.rows) drawInfo(g, t, (cams.length % L0.cols) * L0.cw, L0.bar + Math.floor(cams.length / L0.cols) * L0.ch, L0.cw, L0.ch);
+      cams.forEach((c, i) => {
+        const tc = t + c.off;
+        const f = frames[i] && !frames[i].done && frames[i].value;
+        const ok = f && tc >= 0 && tc <= c.dur;
+        drawCell(g, ok ? f.canvas : null, c, (i % L0.cols) * L0.cw, L0.bar + Math.floor(i / L0.cols) * L0.ch, L0.cw, L0.ch);
+      });
+      await video.add(k / FPS, 1 / FPS);
+      if (k % 10 === 0) {
+        const el2 = (performance.now() - t0) / 1000;
+        const left = k ? (el2 / k) * (n - k) : 0;
+        $('#dlInfo').textContent = `Armando el video: ${Math.round((k / n) * 100)}%${k > 20 ? ` · faltan ~${Math.ceil(left)} s` : ''}…`;
+      }
+    }
+    video.close();
+    await audioDone;
+    await output.finalize();
+    return { blob: new Blob([target.buffer], { type: 'video/mp4' }), audio };
+  }
+  // Una cámara tal cual: se copia el tramo del archivo original, con su sonido, sin volver a codificar.
+  async function cutOriginal(M, from, to, c, withAudio) {
+    const input = new M.Input({ formats: M.ALL_FORMATS, source: new M.BlobSource(c.file) });
+    const target = new M.BufferTarget();
+    const output = new M.Output({ format: new M.Mp4OutputFormat(), target });
+    const conv = await M.Conversion.init({ input, output, tracks: 'primary', audio: withAudio ? {} : { discard: true }, trim: { start: Math.max(0, from + c.off), end: Math.min(c.dur || Infinity, to + c.off) }, showWarnings: false });
+    if (!conv.isValid) throw new Error('no se pudo copiar ese tramo');
+    conv.onProgress = (p) => { $('#dlInfo').textContent = `Copiando el tramo: ${Math.round(p * 100)}%…`; };
+    CLIP.conv = conv;
+    await conv.execute();
+    if (conv.state === 'canceled') return null;
+    return { blob: new Blob([target.buffer], { type: 'video/mp4' }), audio: withAudio ? (conv.utilizedTracks.some((tr) => tr.type === 'audio') ? {} : { none: true }) : null };
+  }
+  async function exportClip() {
+    const from = parseTime($('#dFrom').value);
+    const to = parseTime($('#dTo').value);
+    if (from == null || to == null || to - from < 1) return ($('#dlInfo').textContent = 'Revisa el rango: «hasta» debe ser mayor que «desde».');
+    const speed = Number($('#dSpeed').value) || 1;
+    const mode = $('#dMode').value;
+    const cams = mode === 'all' ? S.cams.filter((c) => !c.bad) : [mainCam()];
+    CLIP.busy = true;
+    CLIP.cancel = false;
+    CLIP.conv = null;
+    $('#btnClip').textContent = 'Cancelar';
+    $('#dlInfo').textContent = 'Preparando…';
+    const t0 = performance.now();
+    try {
+      let M = null;
+      if (window.VideoDecoder && window.VideoEncoder) M = await mediabunny().catch(() => null);
+      let r;
+      if (M && mode === 'orig') r = await cutOriginal(M, from, to, cams[0], $('#dAudio').value === cams[0].key);
+      else if (M) r = await buildClip(M, from, to, cams, speed).catch((e) => { if (CLIP.cancel) return null; console.warn(e); return 'grabar'; });
+      if (!M || r === 'grabar') { $('#dlInfo').textContent = 'Este navegador no puede armar el video directo; se grabará reproduciéndolo…'; await recordClip(from, to, cams, speed); return; }
+      if (!r || CLIP.cancel) { $('#dlInfo').textContent = 'Descarga cancelada.'; return; }
+      download(clipName('mp4', from), r.blob);
+      const secs = ((performance.now() - t0) / 1000).toFixed(1);
+      const snd = r.audio ? (r.audio.none ? ' · esa cámara no tiene sonido en este tramo' : ' · con sonido') : '';
+      $('#dlInfo').textContent = `Listo: video de ${mmss(to - from)}${speed > 1 ? ` a ${speed}x` : ''} (${fmtMB(r.blob.size)}) en ${secs} s${snd}.`;
+    } catch (e) {
+      $('#dlInfo').textContent = `No se pudo descargar: ${e.message}`;
+    } finally {
       CLIP.busy = false;
       $('#btnClip').textContent = 'Descargar video';
     }
   }
-  $('#btnClip').onclick = () => (CLIP.busy ? (CLIP.cancel = true) : exportClip());
+  $('#btnClip').onclick = () => { if (!CLIP.busy) return exportClip(); CLIP.cancel = true; if (CLIP.conv) CLIP.conv.cancel().catch(() => {}); };
   $('#dFromHere').onclick = () => { $('#dFrom').value = mmss(tRef()); if (parseTime($('#dTo').value) == null || parseTime($('#dTo').value) <= tRef()) $('#dTo').value = mmss(Math.min(S.D, tRef() + 30)); };
   $('#dToHere').onclick = () => { $('#dTo').value = mmss(tRef()); };
   // Foto del momento: todas las cámaras (o la que se está viendo) en el mismo instante.
   $('#btnPhoto').onclick = async () => {
     const t = tRef();
-    const cams = $('#dMode').value === 'one' ? [mainCam()] : S.cams.filter((c) => !c.bad);
+    const cams = $('#dMode').value !== 'all' ? [mainCam()] : S.cams.filter((c) => !c.bad);
     $('#dlInfo').textContent = 'Tomando la foto…';
     const frames = [];
     for (const c of cams) frames.push(await frameOf(c, t, 1280));
@@ -2509,10 +2615,18 @@
     if (cams.length < L0.cols * L0.rows) drawInfo(g, t, (cams.length % L0.cols) * cw, L0.bar + Math.floor(cams.length / L0.cols) * ch, cw, ch);
     cv.toBlob((b) => { download(clipName('jpg', t), b); $('#dlInfo').textContent = 'Foto descargada.'; }, 'image/jpeg', 0.92);
   };
+  $('#dlPanel').addEventListener('toggle', () => renderDl());
   function renderDl() {
     $('#dlPanel').hidden = !S.cams.length;
     if (!$('#dFrom').value) { $('#dFrom').value = mmss(0); $('#dTo').value = mmss(Math.min(S.D || 30, 30)); }
     $('#dMode').options[0].textContent = S.cams.filter((c) => !c.bad).length > 1 ? 'Todas las cámaras (mosaico)' : 'La cámara';
+    // Sonido: se elige la cámara (por defecto la que se está viendo).
+    const prev = $('#dAudio').value;
+    const opts = [['', 'Sin sonido'], ...S.cams.filter((c) => !c.bad).map((c) => [c.key, `De ${camName(c)}`])];
+    if ($('#dAudio').options.length !== opts.length || [...$('#dAudio').options].some((o, i) => o.value !== opts[i][0] || o.textContent !== opts[i][1])) {
+      $('#dAudio').replaceChildren(...opts.map(([v, t]) => { const o = el('option', null, t); o.value = v; return o; }));
+      $('#dAudio').value = opts.some((o) => o[0] === prev) && prev ? prev : (mainCam() ? mainCam().key : '');
+    }
   }
 
   $('#keyBox').onsubmit = (e) => {
