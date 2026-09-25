@@ -1254,6 +1254,63 @@
       await wait(700);
     }
   }
+  // Cuánto cambia la imagen de una cámara de puerta, cuadro a cuadro (4 por segundo), durante una detención.
+  // Se ignoran las franjas del texto sobreimpreso y los cambios de brillo de toda la imagen.
+  const MOTION_STEP = 0.25;
+  async function motionOf(c, t0, t1, run) {
+    const out = [];
+    let prev = null;
+    for (let t = t0; t <= t1 + 1e-6; t += MOTION_STEP) {
+      if (run !== S.run) return out;
+      const f = await frameOf(c, t, 160);
+      if (!f) { prev = null; continue; }
+      const y0 = Math.round(f.height * 0.14);
+      const h = Math.round(f.height * 0.86) - y0;
+      const d = f.getContext('2d', { willReadFrequently: true }).getImageData(0, y0, f.width, h).data;
+      const gray = new Float32Array(f.width * h);
+      let mean = 0;
+      for (let i = 0; i < gray.length; i++) { gray[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]; mean += gray[i]; }
+      mean /= gray.length;
+      if (prev && prev.length === gray.length) {
+        let n = 0;
+        // Lo que pasa abajo (el piso de la puerta, cerca de la cámara) pesa más que lo de arriba (la calle).
+        for (let i = 0; i < gray.length; i++) if (Math.abs(gray[i] - mean - prev[i]) > 25) n += 0.5 + Math.floor(i / f.width) / h;
+        out.push({ t, e: (n / gray.length) * 100 });
+      }
+      for (let i = 0; i < gray.length; i++) gray[i] -= mean;
+      prev = gray;
+    }
+    return out;
+  }
+  // Elige los instantes a mirar. La detención se divide en tramos cortos; cada tramo con movimiento
+  // (alguien que sube, baja o se acerca) aporta su instante de más movimiento, y luego un segundo, por turnos.
+  // Así un movimiento largo (autos que pasan detrás del vidrio) no se lleva todas las fotos.
+  function pickTimes(mot, t0, t1, n) {
+    const span = Math.max(0, t1 - t0);
+    const times = [t0 + span * 0.25, t0 + span * 0.75].slice(0, Math.min(2, n));
+    const far = (t, gap) => times.every((x) => Math.abs(x - t) >= gap);
+    const sorted = mot.map((m) => m.e).sort((a, b) => a - b);
+    const thr = Math.max(0.8, 3 * (sorted[Math.floor(sorted.length / 4)] || 0));
+    const win = Math.max(1.5, span / n);
+    const slots = [];
+    for (const m of mot) {
+      if (m.e < thr) continue;
+      const k = Math.floor((m.t - t0) / win);
+      (slots[k] = slots[k] || []).push(m);
+    }
+    const queues = slots.filter(Boolean).map((q) => q.sort((a, b) => b.e - a.e)).sort((a, b) => b[0].e - a[0].e);
+    for (let added = true; added && times.length < n;) {
+      added = false;
+      for (const q of queues) {
+        if (times.length >= n) break;
+        while (q.length && !far(q[0].t, 0.9)) q.shift();
+        if (q.length) { times.push(q.shift().t); added = true; }
+      }
+    }
+    // Si casi no hubo movimiento, se completa con fotos parejas.
+    for (let k = 0; times.length < n && k < n * 2; k++) { const t = t0 + (span * k) / Math.max(1, n * 2 - 1); if (far(t, 0.5)) times.push(t); }
+    return times.sort((a, b) => a - b);
+  }
   async function countOne(s, run) {
     {
       if (run !== S.run) return false;
@@ -1269,16 +1326,21 @@
       const parts = [{ text: '' }];
       // Las cámaras exteriores ayudan a ver si el paradero es zona paga (andén cerrado).
       const outside = S.cams.filter((c) => !c.bad && c.tipo === 'exterior').slice(0, 2);
-      const groups = [...doors.map((c, d) => ({ c, count: clamp(Math.min(Math.round(per * weight[d]), Math.ceil(span / 1.5) + 1), 3, 10), door: true })), ...outside.map((c) => ({ c, count: 2, door: false }))];
+      const groups = [...doors.map((c, d) => ({ c, count: clamp(Math.min(Math.round(per * weight[d]), Math.ceil(span / 0.8) + 1), 3, 18), door: true })), ...outside.map((c) => ({ c, count: 2, door: false }))];
+      // En las puertas se miran los momentos en que algo se mueve, no fotos parejas en el tiempo:
+      // así no se escapa quien sube entre una foto y otra.
+      const plans = await Promise.all(groups.map(async (g) => (g.door ? pickTimes(await motionOf(g.c, s.t0, s.t1, run), s.t0, s.t1, g.count) : null)));
+      if (run !== S.run) return false;
       for (let d = 0; d < groups.length; d++) {
         const { c, count, door } = groups[d];
         parts.push({ text: `Cámara ${labels[d]} = ${c.label}, ${TIPOS[c.tipo] || 'cámara'}${door ? `, ${hasValidator(c) ? 'con validador' : 'sin validador'}` : ' (sirve para ver cómo es el paradero)'}:` });
-        for (let k = 0; k < count; k++) {
-          const t = +(s.t0 + (span * k) / (count - 1)).toFixed(2);
+        const times = plans[d] || Array.from({ length: count }, (_, k) => s.t0 + (span * k) / (count - 1));
+        for (let k = 0; k < times.length; k++) {
+          const t = +times[k].toFixed(2);
           const f = await frameOf(c, t, hasValidator(c) ? 1024 : 768);
           if (!f) continue;
           meta.push({ cam: c.key, t, label: labels[d], door });
-          parts.push({ text: `Imagen ${meta.length} (cámara ${labels[d]}, ${mmss(t)}):` }, img(f));
+          parts.push({ text: `Imagen ${meta.length} (cámara ${labels[d]}, ${mmss(t)}.${Math.floor((t % 1) * 10)}):` }, img(f));
         }
         if (run !== S.run) return false;
       }
@@ -1287,6 +1349,7 @@
       parts[0].text = [
         'Eres un fiscalizador del transporte público de Santiago que revisa las cámaras de un bus mientras está detenido en un paradero.',
         `Te envío ${meta.length} imágenes numeradas de ${groups.length === 1 ? 'una cámara' : `${groups.length} cámaras`}, desde el ${mmss(s.t0)} hasta el ${mmss(s.t1)} del video.`,
+        'Las imágenes de las puertas no están parejas en el tiempo: se eligieron los momentos en que algo se mueve en la puerta, así que varias seguidas pueden mostrar a la misma persona avanzando. Úsalas en orden para seguir a cada persona.',
         'Cómo se paga:',
         '- Normalmente se paga al subir, acercando la tarjeta bip! o el celular al validador del bus (el aparato lector junto al conductor o a la puerta).',
         '- En algunos paraderos hay ZONA PAGA: un andén cerrado con rejas o vallas, con torniquetes o validadores en el mismo paradero y a menudo personal con chaleco reflectante que controla la entrada. Ahí la gente paga ABAJO, en el paradero, antes de que llegue el bus, y después sube por TODAS las puertas, también las traseras, sin validar en el bus. En una zona paga, subir por una puerta trasera sin validar NO es evasión.',
