@@ -357,7 +357,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-13';
+  const VERSION = '2026.09.25-14';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1024,6 +1024,7 @@
     if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(k)) return status('Esa no parece una clave de Claude: debe empezar con sk-ant-.', null, true);
     S.ckey = k;
     store.set('cofsimple:ckey', k);
+    if (!isClaude(S.ai)) { S.ai = 'haiku'; store.set('cofsimple:ai', S.ai); $('#aiModel').value = S.ai; }
     $('#ckeyInput').value = '••••••••';
     renderSpend();
     status('Clave de Claude guardada en este navegador. Los paraderos se contarán con Claude.', null);
@@ -1416,21 +1417,32 @@
     const T = totals();
     const dp = S.descProg;
     const tourTxt = p.n && p.k < p.n ? `Leyendo el recorrido: ${p.k} de ${p.n} lecturas (va en el ${mmss(p.at)})` : `Recorrido leído${dp && dp.n ? ` · describiendo lo que pasa: ${dp.k} de ${dp.n}` : ''}`;
-    const cnt = inR.length ? ` · Paraderos contados: ${done} de ${inR.length}${S.counting != null ? ` (contando el ${S.counting})` : ''}` : '';
+    const who = isClaude(S.ai) && S.ckey ? ` con ${MODEL_NAMES[CLAUDE[S.ai]]}` : S.ai === 'gratis' ? ' con IA gratis' : '';
+    const cnt = inR.length ? ` · Paraderos contados: ${done} de ${inR.length}${S.counting != null ? ` (contando el ${S.counting}${who})` : ''}` : '';
     status(`${tourTxt}${cnt} · suben ${T.suben}, pagan ${T.pagan}, evaden ${T.evaden}`, p.n ? p.k / p.n : null);
   }
   // Toma los paraderos que el bus ya dejó atrás y los cuenta uno a uno mientras sigue el recorrido.
+  // Varios paraderos se cuentan a la vez: 3 con IA de pago (Claude o Gemini pagado), 2 en el modo gratis.
   async function counter(run, tourDone) {
+    const busy = new Set();
+    let stopped = false;
+    let failure = null;
     for (;;) {
-      if (run !== S.run) return false;
-      const ready = (s) => s.estado === 'pendiente' && inRange(s) && !beforeStart(s) && (tourDone() || s.t1 + S.step / 2 <= S.frontier);
-      const s = S.stops.find(ready);
-      if (s) {
-        if (!(await countOne(s, run))) return false;
-        continue;
+      if (run !== S.run || stopped) return false;
+      if (failure) throw failure;
+      const limit = S.ai === 'gratis' ? 2 : 3;
+      const ready = (s) => s.estado === 'pendiente' && !busy.has(s) && inRange(s) && !beforeStart(s) && (tourDone() || s.t1 + S.step / 2 <= S.frontier);
+      let s;
+      while (busy.size < limit && (s = S.stops.find(ready))) {
+        const one = s;
+        busy.add(one);
+        countOne(one, run)
+          .then((ok) => { if (!ok) stopped = true; })
+          .catch((e) => { failure = e; })
+          .finally(() => { busy.delete(one); S.counting = busy.size ? stopLabel([...busy][0]) : null; progress(); });
       }
-      if (tourDone()) return true;
-      await wait(700);
+      if (!busy.size && !S.stops.some(ready) && tourDone()) return true;
+      await wait(300);
     }
   }
   // Cuánto cambia la imagen de una cámara de puerta, cuadro a cuadro (4 por segundo), durante una detención.
