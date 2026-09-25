@@ -217,6 +217,18 @@
       <span class="range">Inicio del recorrido <b id="startTxt"></b> <button type="button" id="startHere" title="Nada antes de este momento se cuenta (bus en el terminal)">aquí</button> <button type="button" id="startAuto">automático</button></span>
       <span class="wait-note" id="waitNote" hidden>⏳ El video espera a que la IA avance…</span>
     </div>
+    <details class="cams dl" id="dlPanel" hidden>
+      <summary>⬇ Descargar video o foto</summary>
+      <div class="controls dl-body">
+        <span class="range">Desde <input id="dFrom" inputmode="numeric" title="mm:ss o h:mm:ss"> <button type="button" id="dFromHere">aquí</button> hasta <input id="dTo" inputmode="numeric" title="mm:ss o h:mm:ss"> <button type="button" id="dToHere">aquí</button></span>
+        <label class="chk">Cámaras <select id="dMode" class="svc-sel"><option value="all">Todas las cámaras (mosaico)</option><option value="one">Solo la que estoy viendo</option></select></label>
+        <label class="chk">Formato <select id="dFmt" class="svc-sel"></select></label>
+        <label class="chk">Velocidad <select id="dSpeed" class="svc-sel"><option value="1">Normal</option><option value="2">2x</option><option value="4">4x</option></select></label>
+        <button class="btn small" id="btnClip" type="button">Descargar video</button>
+        <button class="btn small ghost" id="btnPhoto" type="button">📷 Foto de este momento</button>
+        <span class="muted" id="dlInfo"></span>
+      </div>
+    </details>
     <details class="cams" id="camPanel" hidden>
       <summary id="camSummary">Cámaras</summary>
       <div class="cam-rows" id="camRows"></div>
@@ -439,6 +451,7 @@
     renderCams();
     setMain(S.main);
     renderControls();
+    renderDl();
     rebuild();
     if (warn) status(warn, null);
     analyze(run);
@@ -2223,6 +2236,183 @@
   }
   for (const [id, k] of metaInputs) $(id).onchange = (e) => { S.meta[k] = e.target.value.trim(); save(); };
   renderDay();
+
+  // ---------------------------------------------------------------- descargar video o foto
+  // Se graba en el navegador: las cámaras se reproducen sincronizadas en un lienzo y se guarda como video.
+  const FORMATS = [
+    ['mp4', 'MP4 (WhatsApp, Windows, celulares)', ['video/mp4;codecs=avc1.42E01E', 'video/mp4;codecs=avc1', 'video/mp4']],
+    ['webm', 'WebM', ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']],
+  ].map(([k, label, types]) => [k, label, window.MediaRecorder ? types.find((t) => MediaRecorder.isTypeSupported(t)) : null]).filter((f) => f[2]);
+  const CLIP = { busy: false, cancel: false };
+  $('#dFmt').replaceChildren(...FORMATS.map(([k, label]) => { const o = el('option', null, label); o.value = k; return o; }));
+  if (!FORMATS.length) { $('#btnClip').disabled = true; $('#dlInfo').textContent = 'Este navegador no permite grabar video; usa Chrome o Edge.'; }
+  const clipName = (ext, t) => `${(S.meta.patente || 'bus').replace(/[^A-Za-z0-9-]/g, '')}_${(S.meta.fecha || '').replace(/\//g, '-')}_${(horaAt(t) || mmss(t)).replace(/:/g, '-')}.${ext}`.replace(/_+/g, '_');
+  function clipLayout(n, w0) {
+    const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 6 ? 3 : 4;
+    const rows = Math.ceil(n / cols);
+    const cw = n === 1 ? Math.min(1280, w0 || 1280) : 640;
+    return { cols, rows, cw, ch: Math.round((cw * 9) / 16), bar: 34 };
+  }
+  // Franja superior: patente, fecha y hora del equipo, paradero si el bus está en uno.
+  function drawBar(g, W, bar, t) {
+    g.fillStyle = '#10181f';
+    g.fillRect(0, 0, W, bar);
+    const stop = S.stops.find((s) => t >= s.t0 && t <= s.t1);
+    const par = stop ? parOf(stop) : null;
+    const txt = [S.meta.patente, [S.meta.fecha, horaAt(t)].filter(Boolean).join(' '), PAR.services[PAR.sel.svc] ? `Servicio ${PAR.sel.svc} ${currentDir() || ''}`.trim() : '', par ? `Paradero ${par.o ? `#${par.o} ` : ''}${par.c || ''} · ${shortName(par.n)}` : ''].filter(Boolean).join('  ·  ');
+    g.fillStyle = '#fff';
+    g.font = 'bold 17px sans-serif';
+    g.textBaseline = 'middle';
+    g.fillText(txt || mmss(t), 10, bar / 2);
+  }
+  // En el cuadro que sobra del mosaico: los datos del momento (sirve de respaldo en el video o la foto).
+  function drawInfo(g, t, x, y, cw, ch) {
+    g.fillStyle = '#10181f';
+    g.fillRect(x, y, cw, ch);
+    const m = S.moments.filter((q) => q.t <= t + 0.5 && (q.vel != null || q.lat != null)).slice(-1)[0];
+    const stop = S.stops.find((s) => t >= s.t0 && t <= s.t1);
+    const par = stop ? parOf(stop) : m && m.lat != null ? nearestParadero(m.lat, m.lon, 0.1) : null;
+    const lines = [
+      [S.meta.patente || '', 28],
+      [[S.meta.fecha, horaAt(t)].filter(Boolean).join('  '), 22],
+      [m && m.vel != null ? `${m.vel} km/h${m.vel <= 2 ? ' · detenido' : ''}` : '', 22],
+      [par ? `Paradero ${par.o ? `#${par.o} ` : ''}${par.c || ''}` : '', 20],
+      [par ? shortName(par.n) : m && m.lat != null ? `${m.lat.toFixed(5)}, ${m.lon.toFixed(5)}` : '', 17],
+    ];
+    if (stop && stop.estado === 'listo') {
+      const c = counts(stop);
+      lines.push([`Suben ${c.suben} · Pagan ${c.pagan} · Evaden ${c.evaden}${zpOf(stop) ? ' · ZP' : ''}`, 20]);
+    }
+    let yy = y + 36;
+    g.textBaseline = 'alphabetic';
+    for (const [txt, size] of lines) {
+      if (!txt) continue;
+      g.font = `bold ${size}px sans-serif`;
+      g.fillStyle = size >= 28 ? '#f5a300' : '#fff';
+      g.fillText(txt, x + 20, yy, cw - 40);
+      yy += size + 14;
+    }
+  }
+  function drawCell(g, src, c, x, y, cw, ch) {
+    g.fillStyle = '#000';
+    g.fillRect(x, y, cw, ch);
+    if (src && src.videoWidth) {
+      const s = Math.min(cw / src.videoWidth, ch / src.videoHeight);
+      g.drawImage(src, x + (cw - src.videoWidth * s) / 2, y + (ch - src.videoHeight * s) / 2, src.videoWidth * s, src.videoHeight * s);
+    } else if (src && src.width) {
+      const s = Math.min(cw / src.width, ch / src.height);
+      g.drawImage(src, x + (cw - src.width * s) / 2, y + (ch - src.height * s) / 2, src.width * s, src.height * s);
+    } else {
+      g.fillStyle = '#888';
+      g.font = '16px sans-serif';
+      g.fillText('sin video en este momento', x + 12, y + ch / 2);
+    }
+    const label = camName(c);
+    g.font = 'bold 14px sans-serif';
+    const w = g.measureText(label).width + 12;
+    g.fillStyle = 'rgba(0,0,0,.65)';
+    g.fillRect(x + 6, y + ch - 26, w, 20);
+    g.fillStyle = '#fff';
+    g.textBaseline = 'middle';
+    g.fillText(label, x + 12, y + ch - 16);
+  }
+  async function exportClip() {
+    const from = parseTime($('#dFrom').value);
+    const to = parseTime($('#dTo').value);
+    if (from == null || to == null || to - from < 1) return ($('#dlInfo').textContent = 'Revisa el rango: «hasta» debe ser mayor que «desde».');
+    const fmt = FORMATS.find((f) => f[0] === $('#dFmt').value) || FORMATS[0];
+    const speed = Number($('#dSpeed').value) || 1;
+    const cams = $('#dMode').value === 'one' ? [mainCam()] : S.cams.filter((c) => !c.bad);
+    CLIP.busy = true;
+    CLIP.cancel = false;
+    $('#btnClip').textContent = 'Cancelar';
+    $('#dlInfo').textContent = 'Preparando…';
+    const vids = cams.map((c) => {
+      const v = document.createElement('video');
+      v.muted = true;
+      v.playsInline = true;
+      v.preload = 'auto';
+      v.src = c.url;
+      v.style.cssText = 'position:fixed;left:-10px;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+      document.body.append(v);
+      return v;
+    });
+    try {
+      await Promise.all(vids.map((v) => loaded(v)));
+      const L0 = clipLayout(cams.length, vids[0].videoWidth);
+      const cv = newCanvas(L0.cols * L0.cw, L0.rows * L0.ch + L0.bar);
+      const g = cv.getContext('2d');
+      const want = (i, t) => t + cams[i].off;
+      await Promise.all(vids.map((v, i) => seek(v, clamp(want(i, from), 0, Math.max(0, cams[i].dur - 0.1)))));
+      const draw = (t) => {
+        drawBar(g, cv.width, L0.bar, t);
+        if (cams.length < L0.cols * L0.rows) drawInfo(g, t, (cams.length % L0.cols) * L0.cw, L0.bar + Math.floor(cams.length / L0.cols) * L0.ch, L0.cw, L0.ch);
+        vids.forEach((v, i) => {
+          const tc = want(i, t);
+          const ok = tc >= 0 && tc <= cams[i].dur;
+          drawCell(g, ok ? v : null, cams[i], (i % L0.cols) * L0.cw, L0.bar + Math.floor(i / L0.cols) * L0.ch, L0.cw, L0.ch);
+        });
+      };
+      draw(from);
+      const rec = new MediaRecorder(cv.captureStream(25), { mimeType: fmt[2], videoBitsPerSecond: 5e6 });
+      const chunks = [];
+      rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      const stopped = new Promise((ok) => (rec.onstop = ok));
+      vids.forEach((v) => { v.playbackRate = speed; });
+      await Promise.all(vids.map((v, i) => (want(i, from) >= 0 && want(i, from) <= cams[i].dur ? v.play() : Promise.resolve()).catch(() => {})));
+      rec.start(1000);
+      await new Promise((done) => {
+        let n = 0;
+        const step = () => {
+          const t = vids[0].currentTime - cams[0].off;
+          draw(t);
+          // Las demás cámaras siguen a la primera.
+          if (++n % 20 === 0) vids.forEach((v, i) => { if (i && Math.abs(v.currentTime - want(i, t)) > 0.3 && want(i, t) >= 0 && want(i, t) <= cams[i].dur) v.currentTime = want(i, t); });
+          $('#dlInfo').textContent = `Grabando ${mmss(Math.max(0, t - from))} de ${mmss(to - from)}${speed > 1 ? ` (a ${speed}x)` : ''}… deja esta pestaña a la vista.`;
+          if (CLIP.cancel || t >= to || vids[0].ended) return done();
+          requestAnimationFrame(step);
+        };
+        requestAnimationFrame(step);
+      });
+      rec.stop();
+      await stopped;
+      if (CLIP.cancel) { $('#dlInfo').textContent = 'Grabación cancelada.'; return; }
+      const blob = new Blob(chunks, { type: fmt[2].split(';')[0] });
+      download(clipName(fmt[0], from), blob);
+      $('#dlInfo').textContent = `Listo: video de ${mmss(to - from)}${speed > 1 ? ` a ${speed}x` : ''} (${(blob.size / 1048576).toFixed(1)} MB).`;
+    } catch (e) {
+      $('#dlInfo').textContent = `No se pudo grabar: ${e.message}`;
+    } finally {
+      vids.forEach((v) => { v.pause(); v.remove(); });
+      CLIP.busy = false;
+      $('#btnClip').textContent = 'Descargar video';
+    }
+  }
+  $('#btnClip').onclick = () => (CLIP.busy ? (CLIP.cancel = true) : exportClip());
+  $('#dFromHere').onclick = () => { $('#dFrom').value = mmss(tRef()); if (parseTime($('#dTo').value) == null || parseTime($('#dTo').value) <= tRef()) $('#dTo').value = mmss(Math.min(S.D, tRef() + 30)); };
+  $('#dToHere').onclick = () => { $('#dTo').value = mmss(tRef()); };
+  // Foto del momento: todas las cámaras (o la que se está viendo) en el mismo instante.
+  $('#btnPhoto').onclick = async () => {
+    const t = tRef();
+    const cams = $('#dMode').value === 'one' ? [mainCam()] : S.cams.filter((c) => !c.bad);
+    $('#dlInfo').textContent = 'Tomando la foto…';
+    const frames = [];
+    for (const c of cams) frames.push(await frameOf(c, t, 1280));
+    const L0 = clipLayout(cams.length, frames[0] ? frames[0].width : 1280);
+    const cw = cams.length === 1 ? L0.cw : 960;
+    const ch = Math.round((cw * 9) / 16);
+    const cv = newCanvas(L0.cols * cw, L0.rows * ch + L0.bar);
+    const g = cv.getContext('2d');
+    drawBar(g, cv.width, L0.bar, t);
+    frames.forEach((f, i) => drawCell(g, f, cams[i], (i % L0.cols) * cw, L0.bar + Math.floor(i / L0.cols) * ch, cw, ch));
+    if (cams.length < L0.cols * L0.rows) drawInfo(g, t, (cams.length % L0.cols) * cw, L0.bar + Math.floor(cams.length / L0.cols) * ch, cw, ch);
+    cv.toBlob((b) => { download(clipName('jpg', t), b); $('#dlInfo').textContent = 'Foto descargada.'; }, 'image/jpeg', 0.92);
+  };
+  function renderDl() {
+    $('#dlPanel').hidden = !S.cams.length;
+    if (!$('#dFrom').value) { $('#dFrom').value = mmss(0); $('#dTo').value = mmss(Math.min(S.D || 30, 30)); }
+    $('#dMode').options[0].textContent = S.cams.filter((c) => !c.bad).length > 1 ? 'Todas las cámaras (mosaico)' : 'La cámara';
+  }
 
   $('#keyBox').onsubmit = (e) => {
     e.preventDefault();
