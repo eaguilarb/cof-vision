@@ -133,6 +133,9 @@
   .stop-icon.wait { border-color: #9aa6b2; color: #9aa6b2; }
   .stop-icon.zp { border-style: double; border-width: 4px; }
   #report { display: none; }
+  .meta-row label { display: flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); }
+  .meta-row input { font: inherit; font-size: 14px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; width: 120px; color: var(--ink); }
+  .meta-row #mPer { width: 60px; }
   @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px; } header .file { max-width: 90vw; } .totals { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
   @media (max-width: 640px) {
     header { padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); gap: 8px; }
@@ -160,14 +163,27 @@
     .leaflet-control-layers { font-size: 13px; }
   }
   @media print {
+    @page { size: A4 portrait; margin: 12mm; }
     body { background: #fff; }
     header, main { display: none !important; }
-    #report { display: block; font-size: 12px; padding: 0 8px; }
-    #report h1 { font-size: 18px; margin: 0 0 4px; }
-    #report h3 { font-size: 14px; margin: 16px 0 6px; }
-    #report tr { page-break-inside: avoid; }
-    #report th, #report td { padding: 4px 6px; font-size: 11px; }
+    #report { display: block; font: 700 10px/1.3 "Aptos Narrow", Calibri, Arial, sans-serif; color: #000; }
+    .rep-break { page-break-before: always; }
+    .rep-top { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+    .rep-box { border: 2px solid #000; padding: 3px 10px; text-align: center; min-width: 70px; }
+    .rep-svc { margin-left: auto; font-weight: 600; }
+    .rep-fh { display: flex; margin-bottom: 10px; }
+    .rep-fh .rep-box:first-child { border-right: 0; }
+    .rep-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    .rep-table th:nth-child(1) { width: 7%; } .rep-table th:nth-child(2) { width: 9%; } .rep-table th:nth-child(3) { width: 38%; }
+    .rep-table th:nth-child(4), .rep-table th:nth-child(5), .rep-table th:nth-child(6) { width: 10%; } .rep-table th:nth-child(7) { width: 16%; }
+    .rep-table th { background: #92d050 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .rep-table th, .rep-table td { border: 1px solid #000; padding: 2px 4px; text-align: center; font-weight: 700; }
+    .rep-table tr { page-break-inside: avoid; }
+    .rep-red { color: #f00 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .rep-tot td { border: 0; padding-top: 6px; }
+    .rep-note { font-weight: 400; font-style: italic; font-size: 8px; margin-top: 8px; }
   }
+
 </style>
 </head>
 <body>
@@ -229,10 +245,20 @@
   <section class="card wide" id="fareCard">
     <h2>Pasajes por paradero <span id="fareInfo">Se completa solo mientras se analiza el video.</span></h2>
     <div class="totals" id="totals"></div>
+    <div class="exports meta-row">
+      <label>Patente <input id="mPlate" placeholder="PGBY-46" autocapitalize="characters"></label>
+      <label>Fecha <input id="mDate" placeholder="22/09/2026"></label>
+      <label>Período <input id="mPer" placeholder="AM" size="4"></label>
+    </div>
     <div class="exports">
-      <button class="btn small" id="btnCsvStops" type="button">Descargar Excel por paradero</button>
-      <button class="btn small ghost" id="btnCsvPeople" type="button">Excel detalle por persona</button>
+      <button class="btn small" id="btnXlsx" type="button">Informe Excel</button>
       <button class="btn small ghost" id="btnPdf" type="button">Informe PDF</button>
+      <button class="btn small ghost" id="btnDayAdd" type="button">+ Agregar al informe del día</button>
+      <button class="btn small ghost" id="btnCsvPeople" type="button">Detalle por persona</button>
+      <span class="note" id="dayInfo"></span>
+      <button class="btn small" id="btnDayXlsx" type="button" hidden>Excel del día</button>
+      <button class="btn small ghost" id="btnDayPdf" type="button" hidden>PDF del día</button>
+      <button class="btn small ghost" id="btnDayClear" type="button" hidden>Vaciar</button>
       <span class="note">Conteo automático hecho por IA: revisa los casos marcados tocándolos para ver el momento exacto. Si la IA contó mal a alguien, corrígelo en el detalle del paradero.</span>
     </div>
     <div class="staff-row">
@@ -311,7 +337,7 @@
     model: { quick: 0, main: 0, ...store.get('cofsimple:models', {}) },
     cams: [], main: 0, ref: 0, grid: false,
     id: null, run: 0, step: 4, D: 0,
-    moments: [], stops: [], track: [], cur: -1, curStop: null, open: null, addr: {},
+    moments: [], stops: [], track: [], cur: -1, curStop: null, open: null, addr: {}, meta: {},
     zpPlaces: store.get('cofsimple:zp', []),
     // Control del análisis: rango a mirar, hasta dónde va, y si el video se reproduce solo.
     range: null, frontier: 0, running: false, paused: false,
@@ -319,7 +345,7 @@
     auto: store.get('cofsimple:auto', true), userPaused: false, autoPausing: false, waiting: false, rate: 1,
   };
   const save = () => store.set(S.id, {
-    v: 3, step: S.step, moments: S.moments, stops: S.stops, range: S.range, startManual: S.startManual,
+    v: 3, step: S.step, moments: S.moments, stops: S.stops, range: S.range, startManual: S.startManual, meta: S.meta,
     cams: Object.fromEntries(S.cams.map((c) => [c.key, { tipo: c.tipo, validador: c.validador, off: c.off, desc: c.desc, coords: c.coords, manual: c.manual }])),
   });
   const mainCam = () => S.cams[S.main] || null;
@@ -409,6 +435,7 @@
     S.userPaused = false;
     S.frontier = S.range.from;
     S.startManual = saved.startManual ?? null;
+    S.meta = saved.meta || {};
     renderCams();
     setMain(S.main);
     renderControls();
@@ -701,6 +728,7 @@
     renderControls();
     try {
       if (!(await identify(run))) return;
+      if (!(await readMeta(run))) return;
       S.step = S.D <= 120 ? 2 : S.D <= 900 ? 4 : 6;
       const m = mainCam();
       if (m && (tRef() < S.range.from - 1 || tRef() > S.range.to)) m.video.currentTime = clamp(S.range.from + m.off, 0, Math.max(0, m.dur - 0.1));
@@ -844,6 +872,25 @@
     const m = mainCam();
     if (m && e.target === m.video) { S.userPaused = false; S.waiting = false; renderControls(); }
   }, true);
+
+  // Patente y fecha escritas en la imagen, para el informe.
+  async function readMeta(run) {
+    if (S.meta.patente && S.meta.fecha) return true;
+    const ref = refCam();
+    const f = ref && (await frameOf(ref, clamp(Math.min(20, S.D * 0.1), 0, Math.max(0, S.D - 0.5)), 1024));
+    if (!f || run !== S.run) return run === S.run;
+    try {
+      const r = await gemini([{ text: 'Lee el texto sobreimpreso en esta imagen de una cámara de bus. Responde SOLO JSON: {"patente":"PGBY-46","fecha":"DD/MM/AAAA"}. La patente es la placa del bus (4 letras, guion y 2 números). Si algo no se ve, pon null.' }, img(f)], run, 'quick');
+      if (!r || run !== S.run) return false;
+      if (!S.meta.patente && r.patente) S.meta.patente = String(r.patente).toUpperCase().trim();
+      if (!S.meta.fecha && r.fecha && /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(r.fecha)) S.meta.fecha = String(r.fecha).trim();
+      save();
+      renderMeta();
+    } catch (e) {
+      if (e.badKey) throw e;
+    }
+    return true;
+  }
 
   // Paso 0: qué muestra cada cámara y a qué hora empieza (para sincronizarlas).
   async function identify(run) {
@@ -1353,7 +1400,7 @@
     const name = file.name.toLowerCase();
     if (/\.kmz$/.test(name)) throw new Error('Los archivos KMZ vienen comprimidos: ábrelo en Google Earth y guárdalo como KML, o expórtalo a Excel.');
     if (/\.(xlsx|xls|xlsm|ods)$/.test(name)) {
-      if (!window.XLSX) await new Promise((ok, bad) => { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'; sc.onload = ok; sc.onerror = () => bad(new Error('No se pudo cargar el lector de Excel. Revisa tu conexión.')); document.head.append(sc); });
+      await xlsxLib();
       const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
       let best = null;
       for (const n of wb.SheetNames) {
@@ -1635,6 +1682,7 @@
     }));
   }
   function renderStops() {
+    if (typeof renderMeta === 'function' && S.range) renderMeta();
     const T = totals();
     const pend = S.stops.filter((s) => s.estado !== 'listo' && inRange(s) && !beforeStart(s)).length;
     const quiet = S.stops.filter((s) => s.estado === 'listo' && inRange(s) && !beforeStart(s) && !moving(s)).length;
@@ -1829,30 +1877,11 @@
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
   }
-  const ready = () => {
-    if (S.stops.some((s) => s.estado === 'listo')) return true;
-    alert('Todavía no hay paraderos analizados para exportar.');
-    return false;
-  };
   const byDoor = (s) => {
     const zp = zpOf(s);
     const real = s.personas.filter((p) => resOf(p, zp) !== 'excluir');
     const front = real.filter((p) => { const c = camByKey(p.cam); return !c || c.tipo === 'puerta_delantera' || c.validador; }).length;
     return { front, other: real.length - front };
-  };
-  $('#btnCsvStops').onclick = () => {
-    if (!ready()) return;
-    const rows = [['Paradero', 'Hora llegada', 'Hora salida', 'Minuto video', 'Orden paradero', 'Código paradero', 'Nombre paradero', 'Dirección', 'Latitud', 'Longitud', 'Zona paga', 'Motivo zona paga', 'Suben', 'Suben por puerta con validador', 'Suben por otras puertas', 'Pagan (total)', 'Pagan en zona paga', 'Evaden', 'Dudosos', 'Bajan', '% evasión', 'Observación']];
-    for (const s of S.stops) {
-      if (!moving(s)) continue;
-      const c = counts(s);
-      const d = byDoor(s);
-      const po = parOf(s);
-      rows.push([stopLabel(s), horaAt(s.t0), horaAt(s.t1), mmss(s.t0), po ? po.o : '', po ? po.c : '', po ? po.n : '', s.dir || '', dec(s.lat, 6), dec(s.lon, 6), zpOf(s) ? 'Sí' : 'No', zpWhy(s), c.suben, d.front, d.other, c.pagan, c.zp, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben), s.resumen]);
-    }
-    const T = totals();
-    rows.push(['TOTAL', '', '', '', '', '', '', '', '', '', `${T.zonas} zonas pagas`, '', T.suben, '', '', T.pagan, T.zp, T.evaden, T.dudosos, T.bajan, pct(T.evaden, T.suben), scopeText()]);
-    download(`${baseName()}-paraderos.csv`, csv(rows));
   };
   $('#btnCsvPeople').onclick = () => {
     if (!ready()) return;
@@ -1863,36 +1892,221 @@
     }
     download(`${baseName()}-detalle-personas.csv`, csv(rows));
   };
-  $('#btnPdf').onclick = () => {
-    if (!ready()) return;
-    const T = totals();
+  // ---------------------------------------------------------------- informe de evasión (formato de la empresa)
+  // Una hoja por bus: patente, período, fecha y hora, y todos los paraderos del sentido en orden
+  // con suben, pagan, evaden (= suben − pagan) y observación (ZP).
+  const shortName = (n) => String(n || '').replace(/\s*\/\s*esq\.\s*/i, ' esq. ').replace(/\s*\/\s*/g, ' - ').trim();
+  const hhmm = (h) => (h ? h.slice(0, 5) : '');
+  function reportMeta() {
+    const st = startT();
+    const from = Math.max(S.range.from, st === Infinity ? S.range.from : st);
+    const to = Math.min(S.frontier, S.range.to);
+    const h0 = horaAt(from);
+    const hour = h0 ? Number(h0.slice(0, 2)) : null;
+    return {
+      patente: (S.meta.patente || '').trim(),
+      fecha: (S.meta.fecha || '').trim(),
+      periodo: (S.meta.periodo || '').trim() || (hour == null ? '' : hour < 12 ? 'AM' : 'PM'),
+      desde: hhmm(h0),
+      hasta: hhmm(horaAt(to)),
+      from, to,
+    };
+  }
+  function buildReport() {
+    const meta = reportMeta();
+    const dir = currentDir();
+    const list = PAR.list;
+    const done = S.stops.filter((s) => s.estado === 'listo' && inRange(s) && !beforeStart(s));
+    const agg = new Map();
+    const extra = [];
+    const add = (key, s) => {
+      const c = counts(s);
+      const a = agg.get(key) || { suben: 0, pagan: 0, evaden: 0, dudosos: 0, zp: false };
+      a.pagan += c.pagan;
+      a.evaden += c.evaden;
+      a.dudosos += c.dudosos;
+      a.zp = a.zp || zpOf(s);
+      agg.set(key, a);
+    };
+    for (const s of done) {
+      const p = s.lat != null ? nearestParadero(s.lat, s.lon, 0.25) : null;
+      if (p) add(p, s);
+      else if (counts(s).suben) extra.push(s);
+    }
+    // Paraderos que quedaron dentro del tramo analizado (entre el primero y el último por donde pasó el bus).
+    const seen = S.moments.filter((m) => m.lat != null && m.t >= meta.from - S.step && m.t <= meta.to + S.step)
+      .map((m) => nearestParadero(m.lat, m.lon, 0.15)).filter(Boolean).map((p) => p.o);
+    const lo = seen.length ? Math.min(...seen) : null;
+    const hi = seen.length ? Math.max(...seen) : null;
+    const rows = list.map((p) => {
+      const a = agg.get(p) || { pagan: 0, evaden: 0, dudosos: 0, zp: false };
+      const zp = a.zp || p.zp === true || (!!p.lat && S.zpPlaces.some((z) => distKm(z, p) < 0.08));
+      const covered = lo != null && p.o >= lo && p.o <= hi;
+      const obs = [zp ? 'ZP' : '', a.dudosos ? `${a.dudosos} dudoso${a.dudosos === 1 ? '' : 's'}` : '', covered ? '' : 'No analizado'].filter(Boolean).join(' · ');
+      return { n: p.o, code: p.c, name: shortName(p.n), pagan: a.pagan, evaden: a.evaden, obs };
+    });
+    // Sin servicio elegido, o detenciones lejos de un paradero del servicio: se listan aparte.
+    for (const s of extra) {
+      const c = counts(s);
+      rows.push({ n: '', code: '', name: `Fuera de paradero · ${horaAt(s.t0) || mmss(s.t0)}${s.dir ? ` · ${s.dir}` : ''}`, pagan: c.pagan, evaden: c.evaden, obs: [zpOf(s) ? 'ZP' : '', c.dudosos ? `${c.dudosos} dudoso${c.dudosos === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ') });
+    }
+    if (!list.length) {
+      rows.length = 0;
+      done.filter((s) => counts(s).suben).forEach((s, i) => {
+        const c = counts(s);
+        rows.push({ n: i + 1, code: '', name: s.dir || `${s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : ''} · ${horaAt(s.t0) || mmss(s.t0)}`, pagan: c.pagan, evaden: c.evaden, obs: [zpOf(s) ? 'ZP' : '', c.dudosos ? `${c.dudosos} dudosos` : ''].filter(Boolean).join(' · ') });
+      });
+    }
+    const plate = meta.patente || 'BUS';
+    const sheet = `${plate.replace(/[^A-Za-z0-9]/g, '').toUpperCase() || 'BUS'}${dir === 'Ida' ? ' IDA' : ''}`.slice(0, 31);
+    return {
+      sheet, plate, periodo: meta.periodo,
+      fechaHora: [meta.fecha, meta.desde, meta.hasta].filter(Boolean).join(' - '),
+      servicio: PAR.services[PAR.sel.svc] ? `Servicio ${PAR.sel.svc}${dir ? ` · ${dir}` : ''}` : '',
+      nota: `${scopeText()} · Conteo automático hecho por IA; los casos dudosos no se suman y deben revisarse en el video.`,
+      rows,
+    };
+  }
+  let XS = null;
+  async function xlsxLib() {
+    if (XS) return XS;
+    if (!window.XLSX || !window.XLSX.__cofStyle) {
+      await new Promise((ok, bad) => { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js'; sc.onload = ok; sc.onerror = () => bad(new Error('No se pudo cargar el generador de Excel. Revisa tu conexión.')); document.head.append(sc); });
+      window.XLSX.__cofStyle = true;
+    }
+    XS = window.XLSX;
+    return XS;
+  }
+  function reportSheet(X, rep) {
+    const thin = { style: 'thin', color: { rgb: '000000' } };
+    const med = { style: 'medium', color: { rgb: '000000' } };
+    const font = { bold: true, name: 'Aptos Narrow', sz: 11, color: { rgb: '000000' } };
+    const center = { horizontal: 'center', vertical: 'center', wrapText: true };
+    const S0 = { font, alignment: center };
+    const box = { font, alignment: center, border: { top: med, bottom: med, left: med, right: med } };
+    const grid = { font, alignment: center, border: { top: thin, bottom: thin, left: thin, right: thin } };
+    const head = { ...grid, fill: { patternType: 'solid', fgColor: { rgb: '92D050' } } };
+    const red = { ...grid, font: { ...font, color: { rgb: 'FF0000' } } };
+    const ws = {};
+    const put = (ref, v, s, f) => { ws[ref] = { v, t: typeof v === 'number' ? 'n' : 's', s }; if (f) ws[ref].f = f; };
+    put('A2', rep.plate, box);
+    put('A3', rep.periodo || '', box);
+    if (rep.servicio) put('A4', rep.servicio, S0);
+    put('A6', 'FECHA Y HORA:', box);
+    put('B6', rep.fechaHora, box);
+    const H = ['N° PARADERO', 'CÓDIGO PARADA', 'NOMBRE PARADERO', 'N° USUARIOS QUE SUBEN', 'N° USUARIOS QUE PAGAN', 'N° USUARIOS QUE EVADEN', 'OBSERVACION'];
+    H.forEach((h, i) => put(`${'ABCDEFG'[i]}9`, h, head));
+    let r = 10;
+    for (const row of rep.rows) {
+      put(`A${r}`, row.n === '' ? '' : Number(row.n), grid);
+      put(`B${r}`, row.code || '', grid);
+      put(`C${r}`, row.name || '', grid);
+      put(`D${r}`, row.pagan + row.evaden, grid);
+      put(`E${r}`, row.pagan, grid);
+      put(`F${r}`, row.evaden, red, `D${r}-E${r}`);
+      put(`G${r}`, row.obs || '', grid);
+      r++;
+    }
+    const last = r - 1;
+    const tot = (k) => rep.rows.reduce((a, x) => a + (k === 'D' ? x.pagan + x.evaden : k === 'E' ? x.pagan : x.evaden), 0);
+    r++;
+    put(`C${r}`, 'TOTAL', S0);
+    put(`D${r}`, tot('D'), S0, `SUM(D10:D${last})`);
+    put(`E${r}`, tot('E'), S0, `SUM(E10:E${last})`);
+    put(`F${r}`, tot('F'), { ...S0, font: { ...font, color: { rgb: 'FF0000' } } }, `SUM(F10:F${last})`);
+    put(`A${r + 2}`, rep.nota, { font: { name: 'Aptos Narrow', sz: 9, italic: true }, alignment: { horizontal: 'left', vertical: 'top', wrapText: true } });
+    ws['!merges'] = [{ s: { r: r + 1, c: 0 }, e: { r: r + 1, c: 6 } }];
+    ws['!rows'] = []; ws['!rows'][r + 1] = { hpt: 30 };
+    ws['!ref'] = `A1:G${r + 2}`;
+    ws['!cols'] = [{ wch: 49.7 }, { wch: 22.7 }, { wch: 40.6 }, { wch: 24.1 }, { wch: 24.3 }, { wch: 25.4 }, { wch: 22 }];
+    return ws;
+  }
+  async function downloadXlsx(reports, name) {
+    const X = await xlsxLib();
+    const wb = X.utils.book_new();
+    const used = new Set();
+    for (const rep of reports) {
+      let n = rep.sheet, k = 2;
+      while (used.has(n)) n = `${rep.sheet.slice(0, 28)} ${k++}`;
+      used.add(n);
+      X.utils.book_append_sheet(wb, reportSheet(X, rep), n);
+    }
+    X.writeFile(wb, name);
+  }
+  // Informe imprimible (Guardar como PDF) con el mismo diseño.
+  function printReports(reports) {
     const r = $('#report');
-    r.replaceChildren();
-    r.append(el('h1', null, 'Informe de pasajes y evasión'));
-    const first = S.moments.find((m) => m.hora);
-    r.append(el('div', null, `Cámaras: ${S.cams.filter((c) => !c.bad).map(camName).join(', ')}${first ? ` · desde ${first.hora}` : ''} · generado ${new Date().toLocaleString('es-CL')}`));
-    r.append(el('div', null, scopeText()));
-    r.append(el('div', null, `Paraderos con pasajeros: ${T.paraderos} (${T.zonas} en zona paga) · Suben: ${T.suben} · Pagan: ${T.pagan} (${T.zp} en zona paga) · Evaden: ${T.evaden} (${pct(T.evaden, T.suben)}) · Dudosos: ${T.dudosos} · Bajan: ${T.bajan}`));
-    r.append(el('div', 'muted', 'Conteo automático hecho por IA a partir de las imágenes de las cámaras; los casos dudosos deben revisarse en el video.'));
-    const table = (head, rows) => {
-      const t = el('table');
+    r.replaceChildren(...reports.map((rep, i) => {
+      const page = el('section', 'rep-page');
+      if (i) page.classList.add('rep-break');
+      const top = el('div', 'rep-top');
+      top.append(el('div', 'rep-box', rep.plate), el('div', 'rep-box', rep.periodo || ''));
+      if (rep.servicio) top.append(el('div', 'rep-svc', rep.servicio));
+      const fh = el('div', 'rep-fh');
+      fh.append(el('div', 'rep-box', 'FECHA Y HORA:'), el('div', 'rep-box', rep.fechaHora));
+      const t = el('table', 'rep-table');
       const hr = el('tr');
-      head.forEach((h) => hr.append(el('th', null, h)));
+      ['N° PARADERO', 'CÓDIGO PARADA', 'NOMBRE PARADERO', 'N° USUARIOS QUE SUBEN', 'N° USUARIOS QUE PAGAN', 'N° USUARIOS QUE EVADEN', 'OBSERVACION'].forEach((h) => hr.append(el('th', null, h)));
       const th = el('thead');
       th.append(hr);
       const tb = el('tbody');
-      rows.forEach((row) => { const tr = el('tr'); row.forEach((v) => tr.append(el('td', null, String(v)))); tb.append(tr); });
+      let D = 0, E = 0, F = 0;
+      for (const row of rep.rows) {
+        const tr = el('tr');
+        const d = row.pagan + row.evaden;
+        D += d; E += row.pagan; F += row.evaden;
+        [row.n, row.code, row.name, d, row.pagan, row.evaden, row.obs].forEach((v, k) => tr.append(el('td', k === 5 ? 'rep-red' : null, String(v ?? ''))));
+        tb.append(tr);
+      }
+      const ft = el('tr', 'rep-tot');
+      ['', '', 'TOTAL', D, E, F, ''].forEach((v, k) => ft.append(el('td', k === 5 ? 'rep-red' : null, String(v))));
+      tb.append(ft);
       t.append(th, tb);
-      return t;
-    };
-    r.append(el('h3', null, 'Resumen por paradero'));
-    r.append(table(['#', 'Llegada', 'Salida', 'Lugar', 'Zona paga', 'Suben', 'Pagan', 'En ZP', 'Evaden', 'Dudosos', 'Bajan', 'Evasión'],
-      S.stops.filter(moving).map((s) => { const c = counts(s); return [stopLabel(s), horaAt(s.t0), horaAt(s.t1), [parText(parOf(s)), s.dir].filter(Boolean).join(' · ') || (s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : ''), zpOf(s) ? 'Sí' : 'No', c.suben, c.pagan, c.zp, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben)]; })));
-    r.append(el('h3', null, 'Detalle por persona'));
-    r.append(table(['Paradero', 'Hora', 'Minuto video', 'Cámara', 'Resultado', 'Persona'],
-      S.stops.filter(moving).flatMap((s) => s.personas.map((p) => [stopLabel(s), horaAt(p.t), mmss(p.t), personCam(p), resText(resOf(p, zpOf(s))), p.desc]))));
+      page.append(top, fh, t, el('p', 'rep-note', rep.nota));
+      return page;
+    }));
     window.print();
+  }
+  const ready = () => {
+    if (S.stops.some((s) => s.estado === 'listo')) return true;
+    alert('Todavía no hay paraderos analizados para el informe.');
+    return false;
   };
+  const fileDate = () => (S.meta.fecha || '').replace(/\//g, '-') || new Date().toISOString().slice(0, 10);
+  $('#btnXlsx').onclick = async () => {
+    if (!ready()) return;
+    const rep = buildReport();
+    try { await downloadXlsx([rep], `${PAR.sel.svc || 'informe'}_EVASION_${rep.sheet.replace(/\s+/g, '_')}_${fileDate()}.xlsx`); } catch (e) { status(e.message, null, true); }
+  };
+  $('#btnPdf').onclick = () => { if (ready()) printReports([buildReport()]); };
+  // Informe del día: se van sumando buses (una hoja cada uno) y se descarga todo junto.
+  const DAY = { list: store.get('cofsimple:dia', []) };
+  function renderDay() {
+    const n = DAY.list.length;
+    $('#dayInfo').textContent = n ? `Informe del día: ${n} bus${n === 1 ? '' : 'es'} (${DAY.list.map((r) => r.sheet).join(', ')})` : '';
+    $('#btnDayXlsx').hidden = $('#btnDayPdf').hidden = $('#btnDayClear').hidden = !n;
+  }
+  $('#btnDayAdd').onclick = () => {
+    if (!ready()) return;
+    const rep = buildReport();
+    DAY.list = [...DAY.list.filter((r) => r.sheet !== rep.sheet), rep];
+    store.set('cofsimple:dia', DAY.list);
+    renderDay();
+    status(`Se agregó ${rep.sheet} al informe del día.`, null);
+  };
+  $('#btnDayXlsx').onclick = async () => {
+    try { await downloadXlsx(DAY.list, `${PAR.sel.svc || 'informe'}_EVASION_${fileDate()}.xlsx`); } catch (e) { status(e.message, null, true); }
+  };
+  $('#btnDayPdf').onclick = () => printReports(DAY.list);
+  $('#btnDayClear').onclick = () => { if (confirm('¿Vaciar el informe del día?')) { DAY.list = []; store.set('cofsimple:dia', []); renderDay(); } };
+  // Patente, fecha y período: los lee la IA del video y se pueden corregir.
+  const metaInputs = [['#mPlate', 'patente'], ['#mDate', 'fecha'], ['#mPer', 'periodo']];
+  function renderMeta() {
+    const m = reportMeta();
+    for (const [id, k] of metaInputs) if (document.activeElement !== $(id)) $(id).value = k === 'periodo' ? m.periodo : S.meta[k] || '';
+  }
+  for (const [id, k] of metaInputs) $(id).onchange = (e) => { S.meta[k] = e.target.value.trim(); save(); };
+  renderDay();
 
   $('#keyBox').onsubmit = (e) => {
     e.preventDefault();
