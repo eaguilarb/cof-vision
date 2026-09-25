@@ -1,0 +1,13 @@
+{
+  "name": "cof-vision-server",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "COF Vision con usuario y contraseña; la clave de Gemini queda en el servidor",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

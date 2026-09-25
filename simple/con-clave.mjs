@@ -12,7 +12,7 @@ if (!key || !out) {
   process.exit(1)
 }
 const here = dirname(fileURLToPath(import.meta.url))
-const html = readFileSync(join(here, 'cof-vision-simple.html'), 'utf8')
+const html = readFileSync(join(here, '..', 'server', 'public', 'camara.html'), 'utf8')
 if (!html.includes("'__GEMINI_KEY__'")) throw new Error('No se encontró el lugar de la clave')
 writeFileSync(out, html.replace("'__GEMINI_KEY__'", () => JSON.stringify(key).replace(/"/g, "'")))
 console.log(`Listo: ${out}`)

@@ -117,12 +117,42 @@ usuario (sin API key) y el conector de TomTom Maps para el mapa base.
   clic fuera de claude.ai. Lee las coordenadas en el computador (Tesseract.js),
   usa Gemini con la clave gratuita del usuario y mapas de Esri/OpenStreetMap.
 
-## Versión simple (`simple/`)
+## COF Vision para flotas (`server/`)
 
-`simple/cof-vision-simple.html` se abre con doble clic: eliges un video, Gemini
-describe lo que pasa cada pocos segundos y lee las coordenadas escritas en la
-imagen, y el mapa muestra el bus avanzando mientras se reproduce. Para una
-copia personal con la clave ya incorporada:
+`server/public/camara.html` es la página: se eligen hasta 8 cámaras del mismo
+recorrido, Gemini describe lo que pasa, lee las coordenadas escritas en la
+imagen, detecta los paraderos (incluidas las zonas pagas) y cuenta quién paga
+y quién evade; el mapa muestra el bus avanzando y todo se exporta a Excel y PDF.
+
+### En Railway, con usuario y contraseña
+
+`server/server.js` (Node 20+, sin dependencias) pide usuario y contraseña,
+entrega la página y reenvía las consultas a Gemini agregando la clave, que
+queda solo en el servidor.
+
+1. En Railway: *New Project → Deploy from GitHub repo* → `eaguilarb/cof-vision`.
+2. En *Settings*: *Root Directory* = `server` y la rama que corresponda.
+3. En *Variables*:
+   - `GEMINI_API_KEY`: la clave de Gemini.
+   - `APP_USER` y `APP_PASSWORD`: usuario y contraseña para entrar.
+   - `APP_USERS` (opcional): más personas, `ana:clave1,pedro:clave2`.
+   - `SESSION_SECRET` (opcional): texto largo al azar para firmar las sesiones.
+4. En *Settings → Networking*: *Generate Domain*.
+
+Para probarlo en el computador:
+
+```bash
+cd server
+GEMINI_API_KEY=tu-clave APP_USER=yo APP_PASSWORD=secreto node server.js
+# http://localhost:3000
+```
+
+### Sin servidor
+
+La misma página funciona abierta directamente o publicada en GitHub Pages
+(`camara.html` en la rama `gh-pages`); ahí cada persona pega su clave de
+Gemini, que queda guardada en su navegador. Para una copia personal con la
+clave ya incorporada:
 
 ```bash
 GEMINI_KEY=tu-clave node simple/con-clave.mjs mi-copia.personal.html

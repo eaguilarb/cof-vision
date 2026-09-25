@@ -21,6 +21,7 @@
   .btn { border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; background: var(--accent); color: var(--accent-ink); }
   .btn.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
   .btn.small { padding: 6px 12px; font-size: 14px; }
+  header a.btn { text-decoration: none; }
   main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px; max-width: 1600px; margin: 0 auto; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
   .wide { grid-column: 1 / -1; }
@@ -158,6 +159,7 @@
   <span class="file" id="fileName">Elige los videos para empezar</span>
   <span class="spacer"></span>
   <button class="btn" id="btnPick" type="button">Elegir videos</button>
+  <a class="btn ghost small" id="btnOut" href="salir" hidden>Salir</a>
   <input type="file" id="fileInput" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" multiple hidden>
 </header>
 
@@ -229,7 +231,9 @@
     quick: ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-flash-latest'],
     main: ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest'],
   };
-  const API = 'https://generativelanguage.googleapis.com/v1beta/models';
+  // En Railway la página la entrega el servidor, que agrega la clave: el navegador nunca la ve.
+  const SERVER = !!window.COF_SERVER;
+  const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   const BATCH = 8;
   const STOP_IMAGES = 36;
@@ -267,7 +271,7 @@
   }
 
   const S = {
-    key: EMBED_KEY.startsWith('__') ? store.get('cofsimple:key', '') : EMBED_KEY,
+    key: SERVER ? 'servidor' : EMBED_KEY.startsWith('__') ? store.get('cofsimple:key', '') : EMBED_KEY,
     model: { quick: 0, main: 0, ...store.get('cofsimple:models', {}) },
     cams: [], main: 0, ref: 0, grid: false,
     id: null, run: 0, step: 4, D: 0,
@@ -579,13 +583,17 @@
       try {
         res = await fetch(`${API}/${model}:generateContent`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': S.key },
+          headers: SERVER ? { 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json', 'x-goog-api-key': S.key },
           body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } }),
         });
       } catch {
         status('Sin conexión con Google. Reintentando…', null);
         await wait(4000);
         continue;
+      }
+      if (SERVER && res.status === 401) {
+        location.href = 'login';
+        return null;
       }
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
@@ -641,6 +649,7 @@
       await addresses(run);
     } catch (e) {
       if (e.badKey) {
+        if (SERVER) return status(`La clave de Gemini del servidor no funciona: revisa GEMINI_API_KEY en Railway. (${e.message})`, null, true);
         $('#keyBox').hidden = false;
         return status('Google rechazó la clave de Gemini. Pega una clave nueva abajo.', null, true);
       }
@@ -1348,6 +1357,7 @@
   initMap();
   renderStops();
   if (!S.key) $('#keyBox').hidden = false;
+  $('#btnOut').hidden = !SERVER;
 })();
 </script>
 </body>
