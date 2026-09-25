@@ -348,7 +348,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-9';
+  const VERSION = '2026.09.25-10';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1432,15 +1432,16 @@
         'Las imágenes de las puertas no están parejas en el tiempo: se eligieron los momentos en que algo se mueve en la puerta, así que varias seguidas pueden mostrar a la misma persona avanzando. Úsalas en orden para seguir a cada persona.',
         'Cómo se paga:',
         '- Normalmente se paga al subir, acercando la tarjeta bip! o el celular al validador del bus (el aparato lector junto al conductor o a la puerta).',
-        '- El validador tiene una luz o pantalla que cambia de color cuando se acerca la tarjeta: VERDE = el pasaje se pagó; ROJA = la tarjeta fue rechazada (sin saldo o inválida) y esa persona NO pagó. Mira el color del validador en las imágenes en que la persona acerca la tarjeta.',
+        '- El validador tiene una luz o pantalla que cambia de color cuando se acerca la tarjeta: VERDE = el pasaje se pagó. ROJA = esa tarjeta fue rechazada (por ejemplo, sin saldo), pero la persona puede volver a intentarlo con otra tarjeta o con el celular: lo que vale es el ÚLTIMO intento. Si después de una luz roja se ve verde, pagó. Una luz roja por sí sola NO es evasión.',
+        '- Hay personas que suben por una puerta sin validador y caminan hasta el validador de adelante para pagar.',
         '- En algunos paraderos hay ZONA PAGA: un andén cerrado con rejas o vallas, con torniquetes o validadores en el mismo paradero y a menudo personal con chaleco reflectante que controla la entrada. Ahí la gente paga ABAJO, en el paradero, antes de que llegue el bus, y después sube por TODAS las puertas, también las traseras, sin validar en el bus. En una zona paga, subir por una puerta trasera sin validar NO es evasión.',
         'Primero decide si este paradero es zona paga. Fíjate bien en lo que se ve por las puertas abiertas y en las cámaras exteriores: rejas o vallas en el andén, torniquetes o validadores en el paradero, personal con chaleco en la puerta, o mucha gente subiendo a la vez por todas las puertas sin que nadie valide. Si no hay señales claras, no es zona paga.',
-        'Después sigue a cada persona que SUBE al bus e indica:',
+        'Después sigue a CADA persona que SUBE al bus a través de TODAS las cámaras: la misma persona puede aparecer primero en la puerta por la que sube y después en otra cámara (por ejemplo, entra por atrás y camina hasta el validador de adelante). Usa todas las cámaras para decidir si pagó, y cuéntala una sola vez. Para cada una indica:',
         '- "camara": la letra de la cámara de la puerta por la que sube.',
-        '- "luz": "verde" o "roja" si se ve el color del validador cuando esa persona acerca la tarjeta; null si no se ve.',
-        '- "valida": true si el validador se pone verde, o si se ve que acerca tarjeta o celular al validador aunque no se alcance a ver la luz; false si el validador se pone rojo (sin saldo), si pasa sin validar, salta o pasa bajo el torniquete; null solo si de verdad no se alcanza a ver a la persona frente al validador (tapada, fuera de cuadro).',
+        '- "luz": el color del validador en el ÚLTIMO intento de esa persona: "verde" o "roja"; null si no se ve.',
+        '- "valida": true si el último intento se pone verde, o si se ve que acerca tarjeta o celular al validador aunque no se alcance a ver la luz; false solo si se ve que pasa sin acercar nada al validador, salta o pasa bajo el torniquete; null si solo se vio luz roja sin un intento posterior, o si de verdad no se alcanza a ver a la persona frente al validador.',
         '- "fuera_zona": solo si es zona paga: true si se ve que la persona no venía desde el andén cerrado (por ejemplo, llega corriendo desde la calle por fuera de la reja); si no, false.',
-        '- "resultado": "paga" (validó: luz verde o acercó la tarjeta), "zona_paga" (sube en zona paga, pagó en el paradero), "evade" (no validó, o luz roja por falta de saldo) o "dudoso" (solo si no se alcanza a ver). Evita "dudoso" cuando la imagen permite decidir.',
+        '- "resultado": "paga" (validó: luz verde o acercó la tarjeta), "zona_paga" (sube en zona paga, pagó en el paradero), "evade" (se ve que no acerca nada al validador) o "dudoso" (su último intento quedó en rojo, o no se alcanza a ver). Evita "dudoso" cuando las imágenes permiten decidir.',
         'Cuenta a cada persona UNA sola vez aunque aparezca en varias imágenes o en varias cámaras: identifícala por su ropa y apariencia, y asígnala a la puerta por la que sube. No cuentes a quien ya estaba arriba ni al conductor.',
         'Antes de contar, revisa CADA cámara por separado, imagen por imagen y en orden, y anota en "por_camara" qué pasa en ella (quién sube, quién baja, quién solo se mueve adentro). Una persona sube solo si en una imagen se ve afuera o en el escalón y en una imagen posterior de la misma cámara ya está adentro.',
         'Personas que BAJAN: anota en "bajan_detalle" solo a quien se ve SALIR del bus: en una imagen está adentro o en el escalón y en una imagen posterior de la misma cámara ya está afuera, en la calle o el andén, alejándose. NO es bajar: moverse o caminar dentro del bus, pararse o acercarse a la puerta, estar sentado, ni la gente que está afuera en el paradero sin haber estado adentro. Si no estás seguro, no la anotes. Si nadie baja, "bajan_detalle" es [].',
@@ -1470,7 +1471,9 @@
         const res = String((p && p.resultado) || '').toLowerCase();
         // La luz del validador manda: verde = pagó; roja = rechazada (sin saldo), no pagó.
         const luz = String((p && p.luz) || '').toLowerCase();
-        const v = /verde|green/.test(luz) ? true : /roj|red/.test(luz) ? false : p && p.valida;
+        // Roja no es evasión: la persona puede pagar después con otra tarjeta. Si el último intento quedó en rojo, se revisa.
+        const roja = /roj|red/.test(luz) && !/verde|green/.test(luz);
+        const v = /verde|green/.test(luz) ? true : roja ? (p && (p.valida === true || p.valida === 'true') ? true : null) : p && p.valida;
         return {
           luz: /verde|green/.test(luz) ? 'verde' : /roj|red/.test(luz) ? 'roja' : null,
           t: mi.t,
@@ -1479,7 +1482,7 @@
           valida: v === true || v === 'true' ? true : v === false || v === 'false' ? false : null,
           sinValidador: !!cam && !hasValidator(cam),
           fueraZona: truthy(p && p.fuera_zona),
-          res: /^pag/.test(res) ? 'paga' : /zona/.test(res) ? 'zp' : /^ev/.test(res) ? 'evade' : 'dudoso',
+          res: /^pag/.test(res) ? 'paga' : /zona/.test(res) ? 'zp' : /^ev/.test(res) && !roja ? 'evade' : 'dudoso',
         };
       });
       // Quién baja: se exige el detalle (imagen y cámara) para no contar a quien solo se mueve adentro.
@@ -1553,6 +1556,8 @@
     if (p.valida === undefined) return p.res;
     if (p.valida === true) return 'paga';
     if (zp) return p.fueraZona ? 'evade' : 'zp';
+    // Llegó al validador y quedó en rojo: no se da por evasión, se revisa (pudo pagar con otra tarjeta).
+    if (p.luz === 'roja') return 'dudoso';
     if (p.valida === false || p.sinValidador) return 'evade';
     return p.res === 'evade' ? 'evade' : 'dudoso';
   }
@@ -2092,7 +2097,7 @@
             sel.title = p.manual ? 'Corregido a mano' : 'Resultado de la IA: cámbialo si no corresponde';
             sel.onclick = (e) => e.stopPropagation();
             sel.onchange = () => { p.manual = sel.value; save(); rebuild(); };
-            const txt = el('span', r === 'excluir' ? 'struck' : null, `${p.desc}${p.luz === 'verde' ? ' · validador en verde' : p.luz === 'roja' ? ' · validador en rojo (sin saldo)' : ''} · ${horaAt(p.t) || mmss(p.t)}${S.cams.length > 1 ? ` · ${personCam(p)}` : ''}${p.manual ? ' · corregido' : ''}`);
+            const txt = el('span', r === 'excluir' ? 'struck' : null, `${p.desc}${p.luz === 'verde' ? ' · validador en verde' : p.luz === 'roja' ? ' · validador en rojo: revisar si pagó con otra tarjeta' : ''} · ${horaAt(p.t) || mmss(p.t)}${S.cams.length > 1 ? ` · ${personCam(p)}` : ''}${p.manual ? ' · corregido' : ''}`);
             li.append(sel, txt);
             li.onclick = (e) => { e.stopPropagation(); goTo(p.t - 1, p.cam); };
             ul.append(li);
