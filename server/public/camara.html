@@ -297,8 +297,7 @@
   const SERVER = !!window.COF_SERVER;
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
-  const BATCH = 8;
-  const STOP_IMAGES = 24;
+  const STOP_IMAGES = 20;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
     puerta_central: 'Puerta central',
@@ -433,6 +432,7 @@
     S.range = saved.range && saved.range.to > saved.range.from ? { from: saved.range.from, to: Math.min(saved.range.to, S.D) } : { from: 0, to: S.D };
     S.paused = false;
     S.userPaused = false;
+    S.autoOnce = false;
     S.frontier = S.range.from;
     S.startManual = saved.startManual ?? null;
     S.meta = saved.meta || {};
@@ -729,17 +729,21 @@
     try {
       if (!(await identify(run))) return;
       if (!(await readMeta(run))) return;
-      S.step = S.D <= 120 ? 2 : S.D <= 900 ? 4 : 6;
+      S.step = S.D <= 120 ? 2 : S.D <= 1200 ? 3 : 4;
       const m = mainCam();
       if (m && (tRef() < S.range.from - 1 || tRef() > S.range.to)) m.video.currentTime = clamp(S.range.from + m.off, 0, Math.max(0, m.dur - 0.1));
       // El conteo de pasajeros corre en paralelo con el recorrido (usa otro modelo, con su propio límite).
       let tourDone = false;
       const counting = counter(run, () => tourDone);
       counting.catch(() => {});
-      const ok = await tour(run);
+      const ok = await osdPass(run);
       tourDone = true;
       if (!ok) return;
+      // La descripción de lo que pasa va en segundo plano mientras se terminan de contar los paraderos.
+      const describing = descPass(run);
+      describing.catch(() => {});
       if (!(await counting)) return;
+      if (!(await describing)) return;
       await addresses(run);
     } catch (e) {
       if (e.badKey) {
@@ -855,8 +859,12 @@
       m.video.pause();
       S.waiting = true;
       renderControls();
-    } else if (m.video.paused && S.auto && !S.userPaused && t < S.range.to - 0.5 && (done ? S.waiting : ahead > S.step * 2)) {
-      if (S.waiting || S.moments.some((x) => x.t >= S.range.from)) {
+    } else if (m.video.paused && S.auto && !S.userPaused && t < S.range.to - 0.5) {
+      // Arranca sola una vez que hay algo leído, y retoma si estaba esperando a la IA.
+      const first = !S.autoOnce && S.moments.some((x) => x.t >= S.range.from) && (done || ahead > S.step * 2);
+      const resume = S.waiting && (done || ahead > S.step * 2);
+      if (first || resume) {
+        S.autoOnce = true;
         S.waiting = false;
         renderControls();
         m.video.playbackRate = S.rate;
@@ -952,24 +960,6 @@
     return true;
   }
 
-  function promptTour(times, withMosaic, prev) {
-    const ref = refCam();
-    return [
-      'Eres un supervisor de flota que revisa las grabaciones de las cámaras de un bus del transporte público.',
-      withMosaic
-        ? `Para cada momento te envío dos imágenes: primero la cámara ${ref.label} (${TIPOS[ref.tipo] || 'principal'}), de la que debes leer el texto sobreimpreso, y luego un mosaico con todas las cámaras del bus rotuladas.`
-        : `Te envío un fotograma de la cámara ${ref.label} por cada momento.`,
-      `Momentos: ${times.map((t, i) => `${i + 1} = ${mmss(t)} del video`).join(', ')}.`,
-      'Para cada momento:',
-      '1. Copia el texto de coordenadas que aparece escrito sobre la imagen principal (por ejemplo "33.25.30640S 70.42.12900W") en "coord_texto", y conviértelo a grados decimales con signo en "lat" y "lon" (S y W son negativos; 33.25.30640S significa 33 grados y 25.30640 minutos Sur). Lee también la hora y la velocidad escritas. Si algo no se ve, pon null. No inventes números.',
-      `2. En "descripcion" di en español, en 1 o 2 frases claras y concretas, lo que pasa${withMosaic ? ' en el bus mirando todas las cámaras (nombra la cámara cuando importe)' : ''}: cuántas personas aproximadamente (si se ve personal de la empresa, llámalo «agente» y no lo cuentes como pasajero), qué hacen, puertas, si el bus está detenido o en marcha, si alguien sube o valida su pasaje, y cualquier cosa fuera de lo normal. Si nada cambió respecto del momento anterior, dilo en pocas palabras.`,
-      `3. "detenido": true si el bus está detenido (velocidad 0 o no hay movimiento). "puertas": true si se ve alguna puerta abierta. "subiendo": cuántas personas se ven subiendo en ese instante (0 si ninguna), sin contar al personal (${S.staff}; también guardias, fiscalizadores y el conductor).`,
-      '4. "alerta" es true solo si hay algo que un supervisor debería revisar (pelea, robo, caída, accidente, conductor distraído o usando el celular, puerta abierta en marcha, cámara tapada o sin imagen, alguien que salta o pasa por debajo del torniquete).',
-      prev ? `Lo último que viste antes de estos momentos: "${prev}"` : '',
-      'Responde SOLO con un JSON array, un objeto por momento: [{"n":1,"coord_texto":"...","lat":-33.4,"lon":-70.7,"hora":"HH:MM:SS","velocidad":null,"detenido":false,"puertas":false,"subiendo":0,"descripcion":"...","alerta":false}]',
-    ].filter(Boolean).join('\n');
-  }
-
   // Formato de los MDVR: 33.25.30640S = grados.minutos.decimales de minuto + hemisferio.
   function parseCoord(txt) {
     const t = String(txt || '').toUpperCase().replace(/,/g, '.').replace(/\s*\.\s*/g, '.');
@@ -983,16 +973,57 @@
     return v.length >= 2 ? { lat: v[0], lon: v[1] } : null;
   }
 
-  // Paso 1: recorrer el video (qué pasa, dónde, cuándo se detiene).
-  async function tour(run) {
-    const D = S.D;
+  // Paso 1 (rápido): leer el texto sobreimpreso de la cámara principal. Solo se recortan las dos
+  // líneas de texto (arriba hora y velocidad, abajo coordenadas) y se juntan muchas en una imagen:
+  // así un video largo se lee con pocas consultas y sin mover las demás cámaras.
+  const OSD_TOP = [0, 0.14];
+  const OSD_BOT = [0.84, 1];
+  const OSD_ROWS = 12;
+  const OSD_PER_CALL = 4;
+  const gridTimes = () => {
+    const out = [];
+    for (let t = Math.min(1, S.D / 2); t < S.D - 0.2; t += S.step) if (t >= S.range.from - 0.01 && t <= S.range.to + 0.01) out.push(+t.toFixed(1));
+    return out;
+  };
+  function newCanvas(w, h) {
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w));
+    c.height = Math.max(1, Math.round(h));
+    return c;
+  }
+  async function osdRow(ref, t, n) {
+    const f = await frameOf(ref, t, 960);
+    if (!f) return null;
+    const gut = 64;
+    const y0 = OSD_TOP[0] * f.height, h0 = (OSD_TOP[1] - OSD_TOP[0]) * f.height;
+    const y1 = OSD_BOT[0] * f.height, h1 = (OSD_BOT[1] - OSD_BOT[0]) * f.height;
+    const c = newCanvas(gut + f.width, h0 + h1 + 3);
+    const g = c.getContext('2d');
+    g.fillStyle = '#26323b';
+    g.fillRect(0, 0, c.width, c.height);
+    g.drawImage(f, 0, y0, f.width, h0, gut, 0, f.width, h0);
+    g.drawImage(f, 0, y1, f.width, h1, gut, h0 + 3, f.width, h1);
+    g.fillStyle = '#fff';
+    g.font = 'bold 22px sans-serif';
+    g.textBaseline = 'middle';
+    g.fillText(`#${n}`, 6, c.height / 2);
+    return c;
+  }
+  function stackRows(rows) {
+    const W = Math.max(...rows.map((r) => r.width));
+    const c = newCanvas(W, rows.reduce((a, r) => a + r.height + 6, 0));
+    const g = c.getContext('2d');
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, c.width, c.height);
+    let y = 0;
+    for (const r of rows) { g.drawImage(r, 0, y); y += r.height + 6; }
+    return c;
+  }
+  async function osdPass(run) {
     const ref = refCam();
-    const multi = S.cams.filter((c) => !c.bad).length > 1;
-    const times = [];
-    for (let t = Math.min(1, D / 2); t < D - 0.2; t += S.step) if (t >= S.range.from - 0.01 && t <= S.range.to + 0.01) times.push(+t.toFixed(1));
-    const done = new Set(S.moments.map((m) => m.t));
+    const times = gridTimes();
+    const done = new Set(S.moments.filter((m) => m.osd || m.lat != null || m.vel != null).map((m) => m.t));
     const todo = times.filter((t) => !done.has(t));
-    // Hasta dónde está todo revisado desde el inicio del rango (aunque Gemini haya omitido algún momento).
     const tried = new Set();
     const advance = () => {
       const have = new Set([...S.moments.map((m) => m.t), ...tried]);
@@ -1001,49 +1032,53 @@
       S.frontier = Math.min(f, S.range.to);
     };
     advance();
-    for (let i = 0; i < todo.length; i += BATCH) {
+    const per = OSD_ROWS * OSD_PER_CALL;
+    for (let i = 0; i < todo.length; i += per) {
       if (run !== S.run) return false;
-      const chunk = todo.slice(i, i + BATCH);
-      const k = times.length - todo.length + i + chunk.length;
-      S.prog = { k, n: times.length, at: chunk[chunk.length - 1] };
+      const chunk = todo.slice(i, i + per);
+      S.prog = { k: times.length - todo.length + i, n: times.length, at: chunk[0], fase: 'lectura' };
       progress();
-      const prev = S.moments.filter((m) => m.t < chunk[0]).slice(-1)[0];
-      const parts = [{ text: promptTour(chunk, multi, prev && prev.descripcion) }];
+      const rows = [];
+      const used = [];
       for (let j = 0; j < chunk.length; j++) {
-        const f = await frameOf(ref, chunk[j], 1024);
-        parts.push({ text: `Momento ${j + 1} (${mmss(chunk[j])}):` });
-        if (f) parts.push(img(f));
-        if (multi) parts.push(img(await mosaic(chunk[j]), 0.8));
+        const r = await osdRow(ref, chunk[j], used.length + 1);
         if (run !== S.run) return false;
+        if (r) { rows.push(r); used.push(chunk[j]); }
       }
+      if (!rows.length) { chunk.forEach((t) => tried.add(t)); advance(); continue; }
+      const parts = [{ text: [
+        `Te envío ${Math.ceil(rows.length / OSD_ROWS)} imagen(es) con filas numeradas del #1 al #${rows.length}. Cada fila son dos franjas del texto sobreimpreso de la cámara de un bus en un momento distinto: arriba la patente, la fecha, la hora y la velocidad (por ejemplo "16KM/H"); abajo las coordenadas (por ejemplo "33.25.30640S 70.42.12900W", que es grados.minutos.decimales de minuto y hemisferio).`,
+        'Para cada fila devuelve "n", "hora" (HH:MM:SS), "velocidad" (solo el número de km/h), "coord_texto" (copia exacta de las coordenadas) y "lat" y "lon" en grados decimales con signo (S y W negativos). Copia los dígitos con cuidado. Si algo no se lee, pon null. No inventes.',
+        'Responde SOLO con un JSON array, una entrada por fila: [{"n":1,"hora":"17:04:44","velocidad":0,"coord_texto":"33.23.29100S 70.37.15500W","lat":-33.3882,"lon":-70.6193}]',
+      ].join('\n') }];
+      for (let k = 0; k < rows.length; k += OSD_ROWS) parts.push(img(stackRows(rows.slice(k, k + OSD_ROWS)), 0.85));
+      window.__cofDebug = { osdTimes: used }; // solo para pruebas automáticas
       const list = await gemini(parts, run, 'quick');
       if (!list || run !== S.run) return false;
-      const arr = Array.isArray(list) ? list : list.momentos || list.fotogramas || [];
-      chunk.forEach((t, j) => {
-        const r = arr.find((x) => Number(x && x.n) === j + 1) || arr[j];
+      const arr = Array.isArray(list) ? list : list.filas || list.resultados || [];
+      used.forEach((t, j) => {
+        const r = arr.find((x) => Number(x && x.n) === j + 1);
         if (!r) return;
         const p = parseCoord(r.coord_texto);
         let lat = p ? p.lat : num(r.lat);
         let lon = p ? p.lon : num(r.lon);
         if (!validLL(lat, lon)) lat = lon = null;
-        S.moments.push({
-          t, lat, lon,
-          hora: /^\d{1,2}:\d{2}:\d{2}/.test(String(r.hora || '')) ? String(r.hora).slice(0, 8) : null,
-          vel: num(r.velocidad),
-          detenido: truthy(r.detenido),
-          puertas: truthy(r.puertas),
-          subiendo: num(r.subiendo) || 0,
-          descripcion: String(r.descripcion || '').trim(),
-          alerta: truthy(r.alerta),
-        });
+        const vel = num(r.velocidad);
+        const old = S.moments.find((m) => m.t === t);
+        const data = { lat, lon, hora: /^\d{1,2}:\d{2}:\d{2}/.test(String(r.hora || '')) ? String(r.hora).slice(0, 8) : null, vel, detenido: vel != null ? vel <= 2 : false, osd: true };
+        if (old) Object.assign(old, data);
+        else S.moments.push({ t, ...data, puertas: false, subiendo: 0, descripcion: '', alerta: false });
       });
       S.moments.sort((a, b) => a.t - b.t);
       chunk.forEach((t) => tried.add(t));
       advance();
+      S.prog = { k: times.length - todo.length + i + chunk.length, n: times.length, at: chunk[chunk.length - 1] };
       S.stops = mergeStops(findStops(), S.stops);
       save();
       rebuild();
+      progress();
     }
+    S.prog = { k: times.length, n: times.length, at: S.range.to };
     advance();
     S.stops = mergeStops(findStops(), S.stops);
     save();
@@ -1051,19 +1086,84 @@
     return true;
   }
 
+  // Paso 3 (en segundo plano): qué pasa en el bus, una vez por minuto, mirando todas las cámaras.
+  async function descPass(run) {
+    const every = S.D > 600 ? 60 : 20;
+    const k = Math.max(1, Math.round(every / S.step));
+    const times = gridTimes().filter((_, i) => i % k === 0);
+    const todo = times.filter((t) => !S.moments.some((m) => m.t === t && m.descripcion));
+    const multi = S.cams.filter((c) => !c.bad).length > 1;
+    const ref = refCam();
+    for (let i = 0; i < todo.length; i += 6) {
+      if (run !== S.run) return false;
+      const chunk = todo.slice(i, i + 6);
+      S.descProg = { k: times.length - todo.length + i, n: times.length };
+      progress();
+      const prev = S.moments.filter((m) => m.t < chunk[0] && m.descripcion).slice(-1)[0];
+      const parts = [{ text: [
+        'Eres un supervisor de flota que revisa las cámaras de un bus del transporte público.',
+        `Te envío ${chunk.length} momentos; para cada uno, ${multi ? 'un mosaico con todas las cámaras del bus rotuladas' : 'la imagen de la cámara'}: ${chunk.map((t, j) => `${j + 1} = ${mmss(t)} del video`).join(', ')}.`,
+        `Para cada momento, en "descripcion" di en español, en 1 o 2 frases claras, lo que pasa: cuántas personas aproximadamente, qué hacen, puertas, si el bus está detenido o en marcha, y cualquier cosa fuera de lo normal. El personal (${S.staff}; también guardias, fiscalizadores y el conductor) llámalo «agente» y no lo cuentes como pasajero.`,
+        '"alerta" es true solo si hay algo que un supervisor debería revisar (pelea, robo, caída, accidente, conductor distraído o usando el celular, puerta abierta en marcha, cámara tapada, alguien que salta o pasa bajo el torniquete). "puertas": true si se ve una puerta abierta. "subiendo": cuántos pasajeros se ven subiendo.',
+        prev ? `Lo último que viste antes: "${prev.descripcion}"` : '',
+        'Responde SOLO con un JSON array: [{"n":1,"descripcion":"...","alerta":false,"puertas":false,"subiendo":0}]',
+      ].filter(Boolean).join('\n') }];
+      for (let j = 0; j < chunk.length; j++) {
+        parts.push({ text: `Momento ${j + 1} (${mmss(chunk[j])}):` });
+        const f = multi ? await mosaic(chunk[j]) : await frameOf(ref, chunk[j], 768);
+        if (f) parts.push(img(f, 0.75));
+        if (run !== S.run) return false;
+      }
+      let list;
+      try {
+        list = await gemini(parts, run, 'quick');
+      } catch (e) {
+        if (e.badKey) throw e;
+        continue;
+      }
+      if (!list || run !== S.run) return false;
+      const arr = Array.isArray(list) ? list : list.momentos || [];
+      chunk.forEach((t, j) => {
+        const r = arr.find((x) => Number(x && x.n) === j + 1) || arr[j];
+        if (!r) return;
+        const data = { descripcion: String(r.descripcion || '').trim(), alerta: truthy(r.alerta), puertas: truthy(r.puertas), subiendo: num(r.subiendo) || 0 };
+        const old = S.moments.find((m) => m.t === t);
+        if (old) Object.assign(old, data);
+        else S.moments.push({ t, lat: null, lon: null, hora: null, vel: null, detenido: false, ...data });
+      });
+      S.moments.sort((a, b) => a.t - b.t);
+      save();
+      renderRows();
+      S.cur = -2;
+      tick();
+    }
+    S.descProg = null;
+    return true;
+  }
+
   // Un paradero es un tramo en que el bus está detenido y se abren puertas o sube gente.
   function findStops() {
-    const still = (m) => (m.vel != null ? m.vel <= 3 : m.detenido);
+    const pts = S.moments.filter((m) => m.vel != null || m.lat != null);
+    // Sin velocidad escrita, se estima con el avance entre lecturas.
+    const speedAt = (i) => {
+      const m = pts[i];
+      if (m.vel != null) return m.vel;
+      const a = pts[i - 1], b = pts[i + 1];
+      if (!a || !b || a.lat == null || b.lat == null || m.lat == null) return m.detenido ? 0 : null;
+      return (distKm(a, b) / Math.max(1, b.t - a.t)) * 3600;
+    };
+    const stillSet = new Set(pts.filter((m, i) => { const v = speedAt(i); return v != null && v <= 3; }));
+    const still = (m) => stillSet.has(m);
     const segs = [];
     let cur = null;
-    for (const m of S.moments) {
+    for (const m of pts) {
       if (still(m)) {
         if (cur && m.t - cur[cur.length - 1].t <= S.step * 1.6) cur.push(m);
         else segs.push((cur = [m]));
       } else cur = null;
     }
     return segs
-      .filter((g) => g.some((m) => m.puertas || m.subiendo > 0) || g.length >= 3 || g.some((m) => m.lat != null && nearestParadero(m.lat, m.lon, 0.1)))
+      .filter((g) => g.some((m) => m.puertas || m.subiendo > 0) || g[g.length - 1].t - g[0].t + S.step >= 15 || g.some((m) => m.lat != null && nearestParadero(m.lat, m.lon, 0.1)))
       .map((g) => ({
         t0: +Math.max(0, g[0].t - S.step * 0.6).toFixed(1),
         t1: +Math.min(S.D, g[g.length - 1].t + S.step * 0.6).toFixed(1),
@@ -1092,7 +1192,8 @@
     const inR = S.stops.filter(inRange);
     const done = inR.filter((s) => s.estado === 'listo').length;
     const T = totals();
-    const tourTxt = p.n && p.k < p.n ? `Recorriendo el video: ${p.k} de ${p.n} momentos (va en el ${mmss(p.at)})` : 'Recorrido listo';
+    const dp = S.descProg;
+    const tourTxt = p.n && p.k < p.n ? `Leyendo el recorrido: ${p.k} de ${p.n} lecturas (va en el ${mmss(p.at)})` : `Recorrido leído${dp && dp.n ? ` · describiendo lo que pasa: ${dp.k} de ${dp.n}` : ''}`;
     const cnt = inR.length ? ` · Paraderos contados: ${done} de ${inR.length}${S.counting != null ? ` (contando el ${S.counting})` : ''}` : '';
     status(`${tourTxt}${cnt} · suben ${T.suben}, pagan ${T.pagan}, evaden ${T.evaden}`, p.n ? p.k / p.n : null);
   }
@@ -1125,7 +1226,7 @@
       const parts = [{ text: '' }];
       // Las cámaras exteriores ayudan a ver si el paradero es zona paga (andén cerrado).
       const outside = S.cams.filter((c) => !c.bad && c.tipo === 'exterior').slice(0, 2);
-      const groups = [...doors.map((c, d) => ({ c, count: clamp(Math.min(Math.round(per * weight[d]), Math.ceil(span / 1.5) + 1), 3, 12), door: true })), ...outside.map((c) => ({ c, count: 2, door: false }))];
+      const groups = [...doors.map((c, d) => ({ c, count: clamp(Math.min(Math.round(per * weight[d]), Math.ceil(span / 1.5) + 1), 3, 10), door: true })), ...outside.map((c) => ({ c, count: 2, door: false }))];
       for (let d = 0; d < groups.length; d++) {
         const { c, count, door } = groups[d];
         parts.push({ text: `Cámara ${labels[d]} = ${c.label}, ${TIPOS[c.tipo] || 'cámara'}${door ? `, ${hasValidator(c) ? 'con validador' : 'sin validador'}` : ' (sirve para ver cómo es el paradero)'}:` });
@@ -1682,9 +1783,10 @@
   function renderRows() {
     const box = $('#rows');
     const n = S.moments.filter((m) => m.alerta).length;
-    $('#listInfo').textContent = S.moments.length ? `${S.moments.length} momentos${n ? ` · ${n} para revisar` : ''} · toca uno para ir a ese punto` : '';
-    if (!S.moments.length) { box.replaceChildren(el('div', 'empty', 'Todavía no hay nada analizado.')); return; }
-    box.replaceChildren(...S.moments.map((m, i) => {
+    const described = S.moments.filter((m) => m.descripcion).length;
+    $('#listInfo').textContent = described ? `${described} momentos descritos${n ? ` · ${n} para revisar` : ''} · toca uno para ir a ese punto` : '';
+    if (!described) { box.replaceChildren(el('div', 'empty', S.moments.length ? 'Primero se lee el recorrido y se cuentan los paraderos; la descripción de lo que pasa llega después.' : 'Todavía no hay nada analizado.')); return; }
+    box.replaceChildren(...S.moments.map((m, i) => [m, i]).filter(([m]) => m.descripcion).map(([m, i]) => {
       const row = el('div', `row${m.alerta ? ' alert' : ''}`);
       row.dataset.i = i;
       const d = el('span', null, m.descripcion || '—');
@@ -1826,8 +1928,9 @@
     chip(`${mmss(m.t)} del video`);
     if (m.hora) chip(`Hora ${horaAt(t)}`);
     if (m.vel != null) chip(`${m.vel} km/h`);
-    if (m.alerta) chip('Revisar', 'alert');
-    $('#nowText').textContent = m.descripcion || '—';
+    const said = [...S.moments].reverse().find((x) => x.descripcion && x.t <= t + 0.5 && t - x.t < 120);
+    $('#nowText').textContent = said ? said.descripcion : m.vel != null ? `Bus ${m.vel <= 2 ? 'detenido' : `en marcha a ${m.vel} km/h`}.` : '—';
+    if (said && said.alerta) chip('Revisar', 'alert');
     if (stop) {
       fare.hidden = false;
       fare.replaceChildren();
