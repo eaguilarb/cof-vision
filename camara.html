@@ -16,8 +16,26 @@
   body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: #10181f; color: #fff; flex-wrap: wrap; }
   header h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+  .rev-count { margin: 10px 16px; padding: 10px 14px; background: #10181f; color: #fff; border-radius: 8px; font: 600 14px/1.6 system-ui, sans-serif; }
+  .rev-count b { color: #f5a300; }
+  .rev-stop { border-top: 1px solid var(--line); padding: 12px 16px; }
+  .rev-stop.done { opacity: .55; }
+  .rev-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .rev-head b { font-size: 15px; }
+  .rev-door { margin: 8px 0 4px; font-weight: 700; color: #444; }
+  .rev-people { display: flex; flex-wrap: wrap; gap: 10px; }
+  .rev-person { width: 250px; border: 1px solid var(--line); border-radius: 8px; padding: 6px; background: #fff; }
+  .rev-person canvas { width: 100%; border-radius: 4px; display: block; cursor: zoom-in; }
+  .rev-person .tag-sel { width: 100%; margin-top: 6px; }
+  .rev-person small { display: block; color: #555; margin-top: 4px; line-height: 1.3; }
+  .rev-person.added { border-style: dashed; border-color: #1a7f37; }
+  .rev-people > button { align-self: center; }
+  .rev-empty { padding: 16px; color: #666; }
+  .ev-zoom { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: flex; align-items: center; justify-content: center; z-index: 9999; cursor: zoom-out; }
+  .ev-zoom canvas { max-width: 96vw; max-height: 92vh; }
   .ok-badge { margin-left: 6px; color: #1a7f37; font-weight: 700; }
   .verify { display: flex; gap: 8px; align-items: center; margin: 8px 0; font-weight: 600; color: #1a7f37; }
+  .person-thumb-box canvas { display: block; height: 130px; margin: 4px 0 6px; border-radius: 4px; cursor: zoom-in; }
   .person-thumb { display: block; height: 110px; margin: 4px 0 6px; border-radius: 4px; border: 1px solid #d8dee4; }
   .ver { font-size: 11px; font-weight: 400; opacity: .6; }
   .newver { background: #f5a300; color: #111; padding: 10px 16px; font-size: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -306,6 +324,21 @@
     </div>
   </section>
 
+  <section class="card wide" id="reviewCard" hidden>
+    <h2>Revisión del fiscalizador <span id="revInfo">La IA marca a cada persona; tú confirmas o corriges.</span></h2>
+    <div class="rev-count" id="revCount"></div>
+    <div class="exports rev-bar">
+      <select id="revFilter" class="svc-sel" title="Qué paraderos mostrar">
+        <option value="dudas">Paraderos con dudas o evasión (sin revisar)</option>
+        <option value="pend">Todos los paraderos sin revisar</option>
+        <option value="todos">Todos los paraderos</option>
+      </select>
+      <button class="btn small" id="btnRevZip" type="button">📷 Descargar fotos para revisar (ZIP)</button>
+      <span class="note" id="revZipInfo"></span>
+    </div>
+    <div id="revList"></div>
+  </section>
+
   <section class="card wide">
     <h2>Lo que pasa en el bus <span id="listInfo"></span></h2>
     <div class="rows" id="rows"><div class="empty">Todavía no hay nada analizado.</div></div>
@@ -361,7 +394,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.26-1';
+  const VERSION = '2026.09.26-2';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1580,10 +1613,34 @@
   }
   // Espera una promesa con un tiempo máximo: si no termina, se sigue con el valor de respaldo.
   const withTimeout = (pr, ms, fallback) => new Promise((ok) => { let done = false; const tm = setTimeout(() => { if (!done) { done = true; ok(fallback); } }, ms); pr.then((v) => { if (!done) { done = true; clearTimeout(tm); ok(v); } }, () => { if (!done) { done = true; clearTimeout(tm); ok(fallback); } }); });
-  // Foto chica de cada imagen enviada, para mostrar en el detalle la persona contada (solo en memoria).
+  // Foto de cada imagen enviada a la IA, para revisar a cada persona contada. Queda en memoria y en el
+  // almacenamiento del navegador (IndexedDB), así sigue disponible al volver a abrir los mismos videos.
   const THUMBS = new WeakMap();
+  const idb = (() => {
+    let db = null;
+    const open = () => (db = db || new Promise((ok, ko) => {
+      const r = indexedDB.open('cofvision', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('fotos');
+      r.onsuccess = () => ok(r.result);
+      r.onerror = () => ko(r.error);
+    }));
+    return {
+      async set(k, v) { try { const d = await open(); await new Promise((ok, ko) => { const tx = d.transaction('fotos', 'readwrite'); tx.objectStore('fotos').put(v, k); tx.oncomplete = ok; tx.onerror = () => ko(tx.error); }); } catch { /* sin almacenamiento */ } },
+      async get(k) { try { const d = await open(); return await new Promise((ok) => { const r = d.transaction('fotos').objectStore('fotos').get(k); r.onsuccess = () => ok(r.result); r.onerror = () => ok(undefined); }); } catch { return undefined; } },
+    };
+  })();
+  const photoKey = (s) => `${S.id}|${s.t0.toFixed(2)}|${s.t1.toFixed(2)}`;
+  const loading = new WeakSet();
+  function thumbsOf(s) {
+    const t = THUMBS.get(s);
+    if (t || loading.has(s)) return t || null;
+    loading.add(s);
+    idb.get(photoKey(s)).then((v) => { if (Array.isArray(v)) { THUMBS.set(s, v); renderStops(); renderReview(); } });
+    return null;
+  }
+  function keepThumbs(s, arr) { THUMBS.set(s, arr); idb.set(photoKey(s), arr); }
   function thumbOf(cv) {
-    const w = 320;
+    const w = 480;
     const t = document.createElement('canvas');
     t.width = w;
     t.height = Math.round((cv.height / cv.width) * w);
@@ -1623,11 +1680,18 @@
       val ? 'Cuenta aparte, en "validan_desde_adentro", cuántas personas que ya estaban ADENTRO (subieron por otra puerta, por ejemplo por atrás) se acercan a ESTE validador y validan (luz verde o acercan la tarjeta). No cuentes aquí al personal.' : '',
       'Personas con movilidad reducida (silla de ruedas, bastón, coche, adulto mayor) suben a menudo por atrás, por la rampa, ayudadas por un agente: son pasajeros y se cuentan una vez (el agente no).',
       val ? 'ZONA PAGA: si el andén está cerrado con rejas y torniquetes o validadores en el paradero, la gente pagó abajo antes de subir. Indica en "zona_paga" si ves eso (si no hay señales claras, es false).' : '',
-      `Responde SOLO con JSON: {"suben":[{"imagen":4,"descripcion":"mujer con chaqueta roja y mochila","desde_afuera":true${val ? ',"luz":"verde","valida":true' : ''}}]${val ? ',"validan_desde_adentro":0,"zona_paga":{"es":false,"motivo":"qué viste"}' : ''},"personal_visto":"agente de negro en el escalón","bajan":0,"resumen":"qué pasa en esta puerta en 1 frase"}`,
-      'En "imagen" pon el número de la imagen donde mejor se ve a esa persona entrando. Si nadie sube por esta puerta, "suben" es [].',
+      `Responde SOLO con JSON: {"suben":[{"imagen":4,"caja":[120,340,860,610],"descripcion":"mujer con chaqueta roja y mochila","desde_afuera":true${val ? ',"luz":"verde","valida":true' : ''}}]${val ? ',"validan_desde_adentro":0,"zona_paga":{"es":false,"motivo":"qué viste"}' : ''},"personal_visto":"agente de negro en el escalón","bajan":0,"resumen":"qué pasa en esta puerta en 1 frase"}`,
+      'En "imagen" pon el número de la imagen donde mejor se ve a esa persona entrando, y en "caja" el recuadro de esa persona en esa imagen como [ymin, xmin, ymax, xmax] en escala de 0 a 1000. Si nadie sube por esta puerta, "suben" es [].',
     ].filter(Boolean).join('\n');
     const r = await gemini(parts, run, 'main');
     return { meta, r };
+  }
+  // Recuadro de la persona que devuelve la IA: [ymin, xmin, ymax, xmax] de 0 a 1000.
+  function boxOf(b) {
+    if (!Array.isArray(b) || b.length !== 4) return null;
+    const v = b.map(Number);
+    if (v.some((x) => !Number.isFinite(x)) || v[2] <= v[0] || v[3] <= v[1]) return null;
+    return v.map((x) => clamp(x / 1000, 0, 1));
   }
   const DOOR_ORDER = { puerta_delantera: 0, puerta_central: 1, puerta_trasera: 2 };
   const doorSort = (a, b) => (DOOR_ORDER[a.tipo] ?? 9) - (DOOR_ORDER[b.tipo] ?? 9);
@@ -1692,6 +1756,7 @@
           desdeAfuera: p.desde_afuera === undefined ? true : truthy(p.desde_afuera),
           staff: STAFF_RE.test(String(p.descripcion || '')),
           img: res.meta.length ? base + k : -1,
+          box: boxOf(p.caja),
           res: val ? (v === true ? 'paga' : v === false ? 'evade' : 'dudoso') : 'evade',
         });
       }
@@ -1709,7 +1774,7 @@
       p.desc += ' · validó en la puerta con validador';
       fromInside--;
     }
-    THUMBS.set(s, allMeta.map((m) => m.thumb));
+    keepThumbs(s, allMeta.map((m) => m.thumb));
     const suben = personas.filter((p) => !p.staff).length;
     Object.assign(s, {
       estado: 'listo', v: COUNT_V, personas, bajan, bajanDet: [], bajanManual: null, porCamara,
@@ -2200,6 +2265,200 @@
   }
 
   // ---------------------------------------------------------------- pantalla
+  // ---------------------------------------------------------------- revisión del fiscalizador
+  const RES_LABEL = Object.fromEntries(RES_OPTS);
+  const RES_COLOR = { paga: '#1a7f37', zp: '#0969da', evade: '#cf222e', dudoso: '#bf8700', excluir: '#6e7781' };
+  // Foto de evidencia: la imagen que usó la IA, con el recuadro y el número de la persona; con leyenda para exportar.
+  function drawEvidence(src, p, n, res, caption) {
+    return new Promise((ok) => {
+      const im = new Image();
+      im.onload = () => {
+        const bar = caption ? 34 : 0;
+        const cv = document.createElement('canvas');
+        cv.width = im.naturalWidth;
+        cv.height = im.naturalHeight + bar;
+        const g = cv.getContext('2d');
+        g.fillStyle = '#10181f';
+        g.fillRect(0, 0, cv.width, cv.height);
+        g.drawImage(im, 0, bar);
+        const col = RES_COLOR[res] || '#cf222e';
+        const tag = `#${n} ${RES_LABEL[res] || ''}`.trim();
+        g.font = 'bold 15px sans-serif';
+        if (p.box) {
+          const [y0, x0, y1, x1] = p.box;
+          const X = x0 * im.naturalWidth, Y = bar + y0 * im.naturalHeight, W = (x1 - x0) * im.naturalWidth, H = (y1 - y0) * im.naturalHeight;
+          g.lineWidth = 3;
+          g.strokeStyle = col;
+          g.strokeRect(X, Y, W, H);
+          const tw = g.measureText(tag).width + 10;
+          g.fillStyle = col;
+          g.fillRect(X, Math.max(bar, Y - 20), tw, 20);
+          g.fillStyle = '#fff';
+          g.fillText(tag, X + 5, Math.max(bar, Y - 20) + 15);
+        } else {
+          const tw = g.measureText(tag).width + 10;
+          g.fillStyle = col;
+          g.fillRect(6, bar + 6, tw, 22);
+          g.fillStyle = '#fff';
+          g.fillText(tag, 11, bar + 22);
+        }
+        if (caption) {
+          g.fillStyle = '#fff';
+          g.font = 'bold 14px sans-serif';
+          g.fillText(caption, 8, 22, cv.width - 16);
+        }
+        ok(cv);
+      };
+      im.onerror = () => ok(null);
+      im.src = src;
+    });
+  }
+  function zoomCanvas(cv) {
+    const z = el('div', 'ev-zoom');
+    const c2 = document.createElement('canvas');
+    c2.width = cv.width;
+    c2.height = cv.height;
+    c2.getContext('2d').drawImage(cv, 0, 0);
+    z.append(c2);
+    z.onclick = () => z.remove();
+    document.body.append(z);
+  }
+  // Canvas con la evidencia de una persona (se dibuja cuando carga la foto).
+  function evidenceEl(s, p, n) {
+    const holder = el('div', 'ev-holder');
+    const th = thumbsOf(s);
+    const src = th && p.img >= 0 ? th[p.img] : null;
+    if (!src) { holder.append(el('small', null, p.added ? 'Agregado por el fiscalizador (sin foto)' : 'Sin foto: toca «Ver en el video».')); return holder; }
+    drawEvidence(src, p, n, resOf(p, zpOf(s))).then((cv) => {
+      if (!cv) return;
+      cv.title = 'Toca para ampliar';
+      cv.onclick = (e) => { e.stopPropagation(); zoomCanvas(cv); };
+      holder.replaceChildren(cv);
+    });
+    return holder;
+  }
+  const corrected = (p) => !!(p.added || p.manual);
+  function reviewQueue(mode) {
+    const all = S.stops.filter((s) => s.estado === 'listo' && inRange(s) && !beforeStart(s) && (s.personas.length || bajOf(s)));
+    if (mode === 'todos') return all;
+    if (mode === 'pend') return all.filter((s) => !s.verificado);
+    return all.filter((s) => !s.verificado && s.personas.some((p) => ['dudoso', 'evade'].includes(resOf(p, zpOf(s)))));
+  }
+  function renderReview() {
+    const card = $('#reviewCard');
+    const done = S.stops.filter((s) => s.estado === 'listo' && inRange(s) && !beforeStart(s));
+    card.hidden = !done.length;
+    if (card.hidden) return;
+    const T = totals();
+    const nCorr = done.reduce((a, s) => a + s.personas.filter(corrected).length + (s.bajanManual != null ? 1 : 0), 0);
+    const withP = done.filter((s) => s.personas.length);
+    $('#revCount').innerHTML = '';
+    $('#revCount').append(
+      el('b', null, nCorr ? 'CONTEO CORREGIDO' : 'CONTEO DE LA IA'),
+      ` · total suben: ${T.suben} · pagan: ${T.pagan} · evaden: ${T.evaden} · dudosos: ${T.dudosos} · correcciones: ${nCorr} · paraderos revisados: ${withP.filter((s) => s.verificado).length} de ${withP.length}`,
+    );
+    const mode = $('#revFilter').value;
+    const list = reviewQueue(mode);
+    if (!list.length) { $('#revList').replaceChildren(el('div', 'rev-empty', mode === 'dudas' ? '✓ No quedan paraderos con dudas o evasión por revisar.' : 'No hay paraderos en esta vista.')); return; }
+    const cards = list.slice(0, 40).map((s) => {
+      const c = counts(s);
+      const box = el('div', `rev-stop${s.verificado ? ' done' : ''}`);
+      const head = el('div', 'rev-head');
+      const go = el('button', 'btn small ghost', '▶ Ver en el video');
+      go.type = 'button';
+      go.onclick = () => goTo(s.t0);
+      const ok = el('button', 'btn small', s.verificado ? '✓ Revisado' : '✓ Revisado: está correcto');
+      ok.type = 'button';
+      ok.onclick = () => { s.verificado = !s.verificado; save(); rebuild(); };
+      head.append(el('b', null, `${stopLabel(s)} · ${[parText(parOf(s)), s.dir].filter(Boolean).join(' · ') || ''}`), el('span', 'muted', `${horaAt(s.t0) || mmss(s.t0)} · suben ${c.suben} · pagan ${c.pagan} · evaden ${c.evaden} · dudosos ${c.dudosos}`), go, ok);
+      box.append(head);
+      // Una fila por puerta, en orden: delantera, central, trasera.
+      const cams = [...new Set([...doorCams().sort(doorSort).map((x) => x.key), ...s.personas.map((p) => p.cam)])];
+      let n = 0;
+      for (const key of cams) {
+        const cam = camByKey(key);
+        const ps = s.personas.filter((p) => p.cam === key);
+        box.append(el('div', 'rev-door', `${cam ? camName(cam) : 'Cámara'} · ${ps.filter((p) => resOf(p, zpOf(s)) !== 'excluir').length} suben`));
+        const row = el('div', 'rev-people');
+        for (const p of ps) {
+          n++;
+          const r = resOf(p, zpOf(s));
+          const tile = el('div', `rev-person${p.added ? ' added' : ''}`);
+          const sel = el('select', `tag tag-sel ${r}`);
+          for (const [v, t] of RES_OPTS) { const o = el('option', null, t); o.value = v; sel.append(o); }
+          if (p.added) { const o = el('option', null, 'Quitar (no existe)'); o.value = 'quitar'; sel.append(o); }
+          sel.value = r;
+          sel.onchange = () => {
+            if (sel.value === 'quitar') s.personas.splice(s.personas.indexOf(p), 1);
+            else p.manual = sel.value;
+            s.verificado = false;
+            save();
+            rebuild();
+          };
+          tile.append(evidenceEl(s, p, n), sel, el('small', null, `#${n} · ${p.desc}${p.luz === 'verde' ? ' · validador en verde' : p.luz === 'roja' ? ' · validador en rojo' : ''} · ${horaAt(p.t) || mmss(p.t)}${p.manual ? ' · corregido' : ''}`));
+          const vid = el('button', 'btn small ghost', 'Ver este momento');
+          vid.type = 'button';
+          vid.onclick = () => goTo(p.t - 1, p.cam);
+          tile.append(vid);
+          row.append(tile);
+        }
+        // La IA no vio a alguien: el fiscalizador lo agrega en el momento que está viendo en el video.
+        const add = el('button', 'btn small ghost', '+ Agregar pasajero que la IA no vio');
+        add.type = 'button';
+        add.title = 'Pon el video en el momento en que sube y toca aquí';
+        add.onclick = () => {
+          const t = clamp(tRef(), s.t0, s.t1);
+          s.personas.push({ t, cam: key, desc: 'Agregado por el fiscalizador', added: true, manual: 'paga', valida: null, sinValidador: cam ? !hasValidator(cam) : false, fueraZona: false, desdeAfuera: true, img: -1, res: 'paga' });
+          s.verificado = false;
+          save();
+          rebuild();
+        };
+        row.append(add);
+        box.append(row);
+      }
+      return box;
+    });
+    if (list.length > 40) cards.push(el('div', 'rev-empty', `Se muestran 40 de ${list.length}: marca como revisados para ver los siguientes.`));
+    $('#revList').replaceChildren(...cards);
+  }
+  $('#revFilter').onchange = () => renderReview();
+  // Fotos de todas las personas de los paraderos en revisión, con recuadro y leyenda, en un ZIP (con un resumen CSV).
+  $('#btnRevZip').onclick = async () => {
+    const list = reviewQueue($('#revFilter').value);
+    if (!list.length) return ($('#revZipInfo').textContent = 'No hay paraderos en esta vista.');
+    $('#revZipInfo').textContent = 'Preparando fotos…';
+    try {
+      const { zipSync, strToU8 } = await import('https://cdn.jsdelivr.net/npm/fflate@0.8.3/esm/browser.js');
+      const files = {};
+      const rows = [['paradero', 'hora', 'puerta', 'persona', 'resultado', 'descripcion', 'archivo']];
+      let nPhotos = 0;
+      for (const s of list) {
+        const th = THUMBS.get(s) || (await idb.get(photoKey(s)));
+        let n = 0;
+        for (const p of s.personas) {
+          n++;
+          const r = resOf(p, zpOf(s));
+          const cam = camByKey(p.cam);
+          const hora = horaAt(p.t) || mmss(p.t);
+          const name = `${stopLabel(s)}_${(parText(parOf(s)) || '').split(' · ')[0] || 'paradero'}_${hora}_${cam ? cam.label : 'cam'}_p${n}_${r}.jpg`.replace(/[^A-Za-z0-9_.#-]+/g, '-').replace(/#/g, 'N');
+          rows.push([stopLabel(s), hora, cam ? camName(cam) : '', String(n), RES_LABEL[r] || r, p.desc, th && p.img >= 0 && th[p.img] ? name : '(sin foto)']);
+          if (!th || p.img < 0 || !th[p.img]) continue;
+          const cv = await drawEvidence(th[p.img], p, n, r, `${stopLabel(s)} ${parText(parOf(s)) || ''} · ${hora} · ${cam ? camName(cam) : ''} · Persona ${n} · ${(RES_LABEL[r] || r).toUpperCase()}`);
+          if (!cv) continue;
+          const blob = await new Promise((ok) => cv.toBlob(ok, 'image/jpeg', 0.9));
+          files[name] = [new Uint8Array(await blob.arrayBuffer()), { level: 0 }];
+          nPhotos++;
+        }
+      }
+      files['resumen.csv'] = strToU8('﻿' + rows.map((r) => r.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(';')).join('\r\n'));
+      const zip = zipSync(files);
+      download(`revision_${(S.meta.patente || 'bus').replace(/[^A-Za-z0-9-]/g, '')}_${(S.meta.fecha || '').replace(/\//g, '-')}.zip`, new Blob([zip], { type: 'application/zip' }));
+      $('#revZipInfo').textContent = `Listo: ${nPhotos} foto${nPhotos === 1 ? '' : 's'} de ${list.length} paradero${list.length === 1 ? '' : 's'}.`;
+    } catch (e) {
+      $('#revZipInfo').textContent = `No se pudo armar el ZIP: ${e.message}`;
+    }
+  };
+
   function rebuild() {
     const n0 = S.track.length;
     S.track = cleanTrack(S.moments.filter((m) => m.lat != null).map((m) => ({ t: m.t, lat: m.lat, lon: m.lon })));
@@ -2209,6 +2468,7 @@
     drawRoute();
     renderRows();
     renderStops();
+    renderReview();
     S.cur = -2;
     S.curStop = undefined;
     tick();
@@ -2317,14 +2577,9 @@
             sel.onchange = () => { p.manual = sel.value; save(); rebuild(); };
             const txt = el('span', r === 'excluir' ? 'struck' : null, `${p.desc}${p.luz === 'verde' ? ' · validador en verde' : p.luz === 'roja' ? ' · validador en rojo: revisar si pagó con otra tarjeta' : ''} · ${horaAt(p.t) || mmss(p.t)}${S.cams.length > 1 ? ` · ${personCam(p)}` : ''}${p.manual ? ' · corregido' : ''}`);
             li.append(sel, txt);
-            const th = THUMBS.get(s);
-            if (th && p.img >= 0 && th[p.img]) {
-              const im = el('img', 'person-thumb');
-              im.src = th[p.img];
-              im.alt = 'Imagen en que la IA vio a esta persona';
-              im.title = 'Imagen que usó la IA (toca el texto para ir al video)';
-              li.append(im);
-            }
+            const ev = evidenceEl(s, p, s.personas.indexOf(p) + 1);
+            ev.classList.add('person-thumb-box');
+            li.append(ev);
             li.onclick = (e) => { e.stopPropagation(); goTo(p.t - 1, p.cam); };
             ul.append(li);
           }
