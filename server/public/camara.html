@@ -16,6 +16,9 @@
   body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: #10181f; color: #fff; flex-wrap: wrap; }
   header h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+  .ver { font-size: 11px; font-weight: 400; opacity: .6; }
+  .newver { background: #f5a300; color: #111; padding: 10px 16px; font-size: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .newver[hidden] { display: none; }
   header .file { color: #b8c4cf; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
   header .spacer { flex: 1; }
   .btn { border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; background: var(--accent); color: var(--accent-ink); }
@@ -188,13 +191,14 @@
 </head>
 <body>
 <header>
-  <h1>COF Vision</h1>
+  <h1>COF Vision <small class="ver" id="ver"></small></h1>
   <span class="file" id="fileName">Elige los videos para empezar</span>
   <span class="spacer"></span>
   <button class="btn" id="btnPick" type="button">Elegir videos</button>
   <a class="btn ghost small" id="btnOut" href="salir" hidden>Salir</a>
   <input type="file" id="fileInput" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" multiple hidden>
 </header>
+<div class="newver" id="newVer" hidden>Hay una versión nueva de COF Vision. <button class="btn small" type="button" id="btnReload">Actualizar ahora</button> <span>Lo ya analizado no se pierde: al volver a elegir los mismos videos sigue donde quedó.</span></div>
 
 <main>
   <section class="card">
@@ -328,6 +332,20 @@
   };
 
   const $ = (s) => document.querySelector(s);
+  // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
+  const VERSION = '2026.09.25-4';
+  $('#ver').textContent = `v${VERSION}`;
+  async function checkVersion() {
+    try {
+      const url = location.protocol === 'file:' ? 'https://eaguilarb.github.io/cof-vision/camara.html' : location.pathname;
+      const html = await (await fetch(url, { cache: 'no-store', credentials: 'same-origin' })).text();
+      const m = html.match(/const VERSION = '([^']+)'/);
+      if (m && m[1] > VERSION) $('#newVer').hidden = false;
+    } catch { /* sin conexión: se revisa más tarde */ }
+  }
+  $('#btnReload').onclick = () => { if (location.protocol === 'file:') window.open('https://eaguilarb.github.io/cof-vision/camara.html', '_blank'); else location.reload(); };
+  setTimeout(checkVersion, 5000);
+  setInterval(checkVersion, 30 * 60 * 1000);
   const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const store = {
     get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
@@ -2565,8 +2583,10 @@
   }
   async function exportClip() {
     const from = parseTime($('#dFrom').value);
-    const to = parseTime($('#dTo').value);
-    if (from == null || to == null || to - from < 1) return ($('#dlInfo').textContent = 'Revisa el rango: «hasta» debe ser mayor que «desde».');
+    let to = parseTime($('#dTo').value);
+    if (from == null || to == null || to - from < 1) return ($('#dlInfo').textContent = 'Revisa el rango: «hasta» debe ser mayor que «desde». Escribe minutos:segundos (25:30) u horas:minutos:segundos (1:25:30).');
+    if (S.D && from >= S.D) return ($('#dlInfo').textContent = `El video dura ${mmss(S.D)}: «desde» debe ser menor.`);
+    if (S.D && to > S.D) { to = S.D; $('#dTo').value = mmss(S.D); }
     const speed = Number($('#dSpeed').value) || 1;
     const mode = $('#dMode').value;
     const cams = mode === 'all' ? S.cams.filter((c) => !c.bad) : [mainCam()];
