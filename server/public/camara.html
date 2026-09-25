@@ -290,7 +290,8 @@
       <button class="btn small ghost" id="btnStaffRefDel" type="button" hidden>Quitar</button>
     </div>
     <div class="staff-row">
-      <label>IA para contar <select id="aiModel" class="svc-sel"><option value="gratis">Gratis: rota entre los modelos gratuitos de Google (Flash y Gemma)</option><option value="flash">Gemini Flash de pago (~US$ 1 por expedición)</option><option value="pro">Gemini Pro de pago (más preciso · ~US$ 2,5 por expedición)</option></select></label>
+      <label>IA para contar <select id="aiModel" class="svc-sel"><option value="gratis">Gratis: rota entre los modelos gratuitos de Google (Flash y Gemma)</option><option value="flash">Gemini Flash de pago (~US$ 1 por expedición)</option><option value="pro">Gemini Pro de pago (más preciso · ~US$ 2,5 por expedición)</option><option value="haiku">Claude Haiku (clave de Claude · ~US$ 0,7 por expedición)</option><option value="sonnet">Claude Sonnet (clave de Claude · ~US$ 1,4 por expedición)</option></select></label>
+      <span id="claudeKey" hidden><input id="ckeyInput" type="password" autocomplete="off" placeholder="Clave de Claude (sk-ant-…)" style="width:220px"> <button class="btn small" id="btnCkey" type="button">Guardar</button></span>
       <span class="muted" id="costInfo"></span>
     </div>
     <div class="exports" id="modelNote" hidden></div>
@@ -330,10 +331,13 @@
   const MODELS = {
     // 3.5 Flash-Lite responde bien pero muy lento: queda al final.
     quick: ['gemini-flash-lite-latest', 'gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-3.6-flash', 'gemini-flash-latest', 'gemma-4-26b-a4b-it', 'gemini-3.5-flash-lite'],
-    get main() { return MAIN[S.ai] || MAIN.flash; },
+    get main() { return MAIN[S.ai] || MAIN.gratis; },
   };
-  // Tarifas de Google en US$ por millón de tokens (entrada, salida), para estimar el gasto.
-  const PRICE = (m) => (/gemma/.test(m) ? [0, 0] : /pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
+  // Claude (Anthropic) también puede contar, con una clave de Claude aparte. Las lecturas rápidas siguen con Gemini.
+  const CLAUDE = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5' };
+  const isClaude = (ai) => !!CLAUDE[ai];
+  // Tarifas en US$ por millón de tokens (entrada, salida), para estimar el gasto.
+  const PRICE = (m) => (/haiku/.test(m) ? [1, 5] : /sonnet/.test(m) ? [2, 10] : /gemma/.test(m) ? [0, 0] : /pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
   // En Railway la página la entrega el servidor, que agrega la clave: el navegador nunca la ve.
   const SERVER = !!window.COF_SERVER;
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -353,7 +357,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-12';
+  const VERSION = '2026.09.25-13';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -398,7 +402,8 @@
     range: null, frontier: 0, running: false, paused: false,
     staffRef: store.get('cofsimple:staffref', null),
     staffN: store.get('cofsimple:staffn', null),
-    ai: ({ flash: 'flash', pro: 'pro' })[store.get('cofsimple:ai', 'gratis')] || 'gratis',
+    ai: ({ flash: 'flash', pro: 'pro', haiku: 'haiku', sonnet: 'sonnet' })[store.get('cofsimple:ai', 'gratis')] || 'gratis',
+    ckey: store.get('cofsimple:ckey', ''),
     spend: store.get('cofsimple:gasto', null),
     staff: store.get('cofsimple:staff2', 'Agentes de la empresa con uniforme negro (chaqueta y pantalón negros con franjas reflectantes, a menudo gorro negro), que suben al bus en el terminal antes de iniciar el recorrido o se paran en las puertas mientras el bus está detenido'),
     auto: store.get('cofsimple:auto', true), userPaused: false, autoPausing: false, waiting: false, rate: 1,
@@ -716,22 +721,26 @@
   }
   // Modelos en pausa: sin cupo gratuito (limit: 0), saturados o con el límite por minuto agotado.
   const COOL = {};
-  const MODEL_NAMES = { 'gemini-flash-lite-latest': 'Gemini Flash-Lite (básico)', 'gemini-3.5-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-3.1-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-flash-latest': 'Gemini Flash', 'gemini-3.8-flash': 'Gemini Flash', 'gemini-3.7-flash': 'Gemini Flash', 'gemini-3.6-flash': 'Gemini Flash', 'gemini-3.5-flash': 'Gemini Flash', 'gemini-3-flash-preview': 'Gemini Flash', 'gemma-4-31b-it': 'Gemma 4', 'gemma-4-26b-a4b-it': 'Gemma 4', 'gemini-pro-latest': 'Gemini Pro', 'gemini-3.1-pro-preview': 'Gemini Pro' };
+  const MODEL_NAMES = { 'gemini-flash-lite-latest': 'Gemini Flash-Lite (básico)', 'gemini-3.5-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-3.1-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-flash-latest': 'Gemini Flash', 'gemini-3.8-flash': 'Gemini Flash', 'gemini-3.7-flash': 'Gemini Flash', 'gemini-3.6-flash': 'Gemini Flash', 'gemini-3.5-flash': 'Gemini Flash', 'gemini-3-flash-preview': 'Gemini Flash', 'gemma-4-31b-it': 'Gemma 4', 'gemma-4-26b-a4b-it': 'Gemma 4', 'gemini-pro-latest': 'Gemini Pro', 'gemini-3.1-pro-preview': 'Gemini Pro', 'claude-haiku-4-5': 'Claude Haiku', 'claude-sonnet-5': 'Claude Sonnet' };
   const isLite = (m) => /lite/.test(m || '');
   // Gasto estimado del día según los tokens que informa Google (si la clave tiene facturación activa).
   const today = () => new Date().toLocaleDateString('sv');
   function addSpend(model, u) {
-    if (!u || S.ai === 'gratis') return;
+    if (!u || (S.ai === 'gratis' && !/claude/.test(model))) return;
     const [pin, pout] = PRICE(model);
     if (!S.spend || S.spend.dia !== today()) S.spend = { dia: today(), usd: 0, n: 0 };
-    S.spend.usd += ((u.promptTokenCount || 0) * pin + ((u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0)) * pout) / 1e6;
+    // Gemini informa promptTokenCount/candidatesTokenCount; Claude, input_tokens/output_tokens.
+    const tin = (u.promptTokenCount || 0) + (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) * 0.1 + (u.cache_creation_input_tokens || 0) * 1.25;
+    const tout = (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0) + (u.output_tokens || 0);
+    S.spend.usd += (tin * pin + tout * pout) / 1e6;
     S.spend.n++;
     store.set('cofsimple:gasto', S.spend);
     renderSpend();
   }
   function renderSpend() {
     const sp = S.spend && S.spend.dia === today() ? S.spend : null;
-    $('#costInfo').textContent = S.ai === 'gratis' ? 'Sin costo: usa los cupos diarios gratuitos de Google (se renuevan cada noche).' : sp ? `Gasto estimado hoy: US$ ${sp.usd.toFixed(2)} en ${sp.n} consultas (solo se cobra si tu clave tiene facturación activa).` : '';
+    $('#claudeKey').hidden = !isClaude(S.ai);
+    $('#costInfo').textContent = isClaude(S.ai) && !S.ckey ? 'Pega tu clave de Claude (empieza con sk-ant-) y presiona Guardar.' : S.ai === 'gratis' ? 'Sin costo: usa los cupos diarios gratuitos de Google (se renuevan cada noche).' : sp ? `Gasto estimado hoy: US$ ${sp.usd.toFixed(2)} en ${sp.n} consultas${isClaude(S.ai) ? ' (se descuenta de tu crédito de Claude)' : ' (solo se cobra si tu clave tiene facturación activa)'}.` : '';
   }
   // Saca el JSON de la respuesta. Algunos modelos (Gemma) escriben antes su razonamiento: se prueba el
   // último bloque ```json y, si no, desde cada «{» o «[» hasta el final, quedándose con el primero que es JSON completo.
@@ -746,7 +755,56 @@
     }
     return undefined;
   }
+  // Claude con la librería oficial de Anthropic, directo desde el navegador con la clave de la persona.
+  const ANTHROPIC_SDK = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.128.0/+esm';
+  let claudeClient = null;
+  async function claudeApi() {
+    if (!claudeClient || claudeClient.key !== S.ckey) {
+      const { default: Anthropic } = await import(ANTHROPIC_SDK);
+      claudeClient = { key: S.ckey, Anthropic, client: new Anthropic({ apiKey: S.ckey, dangerouslyAllowBrowser: true, maxRetries: 4 }) };
+    }
+    return claudeClient;
+  }
+  async function claude(parts, run) {
+    const { Anthropic, client } = await claudeApi();
+    const model = CLAUDE[S.ai];
+    // Las partes vienen en formato Gemini (texto e imágenes en base64): se pasan al formato de Claude.
+    const content = parts.map((p) => (p.inlineData ? { type: 'image', source: { type: 'base64', media_type: p.inlineData.mimeType, data: p.inlineData.data } } : { type: 'text', text: p.text || ' ' }));
+    for (let attempt = 0; attempt < 6; attempt++) {
+      if (run !== S.run) return null;
+      let msg;
+      try {
+        msg = await client.messages.create({
+          model,
+          max_tokens: 16000,
+          // Sonnet piensa poco (esfuerzo bajo) para gastar menos; Haiku responde directo.
+          ...(model === CLAUDE.sonnet ? { output_config: { effort: 'low' } } : {}),
+          messages: [{ role: 'user', content }],
+        });
+      } catch (e) {
+        if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) {
+          const err = new Error('Anthropic rechazó la clave de Claude. Revisa que esté bien copiada y que tengas crédito.');
+          err.claudeKey = true;
+          throw err;
+        }
+        if (e instanceof Anthropic.BadRequestError && /credit balance/i.test(e.message)) throw new Error('Se acabó el crédito de Claude: recarga en platform.claude.com o elige otra IA para contar.');
+        if (e instanceof Anthropic.RateLimitError || (e instanceof Anthropic.APIError && (e.status >= 500 || e.status === undefined))) {
+          status('Claude está ocupado o pidió esperar. Reintentando…', null);
+          await wait(5000 * (attempt + 1));
+          continue;
+        }
+        throw e;
+      }
+      S.lastModel = model;
+      addSpend(model, msg.usage);
+      if (msg.stop_reason === 'refusal') throw new Error('Claude no quiso analizar estas imágenes.');
+      const data = jsonIn(msg.content.filter((b) => b.type === 'text').map((b) => b.text).join(''));
+      if (data !== undefined) return data;
+    }
+    throw new Error('Claude no respondió después de varios intentos.');
+  }
   async function gemini(parts, run, tier) {
+    if (tier === 'main' && isClaude(S.ai) && S.ckey) return claude(parts, run);
     const list = MODELS[tier];
     for (let attempt = 0; attempt < 40; attempt++) {
       if (run !== S.run) return null;
@@ -838,6 +896,7 @@
       if (!(await describing)) return;
       await addresses(run);
     } catch (e) {
+      if (e.claudeKey) { $('#ckeyInput').value = ''; return status(e.message, null, true); }
       if (e.badKey) {
         if (SERVER) return status(`La clave de Gemini del servidor no funciona: revisa GEMINI_API_KEY en Railway. (${e.message})`, null, true);
         $('#keyBox').hidden = false;
@@ -958,6 +1017,18 @@
     restart();
   };
   $('#aiModel').value = S.ai;
+  $('#ckeyInput').value = S.ckey ? '••••••••' : '';
+  $('#btnCkey').onclick = () => {
+    const k = $('#ckeyInput').value.trim();
+    if (k === '••••••••') return;
+    if (!/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(k)) return status('Esa no parece una clave de Claude: debe empezar con sk-ant-.', null, true);
+    S.ckey = k;
+    store.set('cofsimple:ckey', k);
+    $('#ckeyInput').value = '••••••••';
+    renderSpend();
+    status('Clave de Claude guardada en este navegador. Los paraderos se contarán con Claude.', null);
+    if (S.cams.length && !S.running && S.stops.some((x) => x.estado === 'pendiente')) restart();
+  };
   renderSpend();
   $('#aiModel').onchange = (e) => {
     S.ai = e.target.value;
@@ -965,7 +1036,7 @@
     renderSpend();
     for (const k of Object.keys(COOL)) delete COOL[k]; // por si se activó la facturación: se vuelve a probar todo
     // Solo se ofrece recontar lo que se contó con un modelo más básico que el elegido.
-    const rank = (m) => (/pro/.test(m) ? 2 : /lite/.test(m) ? 0 : 1);
+    const rank = (m) => (/pro|sonnet/.test(m) ? 2 : /lite/.test(m) ? 0 : 1);
     const want = S.ai === 'gratis' ? 1 : rank(S.ai);
     const redo = S.stops.filter((x) => x.estado === 'listo' && x.modelo && rank(x.modelo) < want);
     if (!redo.length || !confirm(`¿Volver a contar ${redo.length === 1 ? 'el paradero ya contado' : `los ${redo.length} paraderos ya contados`} con ${$('#aiModel').selectedOptions[0].textContent.split(' (')[0]}? Las correcciones hechas a mano en esos paraderos se reemplazan.`)) return;
@@ -1269,7 +1340,7 @@
       try {
         list = await gemini(parts, run, 'quick');
       } catch (e) {
-        if (e.badKey) throw e;
+        if (e.badKey || e.claudeKey) throw e;
         continue;
       }
       if (!list || run !== S.run) return false;
@@ -1513,7 +1584,7 @@
       try {
         r = await gemini(parts, run, 'main');
       } catch (e) {
-        if (e.badKey) throw e;
+        if (e.badKey || e.claudeKey) throw e;
         s.estado = 'error';
         s.resumen = `No se pudo analizar: ${e.message}`;
         S.counting = null;
