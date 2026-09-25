@@ -277,6 +277,13 @@
       <label for="staffDesc"><b>Personal que no se cuenta:</b></label>
       <input id="staffDesc" title="Cómo se ven los agentes o funcionarios que se paran en las puertas">
     </div>
+    <div class="staff-row">
+      <label>Agentes a bordo <input id="staffN" type="number" min="0" max="10" style="width:64px;min-width:0;flex:none" placeholder="—"></label>
+      <button class="btn small ghost" id="btnStaffRef" type="button" title="Pon el video en un momento donde se vean los agentes">📌 Usar este momento como foto de referencia de los agentes</button>
+      <img id="staffRefImg" alt="Referencia de los agentes" hidden style="height:44px;border-radius:4px;border:1px solid var(--line)">
+      <button class="btn small ghost" id="btnStaffRefDel" type="button" hidden>Quitar</button>
+    </div>
+    <div class="exports" id="modelNote" hidden></div>
     <div class="table-wrap">
       <table>
         <thead><tr><th>#</th><th>Hora</th><th class="hide-sm">Lugar</th><th class="n">Suben</th><th class="n">Pagan</th><th class="n">Evaden</th><th class="n hide-sm">Dudosos</th><th class="n hide-sm">Bajan</th></tr></thead>
@@ -303,7 +310,7 @@
   // «quick» recorre el video; «main» cuenta pasajeros, donde importa más la precisión.
   const MODELS = {
     quick: ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-flash-latest'],
-    main: ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest'],
+    main: ['gemini-pro-latest', 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest'],
   };
   // En Railway la página la entrega el servidor, que agrega la clave: el navegador nunca la ve.
   const SERVER = !!window.COF_SERVER;
@@ -345,13 +352,14 @@
 
   const S = {
     key: SERVER ? 'servidor' : EMBED_KEY.startsWith('__') ? store.get('cofsimple:key', '') : EMBED_KEY,
-    model: { quick: 0, main: 0, ...store.get('cofsimple:models', {}) },
     cams: [], main: 0, ref: 0, grid: false,
     id: null, run: 0, step: 4, D: 0,
     moments: [], stops: [], track: [], cur: -1, curStop: null, open: null, addr: {}, meta: {},
     zpPlaces: store.get('cofsimple:zp', []),
     // Control del análisis: rango a mirar, hasta dónde va, y si el video se reproduce solo.
     range: null, frontier: 0, running: false, paused: false,
+    staffRef: store.get('cofsimple:staffref', null),
+    staffN: store.get('cofsimple:staffn', null),
     staff: store.get('cofsimple:staff2', 'Agentes de la empresa con uniforme negro (chaqueta y pantalón negros con franjas reflectantes, a menudo gorro negro), que suben al bus en el terminal antes de iniciar el recorrido o se paran en las puertas mientras el bus está detenido'),
     auto: store.get('cofsimple:auto', true), userPaused: false, autoPausing: false, waiting: false, rate: 1,
   };
@@ -666,12 +674,25 @@
     const d = ((body.error && body.error.details) || []).find((x) => x.retryDelay);
     return d ? Math.ceil(parseFloat(d.retryDelay)) : 0;
   }
+  // Modelos en pausa: sin cupo gratuito (limit: 0), saturados o con el límite por minuto agotado.
+  const COOL = {};
+  const MODEL_NAMES = { 'gemini-flash-lite-latest': 'Gemini Flash-Lite (básico)', 'gemini-3.5-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-flash-latest': 'Gemini Flash', 'gemini-3.8-flash': 'Gemini Flash', 'gemini-3.5-flash': 'Gemini Flash', 'gemini-pro-latest': 'Gemini Pro', 'gemini-3.1-pro-preview': 'Gemini Pro' };
+  const isLite = (m) => /lite/.test(m || '');
   async function gemini(parts, run, tier) {
     const list = MODELS[tier];
-    let idx = S.model[tier];
-    for (let attempt = 0; attempt < 12; attempt++) {
+    for (let attempt = 0; attempt < 16; attempt++) {
       if (run !== S.run) return null;
-      const model = list[idx % list.length];
+      // El mejor modelo de la lista que no esté en pausa; si todos lo están, se espera al primero que vuelva.
+      const now = Date.now();
+      let model = list.find((m) => !(COOL[m] > now));
+      if (!model) {
+        const next = Math.min(...list.map((m) => COOL[m]));
+        if (!Number.isFinite(next)) throw new Error('Ningún modelo de Gemini está disponible con esta clave.');
+        const s = Math.ceil((next - now) / 1000);
+        status(`Google pide esperar ${s} s por el límite gratuito. Sigue solo…`, null);
+        await wait(Math.min(60000, next - now + 200));
+        continue;
+      }
       let res;
       try {
         res = await fetch(`${API}/${model}:generateContent`, {
@@ -691,6 +712,7 @@
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
         const text = ((body.candidates && body.candidates[0] && body.candidates[0].content && body.candidates[0].content.parts) || []).map((p) => p.text || '').join('');
+        S.lastModel = model;
         try { return JSON.parse(text); } catch {
           const m = text.match(/[[{][\s\S]*[\]}]/);
           if (m) try { return JSON.parse(m[0]); } catch { /* reintenta */ }
@@ -699,24 +721,12 @@
       }
       const msg = (body.error && body.error.message) || res.statusText;
       if (res.status === 429) {
-        const s = retrySeconds(body) || 20;
-        status(`Google pide esperar ${s} s por el límite gratuito. Sigue solo…`, null);
-        await wait(s * 1000);
+        // «limit: 0» = el plan gratuito no incluye ese modelo: no se vuelve a intentar en esta sesión.
+        COOL[model] = /limit: 0\b/.test(msg) ? Infinity : now + (retrySeconds(body) || 20) * 1000;
         continue;
       }
-      // 404: Google retiró el modelo, se deja de usar. 5xx: está saturado, se prueba otro solo esta vez.
-      if (res.status === 404) {
-        S.model[tier] = idx = (idx + 1) % list.length;
-        store.set('cofsimple:models', S.model);
-        continue;
-      }
-      if (res.status >= 500) {
-        idx++;
-        const lap = idx % list.length === S.model[tier] % list.length;
-        if (lap) status('Google está saturado en este momento. Reintentando…', null);
-        await wait(lap ? 10000 : 1500);
-        continue;
-      }
+      if (res.status === 404) { COOL[model] = Infinity; continue; }
+      if (res.status >= 500) { COOL[model] = now + 60000; await wait(800); continue; }
       if (res.status === 400 && !/api key|API_KEY/i.test(msg)) throw new Error(msg);
       const e = new Error(msg);
       e.badKey = true;
@@ -824,6 +834,26 @@
   }
   $('#btnRun').onclick = () => (S.running ? stopAnalysis() : restart());
   $('#staffDesc').value = S.staff;
+  function renderStaffRef() {
+    $('#staffRefImg').hidden = $('#btnStaffRefDel').hidden = !S.staffRef;
+    if (S.staffRef) $('#staffRefImg').src = S.staffRef;
+    $('#staffN').value = S.staffN ?? '';
+  }
+  renderStaffRef();
+  $('#staffN').onchange = (e) => { const v = num(e.target.value); S.staffN = v && v > 0 ? Math.round(v) : null; store.set('cofsimple:staffn', S.staffN); };
+  // Foto de referencia: todas las cámaras en el momento que se está viendo, donde se ven los agentes.
+  $('#btnStaffRef').onclick = async () => {
+    if (!S.cams.length) return;
+    const t = tRef();
+    const multi = S.cams.filter((c) => !c.bad).length > 1;
+    const cv = multi ? await mosaic(t) : await frameOf(mainCam(), t, 1024);
+    if (!cv) return;
+    S.staffRef = cv.toDataURL('image/jpeg', 0.8);
+    store.set('cofsimple:staffref', S.staffRef);
+    renderStaffRef();
+    status('Foto de referencia guardada: se enviará en cada conteo como referencia de los agentes. Para aplicarla a los paraderos ya contados, cambia la descripción del personal y acepta volver a contar.', null);
+  };
+  $('#btnStaffRefDel').onclick = () => { S.staffRef = null; store.set('cofsimple:staffref', null); renderStaffRef(); };
   $('#staffDesc').onchange = (e) => {
     const v = e.target.value.trim();
     if (!v || v === S.staff) return;
@@ -1252,6 +1282,7 @@
         }
         if (run !== S.run) return false;
       }
+      if (S.staffRef) parts.splice(1, 0, { text: 'IMAGEN DE REFERENCIA (no es de este paradero): aquí se ven los agentes de la empresa que van a bordo. Memoriza su ropa y apariencia; no son pasajeros.' }, { inlineData: { mimeType: 'image/jpeg', data: S.staffRef.split(',')[1] } });
       if (!meta.some((m) => m.door)) { s.estado = 'error'; s.resumen = 'Ninguna cámara de puerta grabó este momento.'; S.counting = null; save(); rebuild(); return true; }
       parts[0].text = [
         'Eres un fiscalizador del transporte público de Santiago que revisa las cámaras de un bus mientras está detenido en un paradero.',
@@ -1267,6 +1298,8 @@
         '- "resultado": "paga" (valida en el bus), "zona_paga" (sube en zona paga, pagó en el paradero), "evade" o "dudoso".',
         'Cuenta a cada persona UNA sola vez aunque aparezca en varias imágenes o en varias cámaras: identifícala por su ropa y apariencia, y asígnala a la puerta por la que sube. No cuentes a quien ya estaba arriba ni al conductor. Cuenta aparte el total de personas que BAJAN por todas las puertas.',
         `MUY IMPORTANTE: el personal NO son pasajeros y no se cuenta, ni en "personas" ni en "bajan". En estos buses el personal es: ${S.staff}. También son personal los guardias, fiscalizadores, inspectores, anfitriones de zona paga y el conductor. Pistas: se quedan de pie en la puerta, el escalón o junto al validador durante toda la detención sin avanzar hacia adentro, se asoman hacia afuera, ayudan u ordenan la subida, o bajan y vuelven a subir. Solo cuenta a quien entra de verdad al bus y avanza hacia el pasillo o los asientos. Si dudas si alguien es personal o pasajero, no lo cuentes como pasajero y menciónalo en "personal_visto".`,
+        S.staffN ? `Durante todo el recorrido van ${S.staffN} agente${S.staffN === 1 ? '' : 's'} a bordo: si ves ${S.staffN === 1 ? 'a una persona' : `${S.staffN} personas`} con ese uniforme subiendo, bajando o en las puertas, ${S.staffN === 1 ? 'es el agente' : 'son ellos'}.` : '',
+        S.staffRef ? 'Te envío además una IMAGEN DE REFERENCIA (antes de las imágenes numeradas) donde se ven los agentes: compara la ropa y apariencia de cada persona con ellos antes de contarla.' : '',
         'Responde SOLO con JSON con esta forma: {"zona_paga":{"es":false,"motivo":"qué viste para decidirlo"},"personal_visto":"agente de negro en la puerta delantera","personas":[{"imagen":3,"camara":"A","descripcion":"mujer con chaqueta roja y mochila","valida":true,"fuera_zona":false,"resultado":"paga"}],"bajan":0,"resumen":"1 o 2 frases sobre lo ocurrido en este paradero"}',
         'Si nadie sube, "personas" es []. En "imagen" pon el número de la imagen donde mejor se ve si pagó o no.',
       ].join('\n');
@@ -1304,6 +1337,7 @@
         estado: 'listo', v: 2, personas, bajan: num(r.bajan) || 0, resumen: String(r.resumen || '').trim(),
         zpModel: truthy(zp.es), zpMotivo: String(zp.motivo || '').trim(),
         personal: String(r.personal_visto || '').trim(),
+        modelo: S.lastModel || '',
       });
       S.counting = null;
       save();
@@ -1811,6 +1845,9 @@
   }
   function renderStops() {
     if (typeof renderMeta === 'function' && S.range) renderMeta();
+    const lite = S.stops.filter((x) => x.estado === 'listo' && isLite(x.modelo)).length;
+    $('#modelNote').hidden = !lite;
+    $('#modelNote').textContent = lite ? `⚠ ${lite} ${lite === 1 ? 'paradero se contó' : 'paraderos se contaron'} con Gemini Flash-Lite, el modelo básico: con la clave gratuita Google no entrega Gemini Pro y Flash suele estar saturado. Revisa esos conteos, o activa la facturación de Google para que se cuenten con Pro.` : '';
     const T = totals();
     const pend = S.stops.filter((s) => s.estado !== 'listo' && inRange(s) && !beforeStart(s)).length;
     const quiet = S.stops.filter((s) => s.estado === 'listo' && inRange(s) && !beforeStart(s) && !moving(s)).length;
@@ -1899,6 +1936,7 @@
           }
           if (s.personas.length) td.append(ul);
           if (s.personal) td.append(el('div', 'muted', `Personal visto (no contado): ${s.personal}`));
+          if (s.modelo) td.append(el('div', 'muted', `Contado con ${MODEL_NAMES[s.modelo] || s.modelo}`));
         }
         dt.append(td);
         rows.push(dt);
