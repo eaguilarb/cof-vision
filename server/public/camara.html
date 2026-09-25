@@ -271,6 +271,8 @@
       <button class="btn small ghost" id="btnPdf" type="button">Informe PDF</button>
       <button class="btn small ghost" id="btnDayAdd" type="button">+ Agregar al informe del día</button>
       <button class="btn small ghost" id="btnCsvPeople" type="button">Detalle por persona</button>
+      <button class="btn small ghost" id="btnRecount" type="button" title="Cuenta de nuevo todos los paraderos con las reglas actuales">↻ Volver a contar los paraderos</button>
+      <button class="btn small ghost" id="btnWipe" type="button" title="Borra lo guardado de estos videos y los analiza desde cero">Borrar el análisis de estos videos</button>
       <span class="note" id="dayInfo"></span>
       <button class="btn small" id="btnDayXlsx" type="button" hidden>Excel del día</button>
       <button class="btn small ghost" id="btnDayPdf" type="button" hidden>PDF del día</button>
@@ -337,6 +339,8 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   const STOP_IMAGES = 20;
+  // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
+  const COUNT_V = 3;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
     puerta_central: 'Puerta central',
@@ -349,7 +353,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-11';
+  const VERSION = '2026.09.25-12';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -472,7 +476,7 @@
     });
     S.main = 0;
     S.moments = Array.isArray(saved.moments) ? saved.moments : [];
-    S.stops = (Array.isArray(saved.stops) ? saved.stops : []).map((s) => (s.estado === 'listo' && s.v !== 2 ? { ...s, estado: 'pendiente' } : s));
+    S.stops = (Array.isArray(saved.stops) ? saved.stops : []).map((s) => (s.estado === 'listo' && s.v !== COUNT_V ? { ...s, estado: 'pendiente' } : s));
     S.cur = -1;
     S.open = null;
     $('#fileName').textContent = S.cams.length === 1 ? files[0].name : `${S.cams.length} cámaras: ${S.cams.map((c) => c.label).join(', ')}`;
@@ -898,6 +902,29 @@
     document.querySelectorAll('#speed button').forEach((x) => x.classList.toggle('on', Number(x.dataset.r) === S.rate));
   }
   $('#btnRun').onclick = () => (S.running ? stopAnalysis() : restart());
+  // Lo analizado se guarda en el navegador por cada juego de videos. Estos botones permiten rehacerlo.
+  $('#btnRecount').onclick = () => {
+    if (!S.cams.length) return;
+    const n = S.stops.filter((x) => x.estado !== 'pendiente').length;
+    if (!n) return status('No hay paraderos contados todavía.', null);
+    if (!confirm(`¿Volver a contar ${n === 1 ? 'el paradero' : `los ${n} paraderos`} con las reglas actuales? Se reemplazan los conteos y las correcciones hechas a mano.`)) return;
+    for (const x of S.stops) { x.estado = 'pendiente'; x.bajanManual = null; }
+    save();
+    rebuild();
+    restart();
+  };
+  $('#btnWipe').onclick = () => {
+    if (!S.cams.length) return;
+    if (!confirm('¿Borrar todo lo analizado de estos videos (recorrido, paraderos, conteos y correcciones) y empezar desde cero?')) return;
+    S.moments = [];
+    S.stops = [];
+    S.frontier = S.range.from;
+    S.cur = -1;
+    S.open = null;
+    save();
+    rebuild();
+    restart();
+  };
   $('#staffDesc').value = S.staff;
   function renderStaffRef() {
     $('#staffRefImg').hidden = $('#btnStaffRefDel').hidden = !S.staffRef;
@@ -1530,7 +1557,7 @@
       }).filter((x) => !/:\s*$/.test(x));
       const zp = (r.zona_paga && typeof r.zona_paga === 'object') ? r.zona_paga : { es: r.zona_paga };
       Object.assign(s, {
-        estado: 'listo', v: 2, personas, bajan: bajanDet ? bajanDet.length : num(r.bajan) || 0, bajanDet: bajanDet || [], bajanManual: null, porCamara, resumen: String(r.resumen || '').trim(),
+        estado: 'listo', v: COUNT_V, personas, bajan: bajanDet ? bajanDet.length : num(r.bajan) || 0, bajanDet: bajanDet || [], bajanManual: null, porCamara, resumen: String(r.resumen || '').trim(),
         zpModel: truthy(zp.es), zpMotivo: String(zp.motivo || '').trim(),
         personal: String(r.personal_visto || '').trim(),
         modelo: S.lastModel || '',
