@@ -56,6 +56,16 @@
   .status.err { color: var(--alert); background: var(--alert-bg); }
   .bar { flex: 1; height: 6px; background: #e3e8ed; border-radius: 99px; overflow: hidden; max-width: 220px; min-width: 60px; }
   .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .controls { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 14px; }
+  .controls .chk { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  .controls .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .controls .seg button { border: 0; background: #fff; padding: 5px 10px; font: inherit; cursor: pointer; }
+  .controls .seg button.on { background: #10181f; color: #fff; font-weight: 600; }
+  .controls .range { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; color: var(--muted); }
+  .controls .range input { width: 84px; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; font-variant-numeric: tabular-nums; }
+  .controls .range button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 13px; cursor: pointer; }
+  .btn.stop { background: var(--alert); color: #fff; }
+  .wait-note { color: var(--doubt); font-weight: 600; }
   details.cams { border-top: 1px solid var(--line); }
   details.cams summary { padding: 10px 16px; cursor: pointer; font-size: 14px; color: var(--muted); }
   .cam-rows { display: grid; gap: 6px; padding: 0 16px 12px; }
@@ -176,6 +186,13 @@
       <div class="where" id="nowWhere"></div>
     </div>
     <div class="status" id="status" hidden><span id="statusText"></span><div class="bar"><i id="barFill"></i></div></div>
+    <div class="controls" id="controls" hidden>
+      <button class="btn small stop" id="btnRun" type="button">Detener análisis</button>
+      <label class="chk"><input type="checkbox" id="autoPlay" checked> Reproducir solo</label>
+      <span class="seg" id="speed"><button type="button" data-r="1" class="on">1x</button><button type="button" data-r="2">2x</button><button type="button" data-r="4">4x</button></span>
+      <span class="range">Analizar desde <input id="rFrom" inputmode="numeric" title="mm:ss o h:mm:ss"> <button type="button" id="rFromHere">aquí</button> hasta <input id="rTo" inputmode="numeric" title="mm:ss o h:mm:ss"> <button type="button" id="rToHere">aquí</button> <button type="button" id="rAll">todo</button></span>
+      <span class="wait-note" id="waitNote" hidden>⏳ El video espera a que la IA avance…</span>
+    </div>
     <details class="cams" id="camPanel" hidden>
       <summary id="camSummary">Cámaras</summary>
       <div class="cam-rows" id="camRows"></div>
@@ -191,6 +208,12 @@
     <div class="map-foot">
       <label><input type="checkbox" id="follow" checked> Seguir el bus</label>
       <span id="mapInfo">El recorrido aparece cuando se leen las coordenadas del video.</span>
+    </div>
+    <div class="map-foot">
+      <button class="btn small ghost" id="btnStops" type="button">Cargar paraderos</button>
+      <input type="file" id="stopsInput" accept=".csv,.txt,.xlsx,.xls,.ods,.kml,.kmz,.geojson,.json,.gpx" hidden>
+      <span id="stopsInfo"></span>
+      <button class="btn small ghost" id="btnStopsClear" type="button" hidden>Quitar</button>
     </div>
   </section>
 
@@ -277,9 +300,12 @@
     id: null, run: 0, step: 4, D: 0,
     moments: [], stops: [], track: [], cur: -1, curStop: null, open: null, addr: {},
     zpPlaces: store.get('cofsimple:zp', []),
+    // Control del análisis: rango a mirar, hasta dónde va, y si el video se reproduce solo.
+    range: null, frontier: 0, running: false, paused: false,
+    auto: store.get('cofsimple:auto', true), userPaused: false, autoPausing: false, waiting: false, rate: 1,
   };
   const save = () => store.set(S.id, {
-    v: 3, step: S.step, moments: S.moments, stops: S.stops,
+    v: 3, step: S.step, moments: S.moments, stops: S.stops, range: S.range,
     cams: Object.fromEntries(S.cams.map((c) => [c.key, { tipo: c.tipo, validador: c.validador, off: c.off, desc: c.desc, coords: c.coords, manual: c.manual }])),
   });
   const mainCam = () => S.cams[S.main] || null;
@@ -364,8 +390,13 @@
     if (bad.length) warn += `No se pudo abrir ${bad.map((c) => c.name).join(', ')}. `;
     S.main = S.cams.findIndex((c) => !c.bad);
     pickRef();
+    S.range = saved.range && saved.range.to > saved.range.from ? { from: saved.range.from, to: Math.min(saved.range.to, S.D) } : { from: 0, to: S.D };
+    S.paused = false;
+    S.userPaused = false;
+    S.frontier = S.range.from;
     renderCams();
     setMain(S.main);
+    renderControls();
     rebuild();
     if (warn) status(warn, null);
     analyze(run);
@@ -641,11 +672,16 @@
       return;
     }
     if (!S.D) return status('No se pudo leer la duración del video.', null, true);
+    S.running = true;
+    S.paused = false;
+    renderControls();
     try {
       if (!(await identify(run))) return;
       S.step = S.D <= 120 ? 2 : S.D <= 900 ? 4 : 6;
+      const m = mainCam();
+      if (m && (tRef() < S.range.from - 1 || tRef() > S.range.to)) m.video.currentTime = clamp(S.range.from + m.off, 0, Math.max(0, m.dur - 0.1));
       if (!(await tour(run))) return;
-      if (!(await countStops(run))) return;
+      if (!(await countStops(run, false))) return;
       await addresses(run);
     } catch (e) {
       if (e.badKey) {
@@ -655,10 +691,105 @@
       }
       return status(`Se detuvo el análisis: ${e.message}`, null, true);
     }
+    finally {
+      if (run === S.run) { S.running = false; renderControls(); }
+    }
     if (run !== S.run) return;
     const T = totals();
-    status(`Listo: ${S.moments.length} momentos y ${T.paraderos} paradero${T.paraderos === 1 ? '' : 's'} con pasajeros · suben ${T.suben}, pagan ${T.pagan}, evaden ${T.evaden}.`, null);
+    status(`Listo${whole() ? '' : ` (de ${mmss(S.range.from)} a ${mmss(S.range.to)})`}: ${S.moments.length} momentos y ${T.paraderos} paradero${T.paraderos === 1 ? '' : 's'} con pasajeros · suben ${T.suben}, pagan ${T.pagan}, evaden ${T.evaden}.`, null);
+    renderStops();
   }
+
+  // ---------------------------------------------------------------- detener, continuar, rango, velocidad
+  const whole = () => S.range.from <= 1 && S.range.to >= S.D - 1;
+  const partial = () => S.moments.length && (S.frontier < S.range.to - S.step || !whole());
+  function stopAnalysis() {
+    S.run++;
+    S.running = false;
+    S.paused = true;
+    S.waiting = false;
+    renderControls();
+    status(`Análisis detenido en el ${mmss(S.frontier)} del video. El conteo y los Excel incluyen lo analizado hasta ahí. Puedes continuar cuando quieras.`, null);
+    rebuild();
+  }
+  function restart() {
+    S.run++;
+    S.userPaused = false;
+    analyze(S.run);
+  }
+  function parseTime(v) {
+    const p = String(v || '').trim().split(':').map(Number);
+    if (!p.length || p.some((x) => !Number.isFinite(x))) return null;
+    return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p.length === 2 ? p[0] * 60 + p[1] : p[0] * 60;
+  }
+  function setRange(from, to) {
+    const f = clamp(from ?? S.range.from, 0, S.D);
+    const t = clamp(to ?? S.range.to, 0, S.D);
+    if (t - f < 5) return renderControls();
+    S.range = { from: f, to: t };
+    S.frontier = f;
+    save();
+    restart();
+  }
+  function renderControls() {
+    const box = $('#controls');
+    box.hidden = !S.cams.length;
+    if (!S.range) return;
+    const b = $('#btnRun');
+    b.textContent = S.running ? 'Detener análisis' : S.paused ? 'Continuar análisis' : 'Volver a analizar';
+    b.classList.toggle('stop', S.running);
+    $('#autoPlay').checked = S.auto;
+    if (document.activeElement !== $('#rFrom')) $('#rFrom').value = mmss(S.range.from);
+    if (document.activeElement !== $('#rTo')) $('#rTo').value = mmss(S.range.to);
+    $('#waitNote').hidden = !S.waiting;
+    document.querySelectorAll('#speed button').forEach((x) => x.classList.toggle('on', Number(x.dataset.r) === S.rate));
+  }
+  $('#btnRun').onclick = () => (S.running ? stopAnalysis() : restart());
+  $('#autoPlay').onchange = (e) => { S.auto = e.target.checked; store.set('cofsimple:auto', S.auto); if (!S.auto) S.waiting = false; renderControls(); };
+  $('#speed').onclick = (e) => {
+    const r = Number(e.target.dataset && e.target.dataset.r);
+    if (!r) return;
+    S.rate = r;
+    const m = mainCam();
+    if (m) m.video.playbackRate = r;
+    renderControls();
+  };
+  $('#rFrom').onchange = () => { const v = parseTime($('#rFrom').value); if (v != null) setRange(v, null); else renderControls(); };
+  $('#rTo').onchange = () => { const v = parseTime($('#rTo').value); if (v != null) setRange(null, v); else renderControls(); };
+  $('#rFromHere').onclick = () => setRange(tRef(), null);
+  $('#rToHere').onclick = () => setRange(null, tRef());
+  $('#rAll').onclick = () => setRange(0, S.D);
+  // El video avanza solo detrás del análisis: si alcanza a la IA, espera.
+  function autoPlay() {
+    const m = mainCam();
+    if (!m || !m.video.readyState || !S.range) return;
+    const t = tRef();
+    const ahead = S.frontier - t;
+    const done = !S.running || S.frontier >= S.range.to - S.step;
+    if (!m.video.paused && S.running && S.auto && !done && ahead < 0.5) {
+      S.autoPausing = true;
+      m.video.pause();
+      S.waiting = true;
+      renderControls();
+    } else if (m.video.paused && S.auto && !S.userPaused && t < S.range.to - 0.5 && (done ? S.waiting : ahead > S.step * 2)) {
+      if (S.waiting || S.moments.some((x) => x.t >= S.range.from)) {
+        S.waiting = false;
+        renderControls();
+        m.video.playbackRate = S.rate;
+        m.video.play().catch(() => { m.video.muted = true; m.video.play().catch(() => {}); });
+      }
+    }
+  }
+  wall.addEventListener('pause', (e) => {
+    const m = mainCam();
+    if (!m || e.target !== m.video) return;
+    if (S.autoPausing) S.autoPausing = false;
+    else S.userPaused = true;
+  }, true);
+  wall.addEventListener('play', (e) => {
+    const m = mainCam();
+    if (m && e.target === m.video) { S.userPaused = false; S.waiting = false; renderControls(); }
+  }, true);
 
   // Paso 0: qué muestra cada cámara y a qué hora empieza (para sincronizarlas).
   async function identify(run) {
@@ -744,14 +875,22 @@
     const ref = refCam();
     const multi = S.cams.filter((c) => !c.bad).length > 1;
     const times = [];
-    for (let t = Math.min(1, D / 2); t < D - 0.2; t += S.step) times.push(+t.toFixed(1));
+    for (let t = Math.min(1, D / 2); t < D - 0.2; t += S.step) if (t >= S.range.from - 0.01 && t <= S.range.to + 0.01) times.push(+t.toFixed(1));
     const done = new Set(S.moments.map((m) => m.t));
     const todo = times.filter((t) => !done.has(t));
+    // Hasta dónde está todo analizado, sin huecos, desde el inicio del rango.
+    const advance = () => {
+      const have = new Set(S.moments.map((m) => m.t));
+      let f = S.range.from;
+      for (const t of times) { if (!have.has(t)) break; f = t + S.step / 2; }
+      S.frontier = Math.min(f, S.range.to);
+    };
+    advance();
     for (let i = 0; i < todo.length; i += BATCH) {
       if (run !== S.run) return false;
       const chunk = todo.slice(i, i + BATCH);
       const k = times.length - todo.length + i + chunk.length;
-      status(`Paso 1 de 2 · recorriendo el video: ${k} de ${times.length} momentos`, 0.05 + (k / times.length) * 0.45);
+      status(`Analizando: ${k} de ${times.length} momentos (video en el ${mmss(chunk[chunk.length - 1])})`, (k / times.length));
       const prev = S.moments.filter((m) => m.t < chunk[0]).slice(-1)[0];
       const parts = [{ text: promptTour(chunk, multi, prev && prev.descripcion) }];
       for (let j = 0; j < chunk.length; j++) {
@@ -783,10 +922,14 @@
         });
       });
       S.moments.sort((a, b) => a.t - b.t);
+      advance();
       S.stops = mergeStops(findStops(), S.stops);
       save();
       rebuild();
+      // Los paraderos que ya quedaron atrás se cuentan de inmediato, así el resultado avanza con el video.
+      if (!(await countStops(run, true))) return false;
     }
+    advance();
     S.stops = mergeStops(findStops(), S.stops);
     save();
     rebuild();
@@ -805,7 +948,7 @@
       } else cur = null;
     }
     return segs
-      .filter((g) => g.some((m) => m.puertas || m.subiendo > 0) || g.length >= 3)
+      .filter((g) => g.some((m) => m.puertas || m.subiendo > 0) || g.length >= 3 || g.some((m) => m.lat != null && nearestParadero(m.lat, m.lon, 0.06)))
       .map((g) => ({
         t0: +Math.max(0, g[0].t - S.step * 0.6).toFixed(1),
         t1: +Math.min(S.D, g[g.length - 1].t + S.step * 0.6).toFixed(1),
@@ -828,13 +971,13 @@
   }
 
   // Paso 2: en cada paradero, mirar las puertas segundo a segundo: quién sube y si paga.
-  async function countStops(run) {
-    const todo = S.stops.filter((s) => s.estado !== 'listo');
+  async function countStops(run, onlyPassed) {
+    const todo = S.stops.filter((s) => (onlyPassed ? s.estado === 'pendiente' : s.estado !== 'listo') && s.t0 >= S.range.from - S.step && s.t1 <= S.range.to + S.step && (!onlyPassed || s.t1 + S.step / 2 <= S.frontier));
     for (let i = 0; i < todo.length; i++) {
       if (run !== S.run) return false;
       const s = todo[i];
       const n = S.stops.indexOf(s) + 1;
-      status(`Paso 2 de 2 · contando pasajeros en el paradero ${n} de ${S.stops.length}…`, 0.5 + (i / todo.length) * 0.5);
+      status(`Contando pasajeros en el paradero ${n} (video en el ${mmss(s.t0)})…`, null);
       const doors = doorCams();
       // La puerta con validador recibe más imágenes: ahí se decide si pagan.
       const weight = doors.map((c) => (hasValidator(c) ? 2 : 1));
@@ -939,8 +1082,9 @@
   // ---------------------------------------------------------------- cifras
   // Zona paga: lo que diga la persona manda; si no, un lugar ya marcado; si no, lo que vio la IA.
   const nearZp = (s) => s.lat != null && S.zpPlaces.some((z) => distKm(z, s) < 0.08);
-  const zpOf = (s) => (s.zpManual != null ? s.zpManual : nearZp(s) || !!s.zpModel);
-  const zpWhy = (s) => (s.zpManual != null ? 'marcado a mano' : nearZp(s) ? 'lugar guardado como zona paga' : s.zpModel ? `detectado en el video${s.zpMotivo ? `: ${s.zpMotivo}` : ''}` : s.zpMotivo || 'no se vieron señales de zona paga');
+  const zpFile = (s) => { const p = parOf(s); return p && p.zp != null ? p.zp : null; };
+  const zpOf = (s) => (s.zpManual != null ? s.zpManual : zpFile(s) != null ? zpFile(s) : nearZp(s) || !!s.zpModel);
+  const zpWhy = (s) => (s.zpManual != null ? 'marcado a mano' : zpFile(s) != null ? 'según el archivo de paraderos' : nearZp(s) ? 'lugar guardado como zona paga' : s.zpModel ? `detectado en el video${s.zpMotivo ? `: ${s.zpMotivo}` : ''}` : s.zpMotivo || 'no se vieron señales de zona paga');
   function setZp(s, on) {
     s.zpManual = on;
     if (s.lat != null) {
@@ -971,7 +1115,9 @@
     }
     return c;
   };
-  const moving = (s) => s.estado === 'listo' && (s.personas.length || s.bajan);
+  // Solo cuentan los paraderos dentro del rango elegido.
+  const inRange = (s) => !S.range || (s.t1 >= S.range.from && s.t0 <= S.range.to);
+  const moving = (s) => s.estado === 'listo' && (s.personas.length || s.bajan) && inRange(s);
   function totals() {
     const T = { paraderos: 0, zonas: 0, suben: 0, pagan: 0, zp: 0, evaden: 0, dudosos: 0, bajan: 0 };
     for (const s of S.stops) {
@@ -997,6 +1143,200 @@
   const personCam = (p) => { const c = camByKey(p.cam); return c ? camName(c) : ''; };
   const resText = (r) => (r === 'paga' ? 'Paga' : r === 'zp' ? 'Pagó en zona paga' : r === 'evade' ? 'Evade' : 'Dudoso');
   const resTag = (r) => (r === 'paga' ? 'PAGA' : r === 'zp' ? 'ZONA PAGA' : r === 'evade' ? 'EVADE' : 'DUDOSO');
+
+  // ---------------------------------------------------------------- paraderos oficiales (archivo)
+  // Se guardan en este navegador: basta cargarlos una vez.
+  const PAR = { list: store.get('cofsimple:paraderos', []), layer: null, want: true };
+  // UTM (WGS84) a latitud/longitud; en Chile continental la zona es 19 Sur.
+  function utmToLL(E, N, zone, south) {
+    const a = 6378137, f = 1 / 298.257223563, k0 = 0.9996;
+    const e2 = f * (2 - f), ep2 = e2 / (1 - e2);
+    const x = E - 500000, y = south ? N - 10000000 : N;
+    const mu = y / k0 / (a * (1 - e2 / 4 - 3 * e2 * e2 / 64 - 5 * e2 ** 3 / 256));
+    const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+    const p1 = mu + (3 * e1 / 2 - 27 * e1 ** 3 / 32) * Math.sin(2 * mu) + (21 * e1 ** 2 / 16 - 55 * e1 ** 4 / 32) * Math.sin(4 * mu) + (151 * e1 ** 3 / 96) * Math.sin(6 * mu) + (1097 * e1 ** 4 / 512) * Math.sin(8 * mu);
+    const sn = Math.sin(p1), cs = Math.cos(p1), tn = Math.tan(p1);
+    const N1 = a / Math.sqrt(1 - e2 * sn * sn), T1 = tn * tn, C1 = ep2 * cs * cs, R1 = a * (1 - e2) / (1 - e2 * sn * sn) ** 1.5;
+    const D = x / (N1 * k0);
+    const lat = p1 - (N1 * tn / R1) * (D * D / 2 - (5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * ep2) * D ** 4 / 24 + (61 + 90 * T1 + 298 * C1 + 45 * T1 * T1 - 252 * ep2 - 3 * C1 * C1) * D ** 6 / 720);
+    const lon = (D - (1 + 2 * T1 + C1) * D ** 3 / 6 + (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * ep2 + 24 * T1 * T1) * D ** 5 / 120) / cs;
+    return { lat: (lat * 180) / Math.PI, lon: (zone - 1) * 6 - 177 + (lon * 180) / Math.PI };
+  }
+  function parseCsv(text) {
+    const first = text.split(/\r?\n/, 1)[0];
+    const d = [';', '\t', ',', '|'].map((c) => [c, first.split(c).length]).sort((a, b) => b[1] - a[1])[0][0];
+    const rows = [];
+    let row = [], cell = '', q = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (q) {
+        if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; } else cell += ch;
+      } else if (ch === '"') q = true;
+      else if (ch === d) { row.push(cell); cell = ''; }
+      else if (ch === '\n' || ch === '\r') {
+        if (ch === '\r' && text[i + 1] === '\n') i++;
+        row.push(cell); rows.push(row); row = []; cell = '';
+      } else cell += ch;
+    }
+    if (cell || row.length) { row.push(cell); rows.push(row); }
+    return rows.filter((r) => r.some((c) => String(c).trim()));
+  }
+  const plain = (v) => String(v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+  const yes = (v) => /^(si|s|1|true|x|yes|y|zp|zona paga)$/.test(plain(v));
+  function numv(v) {
+    if (typeof v === 'number') return v;
+    let x = String(v ?? '').trim().replace(/\s/g, '');
+    if (!x) return NaN;
+    if (x.includes(',') && x.includes('.')) x = x.replace(/,/g, '');
+    else if (x.includes(',')) x = x.replace(',', '.');
+    return Number(x);
+  }
+  // Paradero a partir de latitud/longitud o de coordenadas UTM (X/Y, este/norte).
+  function toParadero(a, b, code, name, zp) {
+    let lat = numv(a), lon = numv(b);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    if (Math.abs(lat) > 180 || Math.abs(lon) > 180) {
+      const ll = utmToLL(Math.min(Math.abs(lat), Math.abs(lon)), Math.max(Math.abs(lat), Math.abs(lon)), 19, true);
+      lat = ll.lat;
+      lon = ll.lon;
+    } else if (lat < -60 && lon > -60 && lon < 0) [lat, lon] = [lon, lat];
+    if (!validLL(lat, lon)) return null;
+    return { c: String(code ?? '').trim(), n: String(name ?? '').trim(), lat: +lat.toFixed(6), lon: +lon.toFixed(6), zp };
+  }
+  function rowsToParaderos(rows) {
+    for (let i = 0; i < Math.min(15, rows.length); i++) {
+      const h = rows[i].map(plain);
+      const find = (...res) => { for (const re of res) { const k = h.findIndex((x) => re.test(x)); if (k >= 0) return k; } return -1; };
+      const lat = find(/^(stop_)?lat(itud|itude)?$/, /latitud|latitude|^lat/, /^y$|^coord_?y|^norte|northing|utm_?n|^y_/);
+      const lon = find(/^(stop_)?(lon|lng)(gitud|gitude)?$/, /longitud|longitude|^lon|^lng/, /^x$|^coord_?x|^este|easting|utm_?e|^x_/);
+      if (lat < 0 || lon < 0 || lat === lon) continue;
+      const code = find(/^stop_code$/, /^(codigo|cod|code)$/, /codigo|^cod_/, /^(paradero|parada)$/, /^stop_id$|^id$/);
+      const name = find(/^stop_name$/, /^(nombre|name)$/, /nombre|name|descripcion|direccion|ubicacion/);
+      const zp = find(/zona.?paga|^zp$/);
+      const out = [];
+      for (const r of rows.slice(i + 1)) {
+        const p = toParadero(r[lat], r[lon], code >= 0 ? r[code] : '', name >= 0 ? r[name] : '', zp >= 0 ? yes(r[zp]) : null);
+        if (p) out.push(p);
+      }
+      return out;
+    }
+    throw new Error('No encontré columnas de latitud y longitud (o X e Y) en el archivo.');
+  }
+  function propOf(props, ...res) {
+    const keys = Object.keys(props || {});
+    for (const re of res) { const k = keys.find((x) => re.test(plain(x))); if (k) return props[k]; }
+    return '';
+  }
+  async function readParaderos(file) {
+    const name = file.name.toLowerCase();
+    if (/\.kmz$/.test(name)) throw new Error('Los archivos KMZ vienen comprimidos: ábrelo en Google Earth y guárdalo como KML, o expórtalo a Excel.');
+    if (/\.(xlsx|xls|xlsm|ods)$/.test(name)) {
+      if (!window.XLSX) await new Promise((ok, bad) => { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'; sc.onload = ok; sc.onerror = () => bad(new Error('No se pudo cargar el lector de Excel. Revisa tu conexión.')); document.head.append(sc); });
+      const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      let best = null;
+      for (const n of wb.SheetNames) {
+        try { const list = rowsToParaderos(window.XLSX.utils.sheet_to_json(wb.Sheets[n], { header: 1, raw: true, defval: '' })); if (!best || list.length > best.length) best = list; } catch { /* hoja sin coordenadas */ }
+      }
+      if (!best) throw new Error('Ninguna hoja del Excel tiene columnas de latitud y longitud (o X e Y).');
+      return best;
+    }
+    const text = await file.text();
+    if (/\.(kml|gpx|xml)$/.test(name) || /^\s*<\?xml|^\s*<kml|^\s*<gpx/i.test(text)) {
+      const doc = new DOMParser().parseFromString(text, 'application/xml');
+      const out = [];
+      for (const pm of doc.getElementsByTagName('Placemark')) {
+        const co = pm.getElementsByTagName('coordinates')[0];
+        if (!co) continue;
+        const [lo, la] = co.textContent.trim().split(/[\s,]+/).map(Number);
+        const data = {};
+        for (const d of pm.getElementsByTagName('Data')) data[d.getAttribute('name')] = (d.getElementsByTagName('value')[0] || {}).textContent;
+        for (const d of pm.getElementsByTagName('SimpleData')) data[d.getAttribute('name')] = d.textContent;
+        const nm = (pm.getElementsByTagName('name')[0] || {}).textContent || propOf(data, /nombre|name/);
+        const zp = propOf(data, /zona.?paga|^zp$/);
+        const p = toParadero(la, lo, propOf(data, /codigo|code|^cod|paradero|stop_id/), nm, zp === '' ? null : yes(zp));
+        if (p) out.push(p);
+      }
+      for (const w of doc.getElementsByTagName('wpt')) {
+        const p = toParadero(w.getAttribute('lat'), w.getAttribute('lon'), (w.getElementsByTagName('cmt')[0] || {}).textContent || '', (w.getElementsByTagName('name')[0] || {}).textContent || '', null);
+        if (p) out.push(p);
+      }
+      return out;
+    }
+    if (/\.(geojson|json)$/.test(name) || /^\s*\{/.test(text)) {
+      const j = JSON.parse(text);
+      const feats = j.features || (Array.isArray(j) ? j : []);
+      return feats.map((f) => {
+        const g = f.geometry || {};
+        const pr = f.properties || f;
+        const [lo, la] = g.type === 'Point' ? g.coordinates : [propOf(pr, /^(lon|lng|longitud|x)/), propOf(pr, /^(lat|latitud|y)/)];
+        const zp = propOf(pr, /zona.?paga|^zp$/);
+        return toParadero(la, lo, propOf(pr, /^stop_code$|codigo|^code$|^cod|paradero|stop_id|^id$/), propOf(pr, /stop_name|nombre|^name$/), zp === '' ? null : yes(zp));
+      }).filter(Boolean);
+    }
+    return rowsToParaderos(parseCsv(text));
+  }
+  // El paradero oficial más cercano a un punto (dentro de un radio en km).
+  function nearestParadero(lat, lon, maxKm) {
+    if (!PAR.list.length || lat == null) return null;
+    const dLat = maxKm / 111, dLon = maxKm / (111 * Math.cos((lat * Math.PI) / 180));
+    let best = null, bd = Infinity;
+    for (const p of PAR.list) {
+      if (Math.abs(p.lat - lat) > dLat || Math.abs(p.lon - lon) > dLon) continue;
+      const d = distKm(p, { lat, lon });
+      if (d < bd) { bd = d; best = p; }
+    }
+    return bd <= maxKm ? best : null;
+  }
+  const parOf = (s) => (s.lat != null ? nearestParadero(s.lat, s.lon, 0.06) : null);
+  const parText = (p) => (p ? [p.c, p.n].filter(Boolean).join(' · ') : '');
+  function drawParaderos() {
+    if (!M.map) return;
+    if (PAR.layer) { M.layers.removeLayer(PAR.layer); PAR.layer.remove(); PAR.layer = null; }
+    const n = PAR.list.length;
+    $('#stopsInfo').textContent = n ? `${n.toLocaleString('es-CL')} paraderos cargados` : '';
+    $('#btnStopsClear').hidden = !n;
+    if (!n) return;
+    const renderer = L.canvas({ padding: 0.5 });
+    PAR.layer = L.layerGroup(PAR.list.map((p) => L.circleMarker([p.lat, p.lon], { renderer, radius: 5, weight: 1.5, color: '#fff', fillColor: p.zp ? '#2f6fb3' : '#7a3fb0', fillOpacity: 0.95 })
+      .bindTooltip(`${parText(p) || 'Paradero'}${p.zp ? ' · zona paga' : ''}`)));
+    M.layers.addOverlay(PAR.layer, 'Paraderos');
+    showParaderos();
+  }
+  // Con muchos paraderos se muestran solo al acercarse, para que el mapa siga ágil.
+  function showParaderos() {
+    if (!PAR.layer) return;
+    const on = PAR.want && (PAR.list.length <= 1500 || M.map.getZoom() >= 14);
+    if (on && !M.map.hasLayer(PAR.layer)) { PAR.silent = true; PAR.layer.addTo(M.map); PAR.silent = false; }
+    if (!on && M.map.hasLayer(PAR.layer)) { PAR.silent = true; PAR.layer.remove(); PAR.silent = false; }
+  }
+  $('#btnStops').onclick = () => $('#stopsInput').click();
+  $('#stopsInput').onchange = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const list = await readParaderos(file);
+      if (!list.length) throw new Error('El archivo no tiene paraderos con coordenadas válidas.');
+      const seen = new Set();
+      PAR.list = list.filter((p) => { const k = p.c || `${p.lat},${p.lon}`; if (seen.has(k)) return false; seen.add(k); return true; });
+      store.set('cofsimple:paraderos', PAR.list);
+      drawParaderos();
+      const b = L.latLngBounds(PAR.list.map((p) => [p.lat, p.lon]));
+      if (!S.track.length) M.map.fitBounds(b, { padding: [20, 20] });
+      rebuild();
+      const zp = PAR.list.filter((p) => p.zp).length;
+      status(`Se cargaron ${PAR.list.length.toLocaleString('es-CL')} paraderos${zp ? ` (${zp} con zona paga)` : ''}. Cada detención del bus toma el código y nombre del paradero más cercano.`, null);
+    } catch (err) {
+      status(`No se pudieron leer los paraderos: ${err.message}`, null, true);
+    }
+  };
+  $('#btnStopsClear').onclick = () => {
+    if (!confirm('¿Quitar los paraderos cargados?')) return;
+    PAR.list = [];
+    store.set('cofsimple:paraderos', []);
+    drawParaderos();
+    rebuild();
+  };
 
   // ---------------------------------------------------------------- recorrido y mapa
   function cleanTrack(pts) {
@@ -1034,7 +1374,9 @@
       Satélite: L.tileLayer(esri('World_Imagery'), { maxZoom: 19, attribution: 'Imágenes © Esri, Maxar' }),
     };
     (bases[store.get('cofsimple:base', 'Calles')] || bases.Calles).addTo(M.map);
-    L.control.layers(bases, {}, { collapsed: false }).addTo(M.map);
+    M.layers = L.control.layers(bases, {}, { collapsed: false }).addTo(M.map);
+    M.map.on('zoomend', showParaderos);
+    M.map.on('overlayadd overlayremove', (e) => { if (e.layer === PAR.layer && !PAR.silent) PAR.want = e.type === 'overlayadd'; });
     M.map.on('baselayerchange', (e) => store.set('cofsimple:base', e.name));
     M.map.on('dragstart', () => { $('#follow').checked = false; });
     M.stops = L.layerGroup().addTo(M.map);
@@ -1060,12 +1402,13 @@
     }
     M.stops.clearLayers();
     for (const s of S.stops) {
-      if (s.lat == null || (s.estado === 'listo' && !moving(s))) continue;
+      if (s.lat == null || !inRange(s) || (s.estado === 'listo' && !moving(s))) continue;
       const c = counts(s);
       const cls = `${s.estado !== 'listo' ? 'wait' : c.evaden ? 'ev' : ''}${zpOf(s) ? ' zp' : ''}`;
       const mk = L.marker([s.lat, s.lon], { icon: L.divIcon({ className: '', html: `<div class="stop-icon ${cls}">${stopLabel(s)}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] }) });
       const pop = el('div');
       pop.append(el('b', null, `Paradero ${stopLabel(s)}${zpOf(s) ? ' (zona paga)' : ''} · ${horaAt(s.t0) || mmss(s.t0)}`), el('br'));
+      if (parOf(s)) pop.append(parText(parOf(s)), el('br'));
       pop.append(s.estado === 'listo' ? `Suben ${c.suben} · pagan ${c.pagan} · evaden ${c.evaden}${c.dudosos ? ` · dudosos ${c.dudosos}` : ''}` : 'Analizando…');
       mk.bindPopup(pop);
       mk.on('click', () => goTo(s.t0));
@@ -1111,11 +1454,12 @@
   }
   function renderStops() {
     const T = totals();
-    const pend = S.stops.filter((s) => s.estado !== 'listo').length;
-    const quiet = S.stops.filter((s) => s.estado === 'listo' && !moving(s)).length;
-    $('#fareInfo').textContent = !S.stops.length
+    const pend = S.stops.filter((s) => s.estado !== 'listo' && inRange(s)).length;
+    const quiet = S.stops.filter((s) => s.estado === 'listo' && inRange(s) && !moving(s)).length;
+    const scope = partial() ? `Parcial: analizado del ${mmss(S.range.from)} al ${mmss(Math.min(S.frontier, S.range.to))} · ` : '';
+    $('#fareInfo').textContent = scope + (!S.stops.length
       ? (S.moments.length ? 'Buscando detenciones del bus…' : 'Se completa solo mientras se analiza el video.')
-      : `${T.paraderos} paradero${T.paraderos === 1 ? '' : 's'} con pasajeros${pend ? ` · ${pend} por analizar` : ''}${quiet ? ` · ${quiet} detención${quiet === 1 ? '' : 'es'} sin movimiento (semáforos)` : ''}`;
+      : `${T.paraderos} paradero${T.paraderos === 1 ? '' : 's'} con pasajeros${pend ? ` · ${pend} por analizar` : ''}${quiet ? ` · ${quiet} detención${quiet === 1 ? '' : 'es'} sin movimiento (semáforos)` : ''}`);
     const tot = (v, label, cls) => { const d = el('div', 'tot'); d.append(el('b', cls, String(v)), el('small', null, label)); return d; };
     $('#totals').replaceChildren(
       tot(T.paraderos, 'Paraderos'),
@@ -1127,7 +1471,7 @@
       tot(T.dudosos, 'Dudosos', 'doubt'),
     );
     const body = $('#stopRows');
-    const list = S.stops.filter((s) => s.estado !== 'listo' || moving(s));
+    const list = S.stops.filter((s) => (s.estado !== 'listo' && inRange(s)) || moving(s));
     if (!list.length) {
       const tr = el('tr');
       const td = el('td', 'empty', S.stops.length ? 'En las detenciones analizadas no subió ni bajó nadie.' : 'Todavía no hay paraderos analizados.');
@@ -1141,7 +1485,7 @@
       const c = counts(s);
       const tr = el('tr', `stop-row${S.curStop === s ? ' cur' : ''}`);
       const ready = s.estado === 'listo';
-      const lugar = s.dir || (s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : '—');
+      const lugar = [parText(parOf(s)), s.dir].filter(Boolean).join(' · ') || (s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : '—');
       tr.append(
         (() => { const td = el('td', null, stopLabel(s)); if (zpOf(s)) td.append(el('span', 'zp-badge', 'ZP')); return td; })(),
         el('td', null, horaAt(s.t0) || mmss(s.t0)),
@@ -1160,7 +1504,7 @@
         td.colSpan = 8;
         if (s.estado === 'error') {
           const again = el('button', 'btn small', 'Reintentar');
-          again.onclick = (e) => { e.stopPropagation(); S.run++; analyze(S.run); };
+          again.onclick = (e) => { e.stopPropagation(); s.estado = 'pendiente'; restart(); };
           td.append(el('div', 'evade', s.resumen), again);
         } else if (!ready) td.append(el('div', 'muted', 'Todavía se está analizando este paradero.'));
         else {
@@ -1260,6 +1604,7 @@
   (function loop() {
     const m = mainCam();
     if (m && !m.video.paused) tick();
+    autoPlay();
     syncWall();
     requestAnimationFrame(loop);
   })();
@@ -1272,6 +1617,11 @@
     return r ? r.name.replace(/\.[^.]+$/, '') : 'video';
   };
   const dec = (v, d) => (v == null ? '' : v.toFixed(d).replace('.', ','));
+  const scopeText = () => {
+    const to = Math.min(S.frontier, S.range.to);
+    const clk = (t) => (horaAt(t) ? ` (${horaAt(t)})` : '');
+    return `${partial() ? 'Análisis parcial' : 'Análisis completo'}: del ${mmss(S.range.from)}${clk(S.range.from)} al ${mmss(to)}${clk(to)} del video`;
+  };
   function csv(rows) {
     const cell = (v) => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
     // Punto y coma y BOM para que Excel en español lo abra con columnas y tildes correctas.
@@ -1296,21 +1646,25 @@
   };
   $('#btnCsvStops').onclick = () => {
     if (!ready()) return;
-    const rows = [['Paradero', 'Hora llegada', 'Hora salida', 'Minuto video', 'Dirección', 'Latitud', 'Longitud', 'Zona paga', 'Motivo zona paga', 'Suben', 'Suben por puerta con validador', 'Suben por otras puertas', 'Pagan (total)', 'Pagan en zona paga', 'Evaden', 'Dudosos', 'Bajan', '% evasión', 'Observación']];
+    const rows = [['Paradero', 'Hora llegada', 'Hora salida', 'Minuto video', 'Código paradero', 'Nombre paradero', 'Dirección', 'Latitud', 'Longitud', 'Zona paga', 'Motivo zona paga', 'Suben', 'Suben por puerta con validador', 'Suben por otras puertas', 'Pagan (total)', 'Pagan en zona paga', 'Evaden', 'Dudosos', 'Bajan', '% evasión', 'Observación']];
     for (const s of S.stops) {
       if (!moving(s)) continue;
       const c = counts(s);
       const d = byDoor(s);
-      rows.push([stopLabel(s), horaAt(s.t0), horaAt(s.t1), mmss(s.t0), s.dir || '', dec(s.lat, 6), dec(s.lon, 6), zpOf(s) ? 'Sí' : 'No', zpWhy(s), c.suben, d.front, d.other, c.pagan, c.zp, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben), s.resumen]);
+      const po = parOf(s);
+      rows.push([stopLabel(s), horaAt(s.t0), horaAt(s.t1), mmss(s.t0), po ? po.c : '', po ? po.n : '', s.dir || '', dec(s.lat, 6), dec(s.lon, 6), zpOf(s) ? 'Sí' : 'No', zpWhy(s), c.suben, d.front, d.other, c.pagan, c.zp, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben), s.resumen]);
     }
     const T = totals();
-    rows.push(['TOTAL', '', '', '', '', '', '', `${T.zonas} zonas pagas`, '', T.suben, '', '', T.pagan, T.zp, T.evaden, T.dudosos, T.bajan, pct(T.evaden, T.suben), '']);
+    rows.push(['TOTAL', '', '', '', '', '', '', '', '', `${T.zonas} zonas pagas`, '', T.suben, '', '', T.pagan, T.zp, T.evaden, T.dudosos, T.bajan, pct(T.evaden, T.suben), scopeText()]);
     download(`${baseName()}-paraderos.csv`, csv(rows));
   };
   $('#btnCsvPeople').onclick = () => {
     if (!ready()) return;
-    const rows = [['Paradero', 'Zona paga', 'Hora', 'Minuto video', 'Dirección', 'Cámara', 'Resultado', 'Descripción de la persona']];
-    for (const s of S.stops) for (const p of s.personas) rows.push([stopLabel(s), zpOf(s) ? 'Sí' : 'No', horaAt(p.t), mmss(p.t), s.dir || '', personCam(p), resText(resOf(p, zpOf(s))), p.desc]);
+    const rows = [['Paradero', 'Código paradero', 'Nombre paradero', 'Zona paga', 'Hora', 'Minuto video', 'Dirección', 'Cámara', 'Resultado', 'Descripción de la persona']];
+    for (const s of S.stops.filter(moving)) {
+      const po = parOf(s);
+      for (const p of s.personas) rows.push([stopLabel(s), po ? po.c : '', po ? po.n : '', zpOf(s) ? 'Sí' : 'No', horaAt(p.t), mmss(p.t), s.dir || '', personCam(p), resText(resOf(p, zpOf(s))), p.desc]);
+    }
     download(`${baseName()}-detalle-personas.csv`, csv(rows));
   };
   $('#btnPdf').onclick = () => {
@@ -1321,6 +1675,7 @@
     r.append(el('h1', null, 'Informe de pasajes y evasión'));
     const first = S.moments.find((m) => m.hora);
     r.append(el('div', null, `Cámaras: ${S.cams.filter((c) => !c.bad).map(camName).join(', ')}${first ? ` · desde ${first.hora}` : ''} · generado ${new Date().toLocaleString('es-CL')}`));
+    r.append(el('div', null, scopeText()));
     r.append(el('div', null, `Paraderos con pasajeros: ${T.paraderos} (${T.zonas} en zona paga) · Suben: ${T.suben} · Pagan: ${T.pagan} (${T.zp} en zona paga) · Evaden: ${T.evaden} (${pct(T.evaden, T.suben)}) · Dudosos: ${T.dudosos} · Bajan: ${T.bajan}`));
     r.append(el('div', 'muted', 'Conteo automático hecho por IA a partir de las imágenes de las cámaras; los casos dudosos deben revisarse en el video.'));
     const table = (head, rows) => {
@@ -1336,10 +1691,10 @@
     };
     r.append(el('h3', null, 'Resumen por paradero'));
     r.append(table(['#', 'Llegada', 'Salida', 'Lugar', 'Zona paga', 'Suben', 'Pagan', 'En ZP', 'Evaden', 'Dudosos', 'Bajan', 'Evasión'],
-      S.stops.filter(moving).map((s) => { const c = counts(s); return [stopLabel(s), horaAt(s.t0), horaAt(s.t1), s.dir || (s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : ''), zpOf(s) ? 'Sí' : 'No', c.suben, c.pagan, c.zp, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben)]; })));
+      S.stops.filter(moving).map((s) => { const c = counts(s); return [stopLabel(s), horaAt(s.t0), horaAt(s.t1), [parText(parOf(s)), s.dir].filter(Boolean).join(' · ') || (s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : ''), zpOf(s) ? 'Sí' : 'No', c.suben, c.pagan, c.zp, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben)]; })));
     r.append(el('h3', null, 'Detalle por persona'));
     r.append(table(['Paradero', 'Hora', 'Minuto video', 'Cámara', 'Resultado', 'Persona'],
-      S.stops.flatMap((s) => s.personas.map((p) => [stopLabel(s), horaAt(p.t), mmss(p.t), personCam(p), resText(resOf(p, zpOf(s))), p.desc]))));
+      S.stops.filter(moving).flatMap((s) => s.personas.map((p) => [stopLabel(s), horaAt(p.t), mmss(p.t), personCam(p), resText(resOf(p, zpOf(s))), p.desc]))));
     window.print();
   };
 
@@ -1355,6 +1710,7 @@
   };
 
   initMap();
+  drawParaderos();
   renderStops();
   if (!S.key) $('#keyBox').hidden = false;
   $('#btnOut').hidden = !SERVER;
