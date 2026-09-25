@@ -16,6 +16,7 @@
   body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
   header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: #10181f; color: #fff; flex-wrap: wrap; }
   header h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+  .person-thumb { display: block; height: 110px; margin: 4px 0 6px; border-radius: 4px; border: 1px solid #d8dee4; }
   .ver { font-size: 11px; font-weight: 400; opacity: .6; }
   .newver { background: #f5a300; color: #111; padding: 10px 16px; font-size: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .newver[hidden] { display: none; }
@@ -345,6 +346,7 @@
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
   const COUNT_V = 3;
+  const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
     puerta_central: 'Puerta central',
@@ -357,7 +359,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-17';
+  const VERSION = '2026.09.25-18';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1553,6 +1555,16 @@
     for (let k = 0; times.length < n && k < n * 2; k++) { const t = t0 + (span * k) / Math.max(1, n * 2 - 1); if (far(t, 0.5)) times.push(t); }
     return times.sort((a, b) => a - b);
   }
+  // Foto chica de cada imagen enviada, para mostrar en el detalle la persona contada (solo en memoria).
+  const THUMBS = new WeakMap();
+  function thumbOf(cv) {
+    const w = 320;
+    const t = document.createElement('canvas');
+    t.width = w;
+    t.height = Math.round((cv.height / cv.width) * w);
+    t.getContext('2d').drawImage(cv, 0, 0, t.width, t.height);
+    return t.toDataURL('image/jpeg', 0.7);
+  }
   async function countOne(s, run) {
     {
       if (run !== S.run) return false;
@@ -1581,7 +1593,7 @@
           const t = +times[k].toFixed(2);
           const f = await frameOf(c, t, hasValidator(c) ? 1024 : 768);
           if (!f) continue;
-          meta.push({ cam: c.key, t, label: labels[d], door });
+          meta.push({ cam: c.key, t, label: labels[d], door, thumb: thumbOf(f) });
           parts.push({ text: `Imagen ${meta.length} (cámara ${labels[d]}, ${mmss(t)}.${Math.floor((t % 1) * 10)}):` }, img(f));
         }
         if (run !== S.run) return false;
@@ -1602,6 +1614,7 @@
         '- "camara": la letra de la cámara de la puerta por la que sube.',
         '- "luz": el color del validador en el ÚLTIMO intento de esa persona: "verde" o "roja"; null si no se ve.',
         '- "valida": true si el último intento se pone verde, o si se ve que acerca tarjeta o celular al validador aunque no se alcance a ver la luz; false solo si se ve que pasa sin acercar nada al validador, salta o pasa bajo el torniquete; null si solo se vio luz roja sin un intento posterior, o si de verdad no se alcanza a ver a la persona frente al validador.',
+        '- "desde_afuera": true solo si en las imágenes se ve a esa persona afuera (andén, calle o escalón) y después adentro del bus; false si solo se la ve adentro o no se alcanza a ver de dónde viene. Alguien que solo aparece caminando o parado adentro NO subió en este paradero.',
         '- "fuera_zona": solo si es zona paga: true si se ve que la persona no venía desde el andén cerrado (por ejemplo, llega corriendo desde la calle por fuera de la reja); si no, false.',
         '- "resultado": "paga" (validó: luz verde o acercó la tarjeta), "zona_paga" (sube en zona paga, pagó en el paradero), "evade" (se ve que no acerca nada al validador) o "dudoso" (su último intento quedó en rojo, o no se alcanza a ver). Evita "dudoso" cuando las imágenes permiten decidir.',
         'Cuenta a cada persona UNA sola vez aunque aparezca en varias imágenes o en varias cámaras: identifícala por su ropa y apariencia, y asígnala a la puerta por la que sube. No cuentes a quien ya estaba arriba ni al conductor.',
@@ -1612,7 +1625,7 @@
         `MUY IMPORTANTE: el personal NO son pasajeros y no se cuenta NUNCA, ni en "personas" ni en "bajan", aunque acerque una tarjeta al validador (los agentes también validan, prueban el validador o validan por un pasajero), aunque suba, baje o cambie de puerta. En estos buses el personal es: ${S.staff}. También son personal los guardias, fiscalizadores, inspectores, anfitriones de zona paga y el conductor. Pistas: se quedan de pie en la puerta, el escalón o junto al validador durante toda la detención sin avanzar hacia adentro, se asoman hacia afuera, ayudan u ordenan la subida, o bajan y vuelven a subir. Solo cuenta a quien entra de verdad al bus y avanza hacia el pasillo o los asientos. Si dudas si alguien es personal o pasajero, no lo cuentes como pasajero y menciónalo en "personal_visto".`,
         S.staffN ? `Durante todo el recorrido van ${S.staffN} agente${S.staffN === 1 ? '' : 's'} a bordo: si ves ${S.staffN === 1 ? 'a una persona' : `${S.staffN} personas`} con ese uniforme subiendo, bajando o en las puertas, ${S.staffN === 1 ? 'es el agente' : 'son ellos'}.` : '',
         S.staffRef ? 'Te envío además una IMAGEN DE REFERENCIA (antes de las imágenes numeradas) donde se ven los agentes: compara la ropa y apariencia de cada persona con ellos antes de contarla.' : '',
-        'Responde SOLO con JSON con esta forma: {"por_camara":[{"camara":"A","suben":1,"que_pasa":"sube una mujer con chaqueta roja y valida; nadie baja"}],"zona_paga":{"es":false,"motivo":"qué viste para decidirlo"},"personal_visto":"agente de negro en la puerta delantera","personas":[{"imagen":3,"camara":"A","descripcion":"mujer con chaqueta roja y mochila","luz":"verde","valida":true,"fuera_zona":false,"resultado":"paga"}],"bajan_detalle":[{"imagen":7,"camara":"C","descripcion":"hombre con polerón gris sale a la vereda"}],"resumen":"1 o 2 frases sobre lo ocurrido en este paradero"}',
+        'Responde SOLO con JSON con esta forma: {"por_camara":[{"camara":"A","suben":1,"que_pasa":"sube una mujer con chaqueta roja y valida; nadie baja"}],"zona_paga":{"es":false,"motivo":"qué viste para decidirlo"},"personal_visto":"agente de negro en la puerta delantera","personas":[{"imagen":3,"camara":"A","descripcion":"mujer con chaqueta roja y mochila","luz":"verde","desde_afuera":true,"valida":true,"fuera_zona":false,"resultado":"paga"}],"bajan_detalle":[{"imagen":7,"camara":"C","descripcion":"hombre con polerón gris sale a la vereda"}],"resumen":"1 o 2 frases sobre lo ocurrido en este paradero"}',
         'Si nadie sube, "personas" es []. En "imagen" pon el número de la imagen donde mejor se ve si pagó o no.',
       ].join('\n');
       let r;
@@ -1646,22 +1659,14 @@
           valida: v === true || v === 'true' ? true : v === false || v === 'false' ? false : null,
           sinValidador: !!cam && !hasValidator(cam),
           fueraZona: truthy(p && p.fuera_zona),
+          // Evasión solo con evidencia: tiene que haberse visto a la persona afuera y después adentro.
+          desdeAfuera: truthy(p && p.desde_afuera),
+          // Si la propia descripción dice que es personal, no se cuenta aunque la IA lo haya puesto como pasajero.
+          staff: STAFF_RE.test(String((p && p.descripcion) || '')),
+          img: meta.indexOf(mi),
           res: /^pag/.test(res) ? 'paga' : /zona/.test(res) ? 'zp' : /^ev/.test(res) && !roja ? 'evade' : 'dudoso',
         };
       });
-      // Si la IA dijo que por una puerta subieron más personas de las que describió, las que faltan
-      // se agregan como «dudoso» para revisarlas (así no desaparecen del conteo).
-      for (const x of Array.isArray(r.por_camara) ? r.por_camara : []) {
-        const m = meta.find((q) => q.door && q.label === String((x && x.camara) || '').toUpperCase());
-        const n = Math.round(num(x && x.suben) || 0);
-        if (!m || n <= 0) continue;
-        const have = personas.filter((p) => p.cam === m.cam).length;
-        const cam = camByKey(m.cam);
-        const mid = meta.filter((q) => q.cam === m.cam);
-        for (let k = have; k < Math.min(n, have + 10); k++) {
-          personas.push({ t: (mid[Math.floor(mid.length / 2)] || m).t, cam: m.cam, desc: 'Persona que la IA vio subir por esta puerta sin describirla: revisar', valida: null, sinValidador: false, fueraZona: false, res: 'dudoso', luz: null });
-        }
-      }
       // Quién baja: se exige el detalle (imagen y cámara) para no contar a quien solo se mueve adentro.
       const camOf = (x) => {
         const mi = meta[clamp(Math.round(num(x && x.imagen) || 1), 1, meta.length) - 1];
@@ -1675,6 +1680,7 @@
         return `${c ? camName(c) : (x && x.camara) || ''}: ${String((x && x.que_pasa) || '').trim()}`;
       }).filter((x) => !/:\s*$/.test(x));
       const zp = (r.zona_paga && typeof r.zona_paga === 'object') ? r.zona_paga : { es: r.zona_paga };
+      THUMBS.set(s, meta.map((m) => m.thumb));
       Object.assign(s, {
         estado: 'listo', v: COUNT_V, personas, bajan: bajanDet ? bajanDet.length : num(r.bajan) || 0, bajanDet: bajanDet || [], bajanManual: null, porCamara, resumen: String(r.resumen || '').trim(),
         zpModel: truthy(zp.es), zpMotivo: String(zp.motivo || '').trim(),
@@ -1730,11 +1736,16 @@
   // Resultado de cada persona según si el paradero es zona paga.
   function resOf(p, zp) {
     if (p.manual) return p.manual;
+    if (p.staff) return 'excluir';
     if (p.valida === undefined) return p.res;
     if (p.valida === true) return 'paga';
     if (zp) return p.fueraZona ? 'evade' : 'zp';
     // Llegó al validador y quedó en rojo: no se da por evasión, se revisa (pudo pagar con otra tarjeta).
     if (p.luz === 'roja') return 'dudoso';
+    // Evasión solo con evidencia: si la IA no vio a la persona venir de afuera, se revisa en vez de acusar.
+    if (p.desdeAfuera === false && (p.valida === false || p.sinValidador || p.res === 'evade')) return 'dudoso';
+    // Conteos antiguos (sin ese dato): quien «subió» por una puerta sin validador queda para revisar.
+    if (p.desdeAfuera === undefined && p.sinValidador) return 'dudoso';
     if (p.valida === false || p.sinValidador) return 'evade';
     return p.res === 'evade' ? 'evade' : 'dudoso';
   }
@@ -2276,6 +2287,14 @@
             sel.onchange = () => { p.manual = sel.value; save(); rebuild(); };
             const txt = el('span', r === 'excluir' ? 'struck' : null, `${p.desc}${p.luz === 'verde' ? ' · validador en verde' : p.luz === 'roja' ? ' · validador en rojo: revisar si pagó con otra tarjeta' : ''} · ${horaAt(p.t) || mmss(p.t)}${S.cams.length > 1 ? ` · ${personCam(p)}` : ''}${p.manual ? ' · corregido' : ''}`);
             li.append(sel, txt);
+            const th = THUMBS.get(s);
+            if (th && p.img >= 0 && th[p.img]) {
+              const im = el('img', 'person-thumb');
+              im.src = th[p.img];
+              im.alt = 'Imagen en que la IA vio a esta persona';
+              im.title = 'Imagen que usó la IA (toca el texto para ir al video)';
+              li.append(im);
+            }
             li.onclick = (e) => { e.stopPropagation(); goTo(p.t - 1, p.cam); };
             ul.append(li);
           }
