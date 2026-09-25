@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#10181f">
-<title>COF Vision Simple</title>
+<title>COF Vision</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root {
     --bg: #eef1f4; --card: #fff; --ink: #14202b; --muted: #5d6b78; --line: #d9e0e6;
-    --accent: #f5a300; --accent-ink: #1a1200; --alert: #d63b2f; --alert-bg: #fdecea; --ok: #1f8a4c;
+    --accent: #f5a300; --accent-ink: #1a1200; --alert: #d63b2f; --alert-bg: #fdecea; --ok: #1f8a4c; --ok-bg: #e6f4ec; --doubt: #8a6d00;
   }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -19,10 +19,75 @@
   header .file { color: #b8c4cf; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40vw; }
   header .spacer { flex: 1; }
   .btn { border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; font-weight: 600; cursor: pointer; background: var(--accent); color: var(--accent-ink); }
-  .btn.ghost { background: transparent; color: inherit; border: 1px solid currentColor; opacity: .85; font-weight: 500; }
-  .btn.small { padding: 5px 10px; font-size: 13px; }
+  .btn.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); font-weight: 500; }
+  .btn.small { padding: 6px 12px; font-size: 14px; }
+  .btn:disabled { opacity: .5; cursor: default; }
   main { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px; max-width: 1600px; margin: 0 auto; }
-  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px; } header .file { max-width: 90vw; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .wide { grid-column: 1 / -1; }
+  .video-wrap { background: #000; position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; }
+  video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .drop { color: #c9d3dc; text-align: center; padding: 24px; }
+  .drop b { color: #fff; font-size: 18px; display: block; margin-bottom: 6px; }
+  .drop.over { outline: 3px dashed var(--accent); outline-offset: -12px; }
+  .now { padding: 14px 16px; min-height: 120px; }
+  .now .meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .chip { background: #eef1f4; border-radius: 99px; padding: 2px 10px; font-variant-numeric: tabular-nums; }
+  .chip.alert { background: var(--alert); color: #fff; font-weight: 600; }
+  .chip.stop { background: #10181f; color: #fff; font-weight: 600; }
+  .now .text { font-size: 18px; line-height: 1.4; }
+  .now .fare { margin-top: 8px; font-size: 16px; font-weight: 600; }
+  .now .where { margin-top: 8px; font-size: 14px; color: var(--muted); }
+  .pay { color: var(--ok); } .evade { color: var(--alert); } .doubt { color: var(--doubt); }
+  .status { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); }
+  .status.err { color: var(--alert); background: var(--alert-bg); }
+  .bar { flex: 1; height: 6px; background: #e3e8ed; border-radius: 99px; overflow: hidden; max-width: 220px; min-width: 60px; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .map-card { display: flex; flex-direction: column; }
+  #map { height: 100%; min-height: 420px; flex: 1; }
+  .map-foot { padding: 8px 12px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .map-foot label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  h2 { font-size: 15px; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+  h2 span { font-weight: 400; color: var(--muted); font-size: 13px; }
+  .totals { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 1px; background: var(--line); border-bottom: 1px solid var(--line); }
+  .tot { background: #fff; padding: 10px 12px; }
+  .tot b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .tot small { color: var(--muted); font-size: 12px; }
+  .exports { display: flex; gap: 8px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--line); align-items: center; }
+  .exports .note { font-size: 12px; color: var(--muted); flex-basis: 100%; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; background: #f7f9fa; }
+  td.n { text-align: right; } th.n { text-align: right; }
+  tr.stop-row { cursor: pointer; }
+  tr.stop-row:hover { background: #f6f8fa; }
+  tr.stop-row.cur { background: #fff6e0; }
+  tr.detail td { background: #fafbfc; padding: 6px 10px 12px 34px; }
+  .people { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+  .people li { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
+  .people li:hover { text-decoration: underline; }
+  .tag { font-size: 12px; font-weight: 700; border-radius: 4px; padding: 0 6px; }
+  .tag.paga { background: var(--ok-bg); color: var(--ok); }
+  .tag.evade { background: var(--alert-bg); color: var(--alert); }
+  .tag.dudoso { background: #fff4cc; color: var(--doubt); }
+  .table-wrap { overflow-x: auto; }
+  .rows { max-height: 420px; overflow: auto; position: relative; }
+  .row { display: grid; grid-template-columns: 64px 80px 1fr; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--line); cursor: pointer; align-items: baseline; }
+  .row:hover { background: #f6f8fa; }
+  .row.cur { background: #fff6e0; }
+  .row.alert { border-left: 4px solid var(--alert); padding-left: 12px; }
+  .row .t { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .row .c { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .empty { padding: 16px; color: var(--muted); }
+  .key-box { padding: 14px 16px; border-top: 1px solid var(--line); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .key-box input { flex: 1; min-width: 200px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 16px; }
+  .bus-icon { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); border: 3px solid #10181f; box-shadow: 0 2px 6px rgba(0,0,0,.35); display: grid; place-items: center; font-size: 15px; }
+  .stop-icon { width: 26px; height: 26px; border-radius: 50%; background: #fff; border: 3px solid var(--ok); color: var(--ink); font: 700 12px/20px system-ui, sans-serif; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+  .stop-icon.ev { border-color: var(--alert); }
+  .stop-icon.wait { border-color: #9aa6b2; color: #9aa6b2; }
+  #report { display: none; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; padding: 12px; } header .file { max-width: 90vw; } .totals { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
   @media (max-width: 640px) {
     header { padding: 10px 12px; padding-top: max(10px, env(safe-area-inset-top)); gap: 8px; }
     header h1 { font-size: 16px; }
@@ -36,46 +101,24 @@
     .row { grid-template-columns: auto 1fr; gap: 2px 10px; padding: 10px 12px; }
     .row > span:nth-child(3) { grid-column: 1 / -1; }
     .row.alert { padding-left: 8px; }
-    .list h2 { flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px 12px; }
+    h2 { padding: 10px 12px; }
+    th, td { padding: 7px 6px; font-size: 14px; }
+    th.hide-sm, td.hide-sm { display: none; }
+    tr.detail td { padding-left: 12px; }
+    .tot b { font-size: 19px; }
     .drop b { font-size: 16px; }
     .leaflet-control-layers { font-size: 13px; }
   }
-  .key-box input { font-size: 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-  .video-wrap { background: #000; position: relative; aspect-ratio: 16 / 9; display: grid; place-items: center; }
-  video { width: 100%; height: 100%; object-fit: contain; display: block; }
-  .drop { color: #c9d3dc; text-align: center; padding: 24px; }
-  .drop b { color: #fff; font-size: 18px; display: block; margin-bottom: 6px; }
-  .drop.over { outline: 3px dashed var(--accent); outline-offset: -12px; }
-  .now { padding: 14px 16px; min-height: 120px; }
-  .now .meta { display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-  .chip { background: #eef1f4; border-radius: 99px; padding: 2px 10px; font-variant-numeric: tabular-nums; }
-  .chip.alert { background: var(--alert); color: #fff; font-weight: 600; }
-  .now .text { font-size: 18px; line-height: 1.4; }
-  .now .where { margin-top: 8px; font-size: 14px; color: var(--muted); }
-  .status { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 14px; color: var(--muted); }
-  .status.err { color: var(--alert); background: var(--alert-bg); }
-  .bar { flex: 1; height: 6px; background: #e3e8ed; border-radius: 99px; overflow: hidden; max-width: 220px; }
-  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
-  .map-card { display: flex; flex-direction: column; }
-  #map { height: 100%; min-height: 420px; flex: 1; }
-  .map-foot { padding: 8px 12px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-  .map-foot label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
-  .list { grid-column: 1 / -1; }
-  .list h2 { font-size: 15px; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-  .list h2 span { font-weight: 400; color: var(--muted); font-size: 13px; }
-  .rows { max-height: 420px; overflow: auto; position: relative; }
-  .row { display: grid; grid-template-columns: 64px 80px 1fr; gap: 10px; padding: 9px 16px; border-bottom: 1px solid var(--line); cursor: pointer; align-items: baseline; }
-  .row:hover { background: #f6f8fa; }
-  .row.cur { background: #fff6e0; }
-  .row.alert { border-left: 4px solid var(--alert); padding-left: 12px; }
-  .row .t { font-weight: 600; font-variant-numeric: tabular-nums; }
-  .row .c { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
-  .row .nogps { color: var(--muted); font-size: 12px; }
-  .empty { padding: 16px; color: var(--muted); }
-  .key-box { padding: 14px 16px; border-top: 1px solid var(--line); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  .key-box input { flex: 1; min-width: 200px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; }
-  .bus-icon { width: 30px; height: 30px; border-radius: 50%; background: var(--accent); border: 3px solid #10181f; box-shadow: 0 2px 6px rgba(0,0,0,.35); display: grid; place-items: center; font-size: 15px; }
+  @media print {
+    body { background: #fff; }
+    header, main { display: none !important; }
+    #report { display: block; font-size: 12px; padding: 0 8px; }
+    #report h1 { font-size: 18px; margin: 0 0 4px; }
+    #report h3 { font-size: 14px; margin: 16px 0 6px; }
+    #report table { page-break-inside: auto; }
+    #report tr { page-break-inside: avoid; }
+    #report th, #report td { padding: 4px 6px; font-size: 11px; }
+  }
 </style>
 </head>
 <body>
@@ -90,12 +133,13 @@
 <main>
   <section class="card">
     <div class="video-wrap" id="drop">
-      <div class="drop" id="dropHint"><b>Arrastra aquí el video de la cámara</b>o usa el botón «Elegir video». Empieza a analizarse solo.</div>
+      <div class="drop" id="dropHint"><b>Elige el video de la cámara de la puerta delantera</b>Toca «Elegir video» o arrástralo aquí. Se analiza solo: lo que pasa, dónde, y cuántos pagan y evaden en cada paradero.</div>
       <video id="video" controls playsinline hidden></video>
     </div>
     <div class="now" id="now">
       <div class="meta" id="nowMeta"></div>
       <div class="text" id="nowText">Aquí verás lo que pasa en el video, momento a momento.</div>
+      <div class="fare" id="nowFare" hidden></div>
       <div class="where" id="nowWhere"></div>
     </div>
     <div class="status" id="status" hidden><span id="statusText"></span><div class="bar"><i id="barFill"></i></div></div>
@@ -113,11 +157,30 @@
     </div>
   </section>
 
-  <section class="card list">
+  <section class="card wide" id="fareCard">
+    <h2>Pasajes por paradero <span id="fareInfo">Se completa solo mientras se analiza el video.</span></h2>
+    <div class="totals" id="totals"></div>
+    <div class="exports">
+      <button class="btn small" id="btnCsvStops" type="button">Descargar Excel por paradero</button>
+      <button class="btn small ghost" id="btnCsvPeople" type="button">Excel detalle por persona</button>
+      <button class="btn small ghost" id="btnPdf" type="button">Informe PDF</button>
+      <span class="note">Conteo automático hecho por IA: revisa los casos marcados tocándolos para ver el momento exacto.</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Hora</th><th class="hide-sm">Lugar</th><th class="n">Suben</th><th class="n">Pagan</th><th class="n">Evaden</th><th class="n hide-sm">Dudosos</th><th class="n hide-sm">Bajan</th></tr></thead>
+        <tbody id="stopRows"><tr><td colspan="8" class="empty">Todavía no hay paraderos analizados.</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card wide">
     <h2>Lo que pasa en el video <span id="listInfo"></span></h2>
     <div class="rows" id="rows"><div class="empty">Todavía no hay nada analizado.</div></div>
   </section>
 </main>
+
+<div id="report"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
@@ -126,11 +189,17 @@
   // La clave se puede dejar incorporada al generar una copia personal (ver con-clave.mjs).
   const EMBED_KEY = '__GEMINI_KEY__';
   // Alias que Google mantiene apuntando al modelo vigente; los demás son respaldo.
-  const MODELS = ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+  // «quick» recorre el video; «main» cuenta pasajeros, donde importa más la precisión.
+  const MODELS = {
+    quick: ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-flash-latest'],
+    main: ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest'],
+  };
   const API = 'https://generativelanguage.googleapis.com/v1beta/models';
-  const BATCH = 6;
+  const BATCH = 8;
+  const STOP_FRAMES = 16;
 
   const $ = (s) => document.querySelector(s);
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
   const store = {
     get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* sin almacenamiento */ } },
@@ -139,6 +208,7 @@
   const pad = (n) => String(n).padStart(2, '0');
   const mmss = (s) => `${pad(Math.floor(s / 60))}:${pad(Math.floor(s % 60))}`;
   const validLL = (a, o) => Number.isFinite(a) && Number.isFinite(o) && Math.abs(a) <= 90 && Math.abs(o) <= 180 && !(a === 0 && o === 0);
+  const num = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 
   // Enlace personal: la clave puede venir tras el # (no se envía a ningún servidor); se guarda en
   // este dispositivo y se borra de la barra de direcciones.
@@ -150,10 +220,11 @@
 
   const S = {
     key: EMBED_KEY.startsWith('__') ? store.get('cofsimple:key', '') : EMBED_KEY,
-    model: store.get('cofsimple:model', 0),
-    file: null, id: null, run: 0,
-    moments: [], track: [], cur: -1, addr: {},
+    model: { quick: 0, main: 0, ...store.get('cofsimple:models', {}) },
+    file: null, id: null, run: 0, step: 4,
+    moments: [], stops: [], track: [], cur: -1, curStop: null, open: null, addr: {},
   };
+  const save = () => store.set(S.id, { v: 2, step: S.step, moments: S.moments, stops: S.stops });
 
   // ---------------------------------------------------------------- video
   const video = $('#video');
@@ -169,10 +240,12 @@
     if (!file) return;
     S.run++;
     S.file = file;
-    S.id = `cofsimple:v:${file.name}|${file.size}`;
+    S.id = `cofsimple:v2:${file.name}|${file.size}`;
     const saved = store.get(S.id, null);
     S.moments = saved && Array.isArray(saved.moments) ? saved.moments : [];
+    S.stops = saved && Array.isArray(saved.stops) ? saved.stops : [];
     S.cur = -1;
+    S.open = null;
     $('#fileName').textContent = file.name;
     const url = URL.createObjectURL(file);
     video.src = url;
@@ -182,7 +255,7 @@
     $('#dropHint').hidden = true;
     rebuild();
     video.addEventListener('loadedmetadata', () => analyze(S.run), { once: true });
-    video.addEventListener('error', () => status('Este navegador no puede reproducir ese video. Prueba con un .mp4 o ábrelo en Chrome.', 0, true), { once: true });
+    video.addEventListener('error', () => status('Este navegador no puede reproducir ese video. Prueba con un .mp4 o ábrelo en Chrome.', null, true), { once: true });
   }
   $('#btnPick').onclick = () => $('#fileInput').click();
   $('#fileInput').onchange = (e) => pick(e.target.files[0]);
@@ -200,15 +273,21 @@
       setTimeout(fin, 5000);
     });
   }
-  async function grab(t) {
+  async function grab(t, maxW) {
     if (probe.readyState < 1) await new Promise((r) => probe.addEventListener('loadedmetadata', r, { once: true }));
     await seek(probe, t);
-    const s = Math.min(1, 1280 / (probe.videoWidth || 1280));
+    const s = Math.min(1, maxW / (probe.videoWidth || maxW));
     const c = document.createElement('canvas');
     c.width = Math.round((probe.videoWidth || 1280) * s);
     c.height = Math.round((probe.videoHeight || 720) * s);
     c.getContext('2d').drawImage(probe, 0, 0, c.width, c.height);
     return c.toDataURL('image/jpeg', 0.85).split(',')[1];
+  }
+  function goTo(t) {
+    video.currentTime = Math.max(0, t);
+    video.play().catch(() => {});
+    $('#follow').checked = true;
+    if (window.matchMedia('(max-width: 900px)').matches) $('#drop').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   // ---------------------------------------------------------------- Gemini
@@ -216,23 +295,25 @@
     $('#status').hidden = !text;
     $('#status').classList.toggle('err', !!err);
     $('#statusText').textContent = text || '';
-    $('#barFill').parentElement.hidden = frac == null || err;
+    $('#barFill').parentElement.hidden = frac == null || !!err;
     if (frac != null) $('#barFill').style.width = `${Math.round(frac * 100)}%`;
   }
   function retrySeconds(body) {
     const d = ((body.error && body.error.details) || []).find((x) => x.retryDelay);
     return d ? Math.ceil(parseFloat(d.retryDelay)) : 0;
   }
-  async function gemini(parts, run) {
-    for (let attempt = 0; attempt < 8; attempt++) {
+  async function gemini(parts, run, tier) {
+    const list = MODELS[tier];
+    let idx = S.model[tier];
+    for (let attempt = 0; attempt < 12; attempt++) {
       if (run !== S.run) return null;
-      const model = MODELS[S.model] || MODELS[0];
+      const model = list[idx % list.length];
       let res;
       try {
         res = await fetch(`${API}/${model}:generateContent`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': S.key },
-          body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { temperature: 0.2, responseMimeType: 'application/json' } }),
+          body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } }),
         });
       } catch {
         status('Sin conexión con Google. Reintentando…', null);
@@ -243,7 +324,7 @@
       if (res.ok) {
         const text = ((body.candidates && body.candidates[0] && body.candidates[0].content && body.candidates[0].content.parts) || []).map((p) => p.text || '').join('');
         try { return JSON.parse(text); } catch {
-          const m = text.match(/\[[\s\S]*\]/);
+          const m = text.match(/[[{][\s\S]*[\]}]/);
           if (m) try { return JSON.parse(m[0]); } catch { /* reintenta */ }
         }
         continue;
@@ -255,10 +336,16 @@
         await wait(s * 1000);
         continue;
       }
-      if (res.status === 404 || res.status >= 500) {
-        S.model = (S.model + 1) % MODELS.length;
-        store.set('cofsimple:model', S.model);
-        await wait(res.status >= 500 ? 2000 : 0);
+      // 404: Google retiró el modelo, se deja de usar. 5xx: está saturado, se prueba otro solo esta vez.
+      if (res.status === 404) {
+        S.model[tier] = idx = (idx + 1) % list.length;
+        store.set('cofsimple:models', S.model);
+        continue;
+      }
+      if (res.status >= 500) {
+        idx++;
+        if (idx % list.length === S.model[tier] % list.length) status('Google está saturado en este momento. Reintentando…', null);
+        await wait(idx % list.length === S.model[tier] % list.length ? 10000 : 1500);
         continue;
       }
       if (res.status === 400 && !/api key|API_KEY/i.test(msg)) throw new Error(msg);
@@ -269,17 +356,33 @@
     throw new Error('Google no respondió después de varios intentos.');
   }
 
-  function prompt(times, prev) {
+  function promptTour(times, prev) {
     return [
-      'Eres un supervisor de flota que revisa las grabaciones de las cámaras de un bus.',
+      'Eres un supervisor de flota que revisa las grabaciones de las cámaras de un bus del transporte público.',
       `Te envío ${times.length} fotogramas de la misma cámara, en orden: ${times.map((t, i) => `fotograma ${i + 1} = ${mmss(t)} del video`).join(', ')}.`,
       'Para cada fotograma:',
       '1. Copia el texto de coordenadas que aparece escrito sobre la imagen (por ejemplo "33.25.30640S 70.42.12900W") en "coord_texto", y conviértelo a grados decimales con signo en "lat" y "lon" (S y W son negativos; el formato 33.25.30640S significa 33 grados y 25.30640 minutos Sur). Lee también la hora y la velocidad escritas. Si algo no se ve, pon null. No inventes números.',
-      '2. En "descripcion" di en español, en 1 o 2 frases claras y concretas, lo que se ve: cuántas personas aproximadamente, qué hacen, puertas, si el bus está detenido o en marcha y cualquier cosa fuera de lo normal. Si nada cambió respecto del fotograma anterior, dilo en pocas palabras.',
-      '3. "alerta" es true solo si hay algo que un supervisor debería revisar (pelea, robo, caída, accidente, conductor distraído o usando el celular, puerta abierta en marcha, cámara tapada o sin imagen).',
+      '2. En "descripcion" di en español, en 1 o 2 frases claras y concretas, lo que se ve: cuántas personas aproximadamente, qué hacen, puertas, si el bus está detenido o en marcha, si alguien está subiendo o validando su pasaje, y cualquier cosa fuera de lo normal. Si nada cambió respecto del fotograma anterior, dilo en pocas palabras.',
+      '3. "detenido": true si el bus está detenido (velocidad 0 en pantalla o no hay movimiento). "puertas": true si se ve una puerta abierta. "subiendo": cuántas personas se ven subiendo en ese instante (0 si ninguna).',
+      '4. "alerta" es true solo si hay algo que un supervisor debería revisar (pelea, robo, caída, accidente, conductor distraído o usando el celular, puerta abierta en marcha, cámara tapada o sin imagen, alguien que salta o pasa por debajo del torniquete).',
       prev ? `Lo último que viste antes de estos fotogramas: "${prev}"` : '',
-      'Responde SOLO con un JSON array, un objeto por fotograma: [{"n":1,"coord_texto":"...","lat":-33.4,"lon":-70.7,"hora":"HH:MM:SS","velocidad":null,"descripcion":"...","alerta":false}]',
+      'Responde SOLO con un JSON array, un objeto por fotograma: [{"n":1,"coord_texto":"...","lat":-33.4,"lon":-70.7,"hora":"HH:MM:SS","velocidad":null,"detenido":false,"puertas":false,"subiendo":0,"descripcion":"...","alerta":false}]',
     ].filter(Boolean).join('\n');
+  }
+  function promptStop(times) {
+    return [
+      'Eres un fiscalizador del transporte público que revisa la grabación de la cámara interior de un bus mientras está detenido en un paradero.',
+      `Te envío ${times.length} imágenes consecutivas de la misma cámara, desde el ${mmss(times[0])} hasta el ${mmss(times[times.length - 1])} del video (aprox. cada ${((times[times.length - 1] - times[0]) / Math.max(1, times.length - 1)).toFixed(1)} s): ${times.map((t, i) => `imagen ${i + 1} = ${mmss(t)}`).join(', ')}.`,
+      'Los pasajeros pagan acercando la tarjeta (bip!) o el celular al validador, el aparato lector que está junto al conductor o a la puerta. Pagar se ve como el gesto de acercar la tarjeta o el teléfono al validador.',
+      'Tarea: sigue a cada persona que SUBE al bus y decide si pagó.',
+      '- "paga": se ve que acerca tarjeta o celular al validador.',
+      '- "evade": pasa de largo sin validar, salta o pasa bajo el torniquete, entra por una puerta que no tiene validador (puerta trasera o central), o entra por la puerta de bajada.',
+      '- "dudoso": no se alcanza a ver si validó (tapado por otras personas, fuera de cuadro, muy rápido).',
+      'Cuenta a cada persona UNA sola vez aunque aparezca en varias imágenes: identifícala por su ropa y apariencia. No cuentes a quien ya estaba arriba ni al conductor. Cuenta aparte a quienes BAJAN.',
+      'Si la cámara no permite ver a las personas subiendo (por ejemplo, mira hacia otro lado), pon "camara_util": false.',
+      'Responde SOLO con JSON con esta forma: {"camara_util":true,"personas":[{"imagen":3,"descripcion":"mujer con chaqueta roja y mochila","resultado":"paga"}],"bajan":0,"resumen":"1 frase sobre lo ocurrido en este paradero"}',
+      'Si nadie sube, "personas" es []. En "imagen" pon el número de la imagen donde mejor se ve si pagó o no.',
+    ].join('\n');
   }
 
   // Formato de los MDVR: 33.25.30640S = grados.minutos.decimales de minuto + hemisferio.
@@ -295,6 +398,7 @@
     return v.length >= 2 ? { lat: v[0], lon: v[1] } : null;
   }
 
+  // ---------------------------------------------------------------- análisis
   async function analyze(run) {
     if (!S.key) {
       $('#keyBox').hidden = false;
@@ -303,60 +407,204 @@
     }
     const D = video.duration;
     if (!Number.isFinite(D) || D <= 0) return status('No se pudo leer la duración del video.', null, true);
-    const step = D <= 60 ? 3 : D <= 300 ? 5 : Math.ceil(D / 80);
+    S.step = D <= 120 ? 2 : D <= 900 ? 4 : 6;
+    try {
+      if (!(await tour(run, D))) return;
+      if (!(await countStops(run, D))) return;
+      await addresses(run);
+    } catch (e) {
+      if (e.badKey) {
+        $('#keyBox').hidden = false;
+        return status('Google rechazó la clave de Gemini. Pega una clave nueva abajo.', null, true);
+      }
+      return status(`Se detuvo el análisis: ${e.message}`, null, true);
+    }
+    if (run !== S.run) return;
+    const T = totals();
+    status(`Listo: ${S.moments.length} momentos y ${T.paraderos} paradero${T.paraderos === 1 ? '' : 's'} con movimiento · suben ${T.suben}, pagan ${T.pagan}, evaden ${T.evaden}.`, null);
+  }
+
+  // Paso 1: recorrer el video (qué pasa, dónde, cuándo se detiene).
+  async function tour(run, D) {
     const times = [];
-    for (let t = Math.min(1, D / 2); t < D - 0.2; t += step) times.push(+t.toFixed(1));
+    for (let t = Math.min(1, D / 2); t < D - 0.2; t += S.step) times.push(+t.toFixed(1));
     const done = new Set(S.moments.map((m) => m.t));
     const todo = times.filter((t) => !done.has(t));
-    if (!todo.length) return status('', null);
     for (let i = 0; i < todo.length; i += BATCH) {
-      if (run !== S.run) return;
+      if (run !== S.run) return false;
       const chunk = todo.slice(i, i + BATCH);
-      status(`Mirando el video… ${Math.min(times.length, times.length - todo.length + i + chunk.length)} de ${times.length} momentos`, (times.length - todo.length + i) / times.length);
+      const k = times.length - todo.length + i + chunk.length;
+      status(`Paso 1 de 2 · recorriendo el video: ${k} de ${times.length} momentos`, (k / times.length) * 0.5);
       const images = [];
-      for (const t of chunk) images.push(await grab(t));
-      if (run !== S.run) return;
+      for (const t of chunk) images.push(await grab(t, 1024));
+      if (run !== S.run) return false;
       const prev = S.moments.filter((m) => m.t < chunk[0]).slice(-1)[0];
-      const parts = [{ text: prompt(chunk, prev && prev.descripcion) }, ...images.map((d) => ({ inlineData: { mimeType: 'image/jpeg', data: d } }))];
-      let list;
-      try {
-        list = await gemini(parts, run);
-      } catch (e) {
-        if (e.badKey) {
-          $('#keyBox').hidden = false;
-          return status('Google rechazó la clave de Gemini. Pega una clave nueva abajo.', null, true);
-        }
-        status(`No se pudo analizar un tramo: ${e.message}`, null, true);
-        await wait(3000);
-        continue;
-      }
-      if (!list || run !== S.run) return;
+      const list = await gemini([{ text: promptTour(chunk, prev && prev.descripcion) }, ...images.map((d) => ({ inlineData: { mimeType: 'image/jpeg', data: d } }))], run, 'quick');
+      if (!list || run !== S.run) return false;
       const arr = Array.isArray(list) ? list : list.fotogramas || list.resultados || [];
-      chunk.forEach((t, k) => {
-        const r = arr.find((x) => Number(x && x.n) === k + 1) || arr[k];
+      chunk.forEach((t, j) => {
+        const r = arr.find((x) => Number(x && x.n) === j + 1) || arr[j];
         if (!r) return;
         const p = parseCoord(r.coord_texto);
-        let lat = p ? p.lat : Number(r.lat);
-        let lon = p ? p.lon : Number(r.lon);
+        let lat = p ? p.lat : num(r.lat);
+        let lon = p ? p.lon : num(r.lon);
         if (!validLL(lat, lon)) lat = lon = null;
         S.moments.push({
           t, lat, lon,
-          hora: r.hora ? String(r.hora).slice(0, 8) : null,
-          vel: Number.isFinite(Number(r.velocidad)) && r.velocidad !== null ? Number(r.velocidad) : null,
+          hora: /^\d{1,2}:\d{2}:\d{2}/.test(String(r.hora || '')) ? String(r.hora).slice(0, 8) : null,
+          vel: num(r.velocidad),
+          detenido: r.detenido === true || r.detenido === 'true',
+          puertas: r.puertas === true || r.puertas === 'true',
+          subiendo: num(r.subiendo) || 0,
           descripcion: String(r.descripcion || '').trim(),
           alerta: r.alerta === true || r.alerta === 'true',
         });
       });
       S.moments.sort((a, b) => a.t - b.t);
-      store.set(S.id, { moments: S.moments });
+      S.stops = mergeStops(findStops(D), S.stops);
+      save();
       rebuild();
     }
-    if (run === S.run) {
-      const n = S.moments.filter((m) => m.alerta).length;
-      status(`Listo: ${S.moments.length} momentos analizados${n ? ` · ${n} para revisar` : ''}.`, null);
-      setTimeout(() => { if (run === S.run) status('', null); }, 6000);
+    S.stops = mergeStops(findStops(D), S.stops);
+    save();
+    rebuild();
+    return true;
+  }
+
+  // Un paradero es un tramo en que el bus está detenido y se abren puertas o sube gente.
+  function findStops(D) {
+    const still = (m) => (m.vel != null ? m.vel <= 3 : m.detenido);
+    const segs = [];
+    let cur = null;
+    for (const m of S.moments) {
+      if (still(m)) {
+        if (cur && m.t - cur[cur.length - 1].t <= S.step * 1.6) cur.push(m);
+        else segs.push((cur = [m]));
+      } else cur = null;
+    }
+    return segs
+      .filter((g) => g.some((m) => m.puertas || m.subiendo > 0) || g.length >= 3)
+      .map((g) => ({
+        t0: +Math.max(0, g[0].t - S.step * 0.6).toFixed(1),
+        t1: +Math.min(D, g[g.length - 1].t + S.step * 0.6).toFixed(1),
+      }));
+  }
+  // Conserva los conteos ya hechos cuando un paradero no cambió.
+  function mergeStops(found, old) {
+    return found.map((s) => {
+      const prev = old.find((o) => o.estado === 'listo' && Math.abs(o.t0 - s.t0) < 0.5 && Math.abs(o.t1 - s.t1) < 0.5);
+      if (prev) return prev;
+      const ms = S.moments.filter((m) => m.t >= s.t0 && m.t <= s.t1);
+      const ll = ms.filter((m) => m.lat != null);
+      return {
+        ...s,
+        estado: 'pendiente',
+        lat: ll.length ? ll.reduce((a, m) => a + m.lat, 0) / ll.length : null,
+        lon: ll.length ? ll.reduce((a, m) => a + m.lon, 0) / ll.length : null,
+        personas: [], bajan: 0, resumen: '', camara_util: true, dir: null,
+      };
+    });
+  }
+
+  // Paso 2: en cada paradero, mirar segundo a segundo quién sube y si paga.
+  async function countStops(run) {
+    const todo = S.stops.filter((s) => s.estado !== 'listo');
+    for (let i = 0; i < todo.length; i++) {
+      if (run !== S.run) return false;
+      const s = todo[i];
+      const n = S.stops.indexOf(s) + 1;
+      status(`Paso 2 de 2 · contando pasajeros en el paradero ${n} de ${S.stops.length}…`, 0.5 + (i / todo.length) * 0.5);
+      const span = s.t1 - s.t0;
+      const count = Math.max(4, Math.min(STOP_FRAMES, Math.ceil(span / 1.2) + 1));
+      const times = Array.from({ length: count }, (_, k) => +(s.t0 + (span * k) / (count - 1)).toFixed(2));
+      const images = [];
+      for (const t of times) images.push(await grab(t, 1280));
+      if (run !== S.run) return false;
+      let r;
+      try {
+        r = await gemini([{ text: promptStop(times) }, ...images.map((d) => ({ inlineData: { mimeType: 'image/jpeg', data: d } }))], run, 'main');
+      } catch (e) {
+        if (e.badKey) throw e;
+        s.estado = 'error';
+        s.resumen = `No se pudo analizar: ${e.message}`;
+        save();
+        rebuild();
+        continue;
+      }
+      if (!r || run !== S.run) return false;
+      const personas = (Array.isArray(r.personas) ? r.personas : []).map((p) => {
+        const img = Math.min(times.length, Math.max(1, Math.round(num(p && p.imagen) || 1)));
+        const res = String((p && p.resultado) || '').toLowerCase();
+        return {
+          t: times[img - 1],
+          desc: String((p && p.descripcion) || 'persona').trim(),
+          res: /^pag/.test(res) ? 'paga' : /^ev/.test(res) ? 'evade' : 'dudoso',
+        };
+      });
+      Object.assign(s, {
+        estado: 'listo',
+        personas,
+        bajan: num(r.bajan) || 0,
+        resumen: String(r.resumen || '').trim(),
+        camara_util: r.camara_util !== false,
+      });
+      save();
+      rebuild();
+    }
+    return true;
+  }
+
+  async function addresses(run) {
+    for (const s of S.stops) {
+      if (run !== S.run) return;
+      if (s.dir || s.lat == null) continue;
+      s.dir = await addressOf(s.lat, s.lon);
+      if (s.dir) { save(); renderStops(); }
+      await wait(1100);
     }
   }
+  async function addressOf(lat, lon) {
+    const k = `${lat.toFixed(4)},${lon.toFixed(4)}`;
+    if (S.addr[k] !== undefined) return S.addr[k];
+    S.addr[k] = null;
+    try {
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=es&lat=${lat}&lon=${lon}`);
+      const j = await r.json();
+      const a = j.address || {};
+      S.addr[k] = [[a.road, a.house_number].filter(Boolean).join(' '), a.suburb || a.neighbourhood, a.city || a.town || a.village].filter(Boolean).join(', ') || null;
+    } catch { /* la dirección es opcional */ }
+    return S.addr[k];
+  }
+
+  // ---------------------------------------------------------------- cifras
+  const counts = (s) => {
+    const c = { suben: s.personas.length, pagan: 0, evaden: 0, dudosos: 0, bajan: s.bajan || 0 };
+    for (const p of s.personas) c[p.res === 'paga' ? 'pagan' : p.res === 'evade' ? 'evaden' : 'dudosos']++;
+    return c;
+  };
+  const moving = (s) => s.estado === 'listo' && (s.personas.length || s.bajan);
+  function totals() {
+    const T = { paraderos: 0, suben: 0, pagan: 0, evaden: 0, dudosos: 0, bajan: 0 };
+    for (const s of S.stops) {
+      if (!moving(s)) continue;
+      T.paraderos++;
+      const c = counts(s);
+      for (const k of ['suben', 'pagan', 'evaden', 'dudosos', 'bajan']) T[k] += c[k];
+    }
+    return T;
+  }
+  const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '—');
+  // Hora del equipo en un instante del video, a partir de la lectura más cercana.
+  function horaAt(t) {
+    let best = null;
+    for (const m of S.moments) if (m.hora && (!best || Math.abs(m.t - t) < Math.abs(best.t - t))) best = m;
+    if (!best) return '';
+    const [h, mi, se] = best.hora.split(':').map(Number);
+    let x = h * 3600 + mi * 60 + se + Math.round(t - best.t);
+    x = ((x % 86400) + 86400) % 86400;
+    return `${pad(Math.floor(x / 3600))}:${pad(Math.floor((x % 3600) / 60))}:${pad(x % 60)}`;
+  }
+  const stopLabel = (s) => `${S.stops.indexOf(s) + 1}`;
 
   // ---------------------------------------------------------------- recorrido y mapa
   function cleanTrack(pts) {
@@ -384,7 +632,7 @@
     return { lat: a.lat + (b.lat - a.lat) * f, lon: a.lon + (b.lon - a.lon) * f, t };
   }
 
-  const M = { map: null, line: null, done: null, bus: null, fitted: false };
+  const M = { map: null, line: null, done: null, bus: null, stops: null, fitted: false };
   function initMap() {
     if (!window.L) { $('#mapInfo').textContent = 'No se pudo cargar el mapa (revisa tu conexión a internet).'; return; }
     M.map = L.map('map', { zoomControl: true }).setView([-33.45, -70.66], 11);
@@ -397,6 +645,7 @@
     L.control.layers(bases, {}, { collapsed: false }).addTo(M.map);
     M.map.on('baselayerchange', (e) => store.set('cofsimple:base', e.name));
     M.map.on('dragstart', () => { $('#follow').checked = false; });
+    M.stops = L.layerGroup().addTo(M.map);
   }
   function drawRoute() {
     if (!M.map) return;
@@ -413,6 +662,19 @@
       M.fitted = true;
       if (ll.length > 1) M.map.fitBounds(M.line.getBounds(), { padding: [30, 30], maxZoom: 17 });
       else M.map.setView(ll[0], 17);
+    }
+    M.stops.clearLayers();
+    for (const s of S.stops) {
+      if (s.lat == null || (s.estado === 'listo' && !moving(s))) continue;
+      const c = counts(s);
+      const cls = s.estado !== 'listo' ? 'wait' : c.evaden ? 'ev' : '';
+      const mk = L.marker([s.lat, s.lon], { icon: L.divIcon({ className: '', html: `<div class="stop-icon ${cls}">${stopLabel(s)}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] }) });
+      const pop = el('div');
+      pop.append(el('b', null, `Paradero ${stopLabel(s)} · ${horaAt(s.t0) || mmss(s.t0)}`), el('br'));
+      pop.append(s.estado === 'listo' ? `Suben ${c.suben} · pagan ${c.pagan} · evaden ${c.evaden}${c.dudosos ? ` · dudosos ${c.dudosos}` : ''}` : 'Analizando…');
+      mk.bindPopup(pop);
+      mk.on('click', () => goTo(s.t0));
+      M.stops.addLayer(mk);
     }
     const km = S.track.reduce((a, p, i) => (i ? a + distKm(S.track[i - 1], p) : 0), 0);
     $('#mapInfo').textContent = S.track.length ? `${S.track.length} posiciones leídas · ${km.toFixed(2)} km recorridos` : 'Todavía no se leyeron coordenadas.';
@@ -432,31 +694,97 @@
     if (!S.moments.length) M.fitted = false;
     drawRoute();
     renderRows();
+    renderStops();
     S.cur = -2;
+    S.curStop = undefined;
     tick();
   }
   function renderRows() {
     const box = $('#rows');
     const n = S.moments.filter((m) => m.alerta).length;
     $('#listInfo').textContent = S.moments.length ? `${S.moments.length} momentos${n ? ` · ${n} para revisar` : ''} · toca uno para ir a ese punto` : '';
-    if (!S.moments.length) { box.innerHTML = '<div class="empty">Todavía no hay nada analizado.</div>'; return; }
+    if (!S.moments.length) { box.replaceChildren(el('div', 'empty', 'Todavía no hay nada analizado.')); return; }
     box.replaceChildren(...S.moments.map((m, i) => {
-      const row = document.createElement('div');
-      row.className = `row${m.alerta ? ' alert' : ''}`;
+      const row = el('div', `row${m.alerta ? ' alert' : ''}`);
       row.dataset.i = i;
-      const t = document.createElement('span'); t.className = 't'; t.textContent = mmss(m.t);
-      const c = document.createElement('span'); c.className = 'c'; c.textContent = m.hora || '';
-      const d = document.createElement('span'); d.textContent = m.descripcion || '—';
-      if (m.lat == null) { const g = document.createElement('span'); g.className = 'nogps'; g.textContent = ' (sin coordenadas)'; d.append(g); }
-      row.append(t, c, d);
-      row.onclick = () => {
-        video.currentTime = m.t;
-        video.play().catch(() => {});
-        $('#follow').checked = true;
-        if (window.matchMedia('(max-width: 900px)').matches) $('#drop').scrollIntoView({ behavior: 'smooth', block: 'start' });
-      };
+      const d = el('span', null, m.descripcion || '—');
+      if (m.lat == null) d.append(el('span', 'muted', ' (sin coordenadas)'));
+      row.append(el('span', 't', mmss(m.t)), el('span', 'c', m.hora || ''), d);
+      row.onclick = () => goTo(m.t);
       return row;
     }));
+  }
+  function renderStops() {
+    const T = totals();
+    const pend = S.stops.filter((s) => s.estado !== 'listo').length;
+    const quiet = S.stops.filter((s) => s.estado === 'listo' && !moving(s)).length;
+    $('#fareInfo').textContent = !S.stops.length
+      ? (S.moments.length ? 'Buscando detenciones del bus…' : 'Se completa solo mientras se analiza el video.')
+      : `${T.paraderos} paradero${T.paraderos === 1 ? '' : 's'} con pasajeros${pend ? ` · ${pend} por analizar` : ''}${quiet ? ` · ${quiet} detención${quiet === 1 ? '' : 'es'} sin movimiento (semáforos)` : ''}`;
+    const tot = (v, label, cls) => { const d = el('div', 'tot'); const b = el('b', cls, String(v)); d.append(b, el('small', null, label)); return d; };
+    $('#totals').replaceChildren(
+      tot(T.paraderos, 'Paraderos'),
+      tot(T.suben, 'Suben'),
+      tot(T.pagan, 'Pagan', 'pay'),
+      tot(T.evaden, 'Evaden', 'evade'),
+      tot(pct(T.evaden, T.suben), 'Evasión', 'evade'),
+      tot(T.dudosos, 'Dudosos', 'doubt'),
+    );
+    const body = $('#stopRows');
+    const list = S.stops.filter((s) => s.estado !== 'listo' || moving(s));
+    if (!list.length) {
+      const tr = el('tr');
+      const td = el('td', 'empty', S.stops.length ? 'En las detenciones analizadas no subió ni bajó nadie.' : 'Todavía no hay paraderos analizados.');
+      td.colSpan = 8;
+      tr.append(td);
+      body.replaceChildren(tr);
+      return;
+    }
+    const rows = [];
+    for (const s of list) {
+      const c = counts(s);
+      const tr = el('tr', `stop-row${S.curStop === s ? ' cur' : ''}`);
+      const ready = s.estado === 'listo';
+      const lugar = s.dir || (s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : '—');
+      tr.append(
+        el('td', null, stopLabel(s)),
+        el('td', null, horaAt(s.t0) || mmss(s.t0)),
+        el('td', 'hide-sm', lugar),
+        el('td', 'n', ready ? String(c.suben) : '…'),
+        el('td', 'n pay', ready ? String(c.pagan) : ''),
+        el('td', 'n evade', ready ? String(c.evaden) : ''),
+        el('td', 'n doubt hide-sm', ready ? String(c.dudosos) : ''),
+        el('td', 'n hide-sm', ready ? String(c.bajan) : ''),
+      );
+      tr.onclick = () => { S.open = S.open === s ? null : s; renderStops(); goTo(s.t0); };
+      rows.push(tr);
+      if (S.open === s) {
+        const dt = el('tr', 'detail');
+        const td = el('td');
+        td.colSpan = 8;
+        if (s.estado === 'error') {
+          const again = el('button', 'btn small', 'Reintentar');
+          again.onclick = (e) => { e.stopPropagation(); S.run++; analyze(S.run); };
+          td.append(el('div', 'evade', s.resumen), again);
+        }
+        else if (!ready) td.append(el('div', 'muted', 'Todavía se está analizando este paradero.'));
+        else {
+          td.append(el('div', 'muted', `${lugar} · video ${mmss(s.t0)}–${mmss(s.t1)}${s.camara_util ? '' : ' · la cámara no permite ver bien la subida'}`));
+          if (s.resumen) td.append(el('div', null, s.resumen));
+          const ul = el('ul', 'people');
+          for (const p of s.personas) {
+            const li = el('li');
+            li.append(el('span', `tag ${p.res}`, p.res === 'paga' ? 'PAGA' : p.res === 'evade' ? 'EVADE' : 'DUDOSO'), el('span', null, `${p.desc} · ${horaAt(p.t) || mmss(p.t)}`));
+            li.onclick = (e) => { e.stopPropagation(); goTo(p.t - 1); };
+            ul.append(li);
+          }
+          if (s.personas.length) td.append(ul);
+        }
+        dt.append(td);
+        rows.push(dt);
+      }
+    }
+    body.replaceChildren(...rows);
   }
   function currentIndex(t) {
     let k = -1;
@@ -466,13 +794,19 @@
   function tick() {
     const t = video.currentTime || 0;
     moveBus(t);
+    const stop = S.stops.find((s) => t >= s.t0 && t <= s.t1 && (s.estado !== 'listo' || moving(s))) || null;
     const k = currentIndex(t);
-    if (k === S.cur) return;
+    if (k === S.cur && stop === S.curStop) return;
+    const stopChanged = stop !== S.curStop;
     S.cur = k;
+    S.curStop = stop;
+    if (stopChanged) document.querySelectorAll('tr.stop-row.cur').forEach((r) => r.classList.remove('cur'));
     document.querySelectorAll('.row.cur').forEach((r) => r.classList.remove('cur'));
     const m = S.moments[k];
     const meta = $('#nowMeta');
     meta.replaceChildren();
+    const fare = $('#nowFare');
+    fare.hidden = true;
     if (!m) { $('#nowText').textContent = S.file ? 'Analizando… en unos segundos aparece lo que se ve.' : 'Aquí verás lo que pasa en el video, momento a momento.'; $('#nowWhere').textContent = ''; return; }
     const row = document.querySelector(`.row[data-i="${k}"]`);
     if (row) {
@@ -481,12 +815,25 @@
       const box = $('#rows');
       if (!video.paused && box.scrollHeight > box.clientHeight + 4) box.scrollTop = row.offsetTop - box.clientHeight / 3;
     }
-    const chip = (txt, cls) => { const s = document.createElement('span'); s.className = `chip ${cls || ''}`; s.textContent = txt; meta.append(s); };
+    const chip = (txt, cls) => meta.append(el('span', `chip ${cls || ''}`, txt));
+    if (stop) chip(`Paradero ${stopLabel(stop)}`, 'stop');
     chip(`${mmss(m.t)} del video`);
-    if (m.hora) chip(`Hora ${m.hora}`);
+    if (m.hora) chip(`Hora ${horaAt(t)}`);
     if (m.vel != null) chip(`${m.vel} km/h`);
     if (m.alerta) chip('Revisar', 'alert');
     $('#nowText').textContent = m.descripcion || '—';
+    if (stop) {
+      fare.hidden = false;
+      fare.replaceChildren();
+      if (stop.estado !== 'listo') fare.append(el('span', 'muted', 'Contando pasajeros en este paradero…'));
+      else {
+        const c = counts(stop);
+        fare.append(`Suben ${c.suben}: `, el('span', 'pay', `${c.pagan} pagan`), ' · ', el('span', 'evade', `${c.evaden} evaden`));
+        if (c.dudosos) fare.append(' · ', el('span', 'doubt', `${c.dudosos} dudosos`));
+        if (c.bajan) fare.append(` · bajan ${c.bajan}`);
+      }
+      if (stopChanged) renderStops();
+    }
     where(m);
   }
   async function where(m) {
@@ -496,18 +843,81 @@
     const k = `${m.lat.toFixed(4)},${m.lon.toFixed(4)}`;
     out.textContent = `📍 ${S.addr[k] ? `${S.addr[k]} · ` : ''}${coords}`;
     if (S.addr[k] !== undefined) return;
-    S.addr[k] = null;
-    try {
-      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&accept-language=es&lat=${m.lat}&lon=${m.lon}`);
-      const j = await r.json();
-      const a = j.address || {};
-      S.addr[k] = [[a.road, a.house_number].filter(Boolean).join(' '), a.suburb || a.neighbourhood, a.city || a.town || a.village].filter(Boolean).join(', ') || null;
-      if (S.moments[S.cur] === m) out.textContent = `📍 ${S.addr[k] ? `${S.addr[k]} · ` : ''}${coords}`;
-    } catch { /* la dirección es opcional */ }
+    await addressOf(m.lat, m.lon);
+    if (S.moments[S.cur] === m) out.textContent = `📍 ${S.addr[k] ? `${S.addr[k]} · ` : ''}${coords}`;
   }
   video.addEventListener('timeupdate', tick);
   video.addEventListener('seeked', tick);
   (function loop() { if (!video.paused) tick(); requestAnimationFrame(loop); })();
+
+  // ---------------------------------------------------------------- exportar
+  const baseName = () => (S.file ? S.file.name.replace(/\.[^.]+$/, '') : 'video');
+  const dec = (v, d) => (v == null ? '' : v.toFixed(d).replace('.', ','));
+  function csv(rows) {
+    const cell = (v) => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    // Punto y coma y BOM para que Excel en español lo abra con columnas y tildes correctas.
+    return new Blob(['﻿' + rows.map((r) => r.map(cell).join(';')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  }
+  function download(name, blob) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    document.body.append(a);
+    a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+  }
+  const ready = () => {
+    if (S.stops.some((s) => s.estado === 'listo')) return true;
+    alert('Todavía no hay paraderos analizados para exportar.');
+    return false;
+  };
+  $('#btnCsvStops').onclick = () => {
+    if (!ready()) return;
+    const rows = [['Paradero', 'Hora llegada', 'Hora salida', 'Minuto video', 'Dirección', 'Latitud', 'Longitud', 'Suben', 'Pagan', 'Evaden', 'Dudosos', 'Bajan', '% evasión', 'Observación']];
+    for (const s of S.stops) {
+      if (!moving(s)) continue;
+      const c = counts(s);
+      rows.push([stopLabel(s), horaAt(s.t0), horaAt(s.t1), mmss(s.t0), s.dir || '', dec(s.lat, 6), dec(s.lon, 6), c.suben, c.pagan, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben), s.resumen]);
+    }
+    const T = totals();
+    rows.push(['TOTAL', '', '', '', '', '', '', T.suben, T.pagan, T.evaden, T.dudosos, T.bajan, pct(T.evaden, T.suben), '']);
+    download(`${baseName()}-paraderos.csv`, csv(rows));
+  };
+  $('#btnCsvPeople').onclick = () => {
+    if (!ready()) return;
+    const rows = [['Paradero', 'Hora', 'Minuto video', 'Dirección', 'Resultado', 'Descripción de la persona']];
+    for (const s of S.stops) for (const p of s.personas) rows.push([stopLabel(s), horaAt(p.t), mmss(p.t), s.dir || '', p.res === 'paga' ? 'Paga' : p.res === 'evade' ? 'Evade' : 'Dudoso', p.desc]);
+    download(`${baseName()}-detalle-personas.csv`, csv(rows));
+  };
+  $('#btnPdf').onclick = () => {
+    if (!ready()) return;
+    const T = totals();
+    const r = $('#report');
+    r.replaceChildren();
+    r.append(el('h1', null, 'Informe de pasajes y evasión'));
+    const first = S.moments.find((m) => m.hora);
+    r.append(el('div', null, `Video: ${S.file ? S.file.name : ''}${first ? ` · desde ${first.hora}` : ''} · generado ${new Date().toLocaleString('es-CL')}`));
+    r.append(el('div', null, `Paraderos con pasajeros: ${T.paraderos} · Suben: ${T.suben} · Pagan: ${T.pagan} · Evaden: ${T.evaden} (${pct(T.evaden, T.suben)}) · Dudosos: ${T.dudosos} · Bajan: ${T.bajan}`));
+    r.append(el('div', 'muted', 'Conteo automático hecho por IA a partir de las imágenes de la cámara; los casos dudosos deben revisarse en el video.'));
+    const table = (head, rows) => {
+      const t = el('table');
+      const hr = el('tr');
+      head.forEach((h) => hr.append(el('th', null, h)));
+      const th = el('thead');
+      th.append(hr);
+      const tb = el('tbody');
+      rows.forEach((row) => { const tr = el('tr'); row.forEach((v) => tr.append(el('td', null, String(v)))); tb.append(tr); });
+      t.append(th, tb);
+      return t;
+    };
+    r.append(el('h3', null, 'Resumen por paradero'));
+    r.append(table(['#', 'Llegada', 'Salida', 'Lugar', 'Suben', 'Pagan', 'Evaden', 'Dudosos', 'Bajan', 'Evasión'],
+      S.stops.filter(moving).map((s) => { const c = counts(s); return [stopLabel(s), horaAt(s.t0), horaAt(s.t1), s.dir || (s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : ''), c.suben, c.pagan, c.evaden, c.dudosos, c.bajan, pct(c.evaden, c.suben)]; })));
+    r.append(el('h3', null, 'Detalle por persona'));
+    r.append(table(['Paradero', 'Hora', 'Minuto video', 'Resultado', 'Persona'],
+      S.stops.flatMap((s) => s.personas.map((p) => [stopLabel(s), horaAt(p.t), mmss(p.t), p.res === 'paga' ? 'Paga' : p.res === 'evade' ? 'Evade' : 'Dudoso', p.desc]))));
+    window.print();
+  };
 
   $('#keyBox').onsubmit = (e) => {
     e.preventDefault();
@@ -521,6 +931,7 @@
   };
 
   initMap();
+  renderStops();
   if (!S.key) $('#keyBox').hidden = false;
 })();
 </script>
