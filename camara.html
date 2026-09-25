@@ -848,7 +848,9 @@
     const t = tRef();
     const ahead = S.frontier - t;
     const done = !S.running || S.frontier >= S.range.to - S.step;
-    if (!m.video.paused && S.running && S.auto && !done && ahead < 0.5) {
+    // Solo se espera a la IA si la reproducción la inició la página; si la persona le dio play o
+    // movió el video, se respeta y no se pausa.
+    if (!m.video.paused && S.autoDriven && S.running && S.auto && !done && ahead < 0.5) {
       S.autoPausing = true;
       m.video.pause();
       S.waiting = true;
@@ -858,7 +860,8 @@
         S.waiting = false;
         renderControls();
         m.video.playbackRate = S.rate;
-        m.video.play().catch(() => { m.video.muted = true; m.video.play().catch(() => {}); });
+        S.autoStarting = true;
+        m.video.play().catch(() => { m.video.muted = true; m.video.play().catch(() => { S.autoStarting = false; }); });
       }
     }
   }
@@ -870,7 +873,17 @@
   }, true);
   wall.addEventListener('play', (e) => {
     const m = mainCam();
-    if (m && e.target === m.video) { S.userPaused = false; S.waiting = false; renderControls(); }
+    if (m && e.target === m.video) {
+      S.autoDriven = !!S.autoStarting;
+      S.autoStarting = false;
+      S.userPaused = false;
+      S.waiting = false;
+      renderControls();
+    }
+  }, true);
+  wall.addEventListener('seeking', (e) => {
+    const m = mainCam();
+    if (m && e.target === m.video && !S.autoStarting) S.autoDriven = false;
   }, true);
 
   // Patente y fecha escritas en la imagen, para el informe.
