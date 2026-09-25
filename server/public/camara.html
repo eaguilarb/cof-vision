@@ -288,7 +288,7 @@
       <button class="btn small ghost" id="btnStaffRefDel" type="button" hidden>Quitar</button>
     </div>
     <div class="staff-row">
-      <label>IA para contar <select id="aiModel" class="svc-sel"><option value="flash">Gemini Flash (recomendado · ~US$ 2 por bus)</option><option value="pro">Gemini Pro (más preciso · ~US$ 5 por bus)</option><option value="lite">Gemini Flash-Lite (gratis, básico)</option></select></label>
+      <label>IA para contar <select id="aiModel" class="svc-sel"><option value="gratis">Gratis: rota entre los modelos gratuitos de Google (Flash y Gemma)</option><option value="flash">Gemini Flash de pago (~US$ 1 por expedición)</option><option value="pro">Gemini Pro de pago (más preciso · ~US$ 2,5 por expedición)</option></select></label>
       <span class="muted" id="costInfo"></span>
     </div>
     <div class="exports" id="modelNote" hidden></div>
@@ -318,17 +318,19 @@
   // «quick» recorre el video; «main» cuenta pasajeros, donde importa más la precisión.
   // Lecturas rápidas (coordenadas, descripciones) siempre con el modelo liviano; el conteo, con el que se elija.
   // Si el elegido no está disponible (por ejemplo, clave sin facturación), se baja al siguiente.
+  // En el plan gratuito cada modelo tiene su propio cupo diario: «gratis» rota entre todos los de nivel Flash
+  // (y Gemma 4, también de Google) antes de bajar a Flash-Lite.
   const MAIN = {
+    gratis: ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3-flash-preview', 'gemma-4-31b-it', 'gemma-4-26b-a4b-it', 'gemini-3.1-flash-lite', 'gemini-flash-lite-latest', 'gemini-3.5-flash-lite'],
+    flash: ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest'],
     pro: ['gemini-pro-latest', 'gemini-3.1-pro-preview', 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-flash-lite-latest'],
-    flash: ['gemini-flash-latest', 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest'],
-    lite: ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite'],
   };
   const MODELS = {
     quick: ['gemini-flash-lite-latest', 'gemini-3.5-flash-lite', 'gemini-flash-latest'],
     get main() { return MAIN[S.ai] || MAIN.flash; },
   };
   // Tarifas de Google en US$ por millón de tokens (entrada, salida), para estimar el gasto.
-  const PRICE = (m) => (/pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
+  const PRICE = (m) => (/gemma/.test(m) ? [0, 0] : /pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
   // En Railway la página la entrega el servidor, que agrega la clave: el navegador nunca la ve.
   const SERVER = !!window.COF_SERVER;
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -346,7 +348,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.25-5';
+  const VERSION = '2026.09.25-6';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -391,7 +393,7 @@
     range: null, frontier: 0, running: false, paused: false,
     staffRef: store.get('cofsimple:staffref', null),
     staffN: store.get('cofsimple:staffn', null),
-    ai: store.get('cofsimple:ai', 'flash'),
+    ai: ({ flash: 'flash', pro: 'pro' })[store.get('cofsimple:ai', 'gratis')] || 'gratis',
     spend: store.get('cofsimple:gasto', null),
     staff: store.get('cofsimple:staff2', 'Agentes de la empresa con uniforme negro (chaqueta y pantalón negros con franjas reflectantes, a menudo gorro negro), que suben al bus en el terminal antes de iniciar el recorrido o se paran en las puertas mientras el bus está detenido'),
     auto: store.get('cofsimple:auto', true), userPaused: false, autoPausing: false, waiting: false, rate: 1,
@@ -709,12 +711,12 @@
   }
   // Modelos en pausa: sin cupo gratuito (limit: 0), saturados o con el límite por minuto agotado.
   const COOL = {};
-  const MODEL_NAMES = { 'gemini-flash-lite-latest': 'Gemini Flash-Lite (básico)', 'gemini-3.5-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-flash-latest': 'Gemini Flash', 'gemini-3.8-flash': 'Gemini Flash', 'gemini-3.5-flash': 'Gemini Flash', 'gemini-pro-latest': 'Gemini Pro', 'gemini-3.1-pro-preview': 'Gemini Pro' };
+  const MODEL_NAMES = { 'gemini-flash-lite-latest': 'Gemini Flash-Lite (básico)', 'gemini-3.5-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-3.1-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-flash-latest': 'Gemini Flash', 'gemini-3.8-flash': 'Gemini Flash', 'gemini-3.7-flash': 'Gemini Flash', 'gemini-3.6-flash': 'Gemini Flash', 'gemini-3.5-flash': 'Gemini Flash', 'gemini-3-flash-preview': 'Gemini Flash', 'gemma-4-31b-it': 'Gemma 4', 'gemma-4-26b-a4b-it': 'Gemma 4', 'gemini-pro-latest': 'Gemini Pro', 'gemini-3.1-pro-preview': 'Gemini Pro' };
   const isLite = (m) => /lite/.test(m || '');
   // Gasto estimado del día según los tokens que informa Google (si la clave tiene facturación activa).
   const today = () => new Date().toLocaleDateString('sv');
   function addSpend(model, u) {
-    if (!u) return;
+    if (!u || S.ai === 'gratis') return;
     const [pin, pout] = PRICE(model);
     if (!S.spend || S.spend.dia !== today()) S.spend = { dia: today(), usd: 0, n: 0 };
     S.spend.usd += ((u.promptTokenCount || 0) * pin + ((u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0)) * pout) / 1e6;
@@ -724,11 +726,24 @@
   }
   function renderSpend() {
     const sp = S.spend && S.spend.dia === today() ? S.spend : null;
-    $('#costInfo').textContent = sp ? `Gasto estimado hoy: US$ ${sp.usd.toFixed(2)} en ${sp.n} consultas (solo se cobra si tu clave tiene facturación activa).` : '';
+    $('#costInfo').textContent = S.ai === 'gratis' ? 'Sin costo: usa los cupos diarios gratuitos de Google (se renuevan cada noche).' : sp ? `Gasto estimado hoy: US$ ${sp.usd.toFixed(2)} en ${sp.n} consultas (solo se cobra si tu clave tiene facturación activa).` : '';
+  }
+  // Saca el JSON de la respuesta. Algunos modelos (Gemma) escriben antes su razonamiento: se prueba el
+  // último bloque ```json y, si no, desde cada «{» o «[» hasta el final, quedándose con el primero que es JSON completo.
+  function jsonIn(text) {
+    try { return JSON.parse(text); } catch { /* sigue */ }
+    const fences = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)];
+    for (let i = fences.length - 1; i >= 0; i--) try { return JSON.parse(fences[i][1]); } catch { /* sigue */ }
+    const end = Math.max(text.lastIndexOf('}'), text.lastIndexOf(']'));
+    for (let i = 0; i < end; i++) {
+      if (text[i] !== '{' && text[i] !== '[') continue;
+      try { return JSON.parse(text.slice(i, end + 1)); } catch { /* sigue */ }
+    }
+    return undefined;
   }
   async function gemini(parts, run, tier) {
     const list = MODELS[tier];
-    for (let attempt = 0; attempt < 16; attempt++) {
+    for (let attempt = 0; attempt < 40; attempt++) {
       if (run !== S.run) return null;
       // El mejor modelo de la lista que no esté en pausa; si todos lo están, se espera al primero que vuelva.
       const now = Date.now();
@@ -746,7 +761,8 @@
         res = await fetch(`${API}/${model}:generateContent`, {
           method: 'POST',
           headers: SERVER ? { 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json', 'x-goog-api-key': S.key },
-          body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: { temperature: 0.1, responseMimeType: 'application/json' } }),
+          // Gemma no tiene modo JSON: se le pide en el texto y se extrae de la respuesta.
+          body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: /gemma/.test(model) ? { temperature: 0.1 } : { temperature: 0.1, responseMimeType: 'application/json' } }),
         });
       } catch {
         status('Sin conexión con Google. Reintentando…', null);
@@ -759,19 +775,18 @@
       }
       const body = await res.json().catch(() => ({}));
       if (res.ok) {
-        const text = ((body.candidates && body.candidates[0] && body.candidates[0].content && body.candidates[0].content.parts) || []).map((p) => p.text || '').join('');
+        const text = ((body.candidates && body.candidates[0] && body.candidates[0].content && body.candidates[0].content.parts) || []).filter((p) => !p.thought).map((p) => p.text || '').join('');
         S.lastModel = model;
         addSpend(model, body.usageMetadata);
-        try { return JSON.parse(text); } catch {
-          const m = text.match(/[[{][\s\S]*[\]}]/);
-          if (m) try { return JSON.parse(m[0]); } catch { /* reintenta */ }
-        }
+        const data = jsonIn(text);
+        if (data !== undefined) return data;
         continue;
       }
       const msg = (body.error && body.error.message) || res.statusText;
       if (res.status === 429) {
         // «limit: 0» = el plan gratuito no incluye ese modelo: no se vuelve a intentar en esta sesión.
-        COOL[model] = /limit: 0\b/.test(msg) ? Infinity : now + (retrySeconds(body) || 20) * 1000;
+        // Cupo del día agotado: ese modelo descansa una hora (el cupo se renueva a medianoche de California).
+        COOL[model] = /limit: 0\b/.test(msg) ? Infinity : /PerDay/i.test(JSON.stringify(body)) ? now + 3600000 : now + (retrySeconds(body) || 20) * 1000;
         continue;
       }
       if (res.status === 404) { COOL[model] = Infinity; continue; }
@@ -919,10 +934,12 @@
   $('#aiModel').onchange = (e) => {
     S.ai = e.target.value;
     store.set('cofsimple:ai', S.ai);
+    renderSpend();
     for (const k of Object.keys(COOL)) delete COOL[k]; // por si se activó la facturación: se vuelve a probar todo
     // Solo se ofrece recontar lo que se contó con un modelo más básico que el elegido.
     const rank = (m) => (/pro/.test(m) ? 2 : /lite/.test(m) ? 0 : 1);
-    const redo = S.stops.filter((x) => x.estado === 'listo' && x.modelo && rank(x.modelo) < rank(S.ai));
+    const want = S.ai === 'gratis' ? 1 : rank(S.ai);
+    const redo = S.stops.filter((x) => x.estado === 'listo' && x.modelo && rank(x.modelo) < want);
     if (!redo.length || !confirm(`¿Volver a contar ${redo.length === 1 ? 'el paradero ya contado' : `los ${redo.length} paraderos ya contados`} con ${$('#aiModel').selectedOptions[0].textContent.split(' (')[0]}? Las correcciones hechas a mano en esos paraderos se reemplazan.`)) return;
     for (const x of redo) x.estado = 'pendiente';
     save();
