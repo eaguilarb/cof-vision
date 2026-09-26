@@ -73,6 +73,9 @@
   .tile-line { position: absolute; right: 8px; top: 18%; z-index: 2; border: 1px solid #f5a300; background: rgba(0,0,0,.72); color: #ffd27a; font: 600 12px system-ui, sans-serif; padding: 4px 9px; border-radius: 6px; cursor: pointer; }
   .tile-line.warn { background: #f5a300; color: #1b1300; }
   .wall.grid .tile-line { top: 16%; font-size: 11px; padding: 3px 7px; }
+  .tile-line.val { top: calc(18% + 34px); border-color: #22c55e; color: #bbf7d0; }
+  .tile-line.val.warn { background: #22c55e; color: #052e12; }
+  .wall.grid .tile-line.val { top: calc(16% + 28px); }
   .tile .lbl { position: absolute; left: 6px; bottom: 6px; background: rgba(0,0,0,.65); color: #fff; font: 600 12px system-ui, sans-serif; padding: 2px 8px; border-radius: 4px; pointer-events: none; }
   .wall:not(.grid) .tile .lbl { display: none; }
   .drop { color: #c9d3dc; text-align: center; padding: 24px; }
@@ -324,6 +327,7 @@
     </div>
     <div class="staff-row">
       <label>IA para contar <select id="aiModel" class="svc-sel"><option value="gratis">Gratis: rota entre los modelos gratuitos de Google (Flash y Gemma)</option><option value="flash">Gemini Flash de pago (~US$ 1 por expedición)</option><option value="pro">Gemini Pro de pago (más preciso · ~US$ 2,5 por expedición)</option><option value="haiku">Claude Haiku (clave de Claude · ~US$ 0,7 por expedición)</option><option value="sonnet">Claude Sonnet (clave de Claude · ~US$ 1,4 por expedición)</option></select></label>
+      <label class="iarev" title="Sin marcar, el conteo usa solo el detector de personas y la luz del validador (gratis). Marcado, además una IA revisa a cada pasajero (si es agente, si subió), lo que cuesta."><input type="checkbox" id="iaRev"> Revisar cada pasajero con IA (cuesta)</label>
       <span id="claudeKey" hidden><input id="ckeyInput" type="password" autocomplete="off" placeholder="Clave de Claude (sk-ant-…)" style="width:220px"> <button class="btn small" id="btnCkey" type="button">Guardar</button> <label title="Al llegar a este gasto en el día, el conteo se detiene">Tope diario US$ <input id="topeInput" type="number" min="0" step="0.5" style="width:64px;min-width:0;flex:none"></label></span>
       <span class="muted" id="costInfo"></span>
     </div>
@@ -394,7 +398,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 6;
+  const COUNT_V = 7;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -408,7 +412,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.26-9';
+  const VERSION = '2026.09.26-10';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -459,7 +463,7 @@
     tope: store.get('cofsimple:tope', 1),
     spend: store.get('cofsimple:gasto', null),
     staff: store.get('cofsimple:staff2', 'Agentes de la empresa con uniforme negro (chaqueta y pantalón negros con franjas reflectantes, a menudo gorro negro), que suben al bus en el terminal antes de iniciar el recorrido o se paran en las puertas mientras el bus está detenido'),
-    auto: store.get('cofsimple:auto', true), userPaused: false, autoPausing: false, waiting: false, rate: 1,
+    auto: store.get('cofsimple:auto', true), iaRev: store.get('cofsimple:iarev', false), userPaused: false, autoPausing: false, waiting: false, rate: 1,
   };
   // La primera vez que se abre una copia con clave de Claude, se cuenta con Claude Haiku aunque antes se usara otra IA.
   // Una copia con una clave de Claude nueva la adopta (aunque el navegador tuviera guardada otra, por ejemplo una
@@ -473,7 +477,7 @@
   }
   const save = () => store.set(S.id, {
     v: 3, step: S.step, moments: S.moments, stops: S.stops, range: S.range, startManual: S.startManual, meta: S.meta,
-    cams: Object.fromEntries(S.cams.map((c) => [c.key, { tipo: c.tipo, validador: c.validador, off: c.off, desc: c.desc, coords: c.coords, manual: c.manual, line: c.line || null }])),
+    cams: Object.fromEntries(S.cams.map((c) => [c.key, { tipo: c.tipo, validador: c.validador, off: c.off, desc: c.desc, coords: c.coords, manual: c.manual, line: c.line || null, valz: c.valz || null }])),
   });
   const mainCam = () => S.cams[S.main] || null;
   const refCam = () => S.cams[S.ref] || null;
@@ -542,8 +546,13 @@
       lb.type = 'button';
       lb.hidden = true;
       lb.onclick = (e) => { e.stopPropagation(); editLine(c); };
-      tile.append(c.video, el('span', 'lbl', c.label), lb);
+      const vb = el('button', 'tile-line val', '');
+      vb.type = 'button';
+      vb.hidden = true;
+      vb.onclick = (e) => { e.stopPropagation(); editVal(c); };
+      tile.append(c.video, el('span', 'lbl', c.label), lb, vb);
       c.lineBtn = lb;
+      c.valBtn = vb;
       c.live = null;
       c.linePr = null;
       tile.onclick = () => { if (S.grid && S.main !== S.cams.indexOf(c)) setMain(S.cams.indexOf(c)); };
@@ -755,6 +764,12 @@
     c.lineBtn.hidden = !door;
     c.lineBtn.classList.toggle('warn', door && (!c.line || !!c.line.auto));
     c.lineBtn.textContent = !c.line ? '✏ Dibujar la línea de esta puerta' : c.line.auto ? '✏ Línea automática: revísala' : '✏ Línea de conteo';
+    if (c.valBtn) {
+      const v = door && hasValidator(c);
+      c.valBtn.hidden = !v;
+      c.valBtn.classList.toggle('warn', v && (!c.valz || !!c.valz.auto));
+      c.valBtn.textContent = !c.valz ? '💡 Marcar el validador' : c.valz.auto ? '💡 ¿Es este el validador? Confírmalo' : '💡 Validador ✓';
+    }
   }
   function renderCams() {
     S.cams.forEach(tileLineBtn);
@@ -802,7 +817,12 @@
       lineBtn.title = 'La línea en el umbral de la puerta: quien la cruza hacia adentro, sube';
       lineBtn.hidden = !/^puerta_/.test(c.tipo || '');
       lineBtn.onclick = () => editLine(c);
-      row.append(el('b', null, c.label), sel, vl, ol, lineBtn);
+      const valBtn = el('button', `btn small ${c.valz && !c.valz.auto ? '' : 'ghost'}`, c.valz ? (c.valz.auto ? '💡 Validador (automático)' : '💡 Validador ✓') : '💡 Marcar validador');
+      valBtn.type = 'button';
+      valBtn.title = 'La pantalla del validador: cada vez que se pone verde es un pago';
+      valBtn.hidden = !hasValidator(c);
+      valBtn.onclick = () => editVal(c);
+      row.append(el('b', null, c.label), sel, vl, ol, lineBtn, valBtn);
       const d = el('div', 'desc', c.bad ? 'No se pudo abrir este video.' : `${c.name}${S.cams.indexOf(c) === S.ref ? ' · principal (de aquí se leen coordenadas y velocidad)' : ''}${c.desc ? ` · ${c.desc}` : ''}`);
       return [row, d];
     }));
@@ -1077,6 +1097,7 @@
       if (!(await identify(run))) return;
       if (!(await readMeta(run))) return;
       recallLines();
+      recallVals();
       for (const c of doorCams()) if (!c.line) autoLine(c, run).catch(() => {});
       S.step = S.D <= 120 ? 2 : S.D <= 1200 ? 3 : 4;
       const m = mainCam();
@@ -1218,6 +1239,12 @@
     restart();
   };
   $('#aiModel').value = S.ai;
+  $('#iaRev').checked = S.iaRev;
+  $('#iaRev').onchange = (e) => {
+    S.iaRev = e.target.checked;
+    store.set('cofsimple:iarev', S.iaRev);
+    status(S.iaRev ? 'La IA revisará a cada pasajero en los próximos paraderos que se cuenten (tiene costo).' : 'Conteo sin IA: detector de personas y luz del validador (gratis).', null);
+  };
   $('#ckeyInput').value = S.ckey ? '••••••••' : '';
   $('#topeInput').value = String(S.tope);
   $('#topeInput').onchange = (e) => { const v = num(e.target.value); S.tope = v != null && v >= 0 ? v : 1; store.set('cofsimple:tope', S.tope); e.target.value = String(S.tope); };
@@ -1698,14 +1725,36 @@
     }
     for (const t of times) yield { t, f: await frameOf(c, t, 160) };
   }
+  // Verde intenso: la pantalla del validador cuando acepta la tarjeta.
+  // Acepta también el verde claro (cámaras con mucha luz lo lavan) y descarta blancos y grises.
+  const isGreen = (r, g, b) => g > 100 && g - Math.max(r, b) >= 30 && g - Math.min(r, b) >= 60;
   async function motionOf(c, t0, t1, run) {
     const out = [];
     const times = [];
     for (let t = t0; t <= t1 + 1e-6; t += MOTION_STEP) times.push(t);
     let prev = null;
+    // Además del movimiento, se anotan los puntos verde intenso de cada foto (para la luz del validador).
+    out.green = [];
     for await (const { t, f } of motionFrames(c, times)) {
       if (run !== S.run) return out;
       if (!f) { prev = null; continue; }
+      {
+        const full = f.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, f.width, f.height).data;
+        // Solo manchas verdes compactas (una pantalla encendida): las líneas finas verdes en los bordes de los
+        // fierros son ruido de la compresión del video y se descartan.
+        const W = f.width, N = W * f.height;
+        const m = new Uint8Array(N);
+        for (let i = 0; i < N; i++) if (isGreen(full[i * 4], full[i * 4 + 1], full[i * 4 + 2])) m[i] = 1;
+        const idx = [];
+        for (let i = W + 1; i < N - W - 1; i++) {
+          if (!m[i]) continue;
+          const nb = m[i - 1] + m[i + 1] + m[i - W] + m[i + W] + m[i - W - 1] + m[i - W + 1] + m[i + W - 1] + m[i + W + 1];
+          if (nb >= 3) idx.push(i);
+        }
+        out.green.push({ t, idx });
+        out.W = f.width;
+        out.H = f.height;
+      }
       const y0 = Math.round(f.height * 0.14);
       const h = Math.round(f.height * 0.86) - y0;
       const d = f.getContext('2d', { willReadFrequently: true }).getImageData(0, y0, f.width, h).data;
@@ -1881,12 +1930,16 @@
     return T.tracks;
   }
   // Línea de conteo (LineZone): lado de cada punto respecto de la línea y si cae dentro del largo de la línea.
-  function lineSide(line, P) {
+  // Con margen («band»): los pies que quedan pegados a la línea (la persona parada pagando en el escalón) no
+  // cuentan para ningún lado, así los pequeños movimientos no suman subidas y bajadas falsas.
+  const LINE_BAND = 0.03;
+  function lineSide(line, P, band = 0) {
     const [ax, ay] = line.a, [bx, by] = line.b;
-    const v = Math.sign((bx - ax) * (P[1] - ay) - (by - ay) * (P[0] - ax));
     const dx = bx - ax, dy = by - ay;
+    const dist = ((bx - ax) * (P[1] - ay) - (by - ay) * (P[0] - ax)) / (Math.hypot(dx, dy) || 1);
     const pr = ((P[0] - ax) * dx + (P[1] - ay) * dy) / (dx * dx + dy * dy || 1);
-    return pr < -0.2 || pr > 1.2 ? 0 : v;
+    if (pr < -0.2 || pr > 1.2 || Math.abs(dist) < band) return 0;
+    return Math.sign(dist);
   }
   function segDist(line, P) {
     const [ax, ay] = line.a, [bx, by] = line.b;
@@ -1900,8 +1953,9 @@
   // mal medido (tapado por un pasamanos o un bolso) no cambia el resultado.
   const majority = (arr, fromEnd) => { const v = (fromEnd ? arr.slice(-3) : arr.slice(0, 3)).map((x) => x.s); const sum = v.reduce((a, b) => a + b, 0); return sum ? Math.sign(sum) : fromEnd ? v[v.length - 1] : v[0]; };
   function crossing(tr, line) {
-    const sides = tr.boxes.map((b) => ({ i: b.i, s: lineSide(line, boxFoot(b.box)) })).filter((x) => x.s);
-    if (sides.length < 3) return null;
+    const sides = tr.boxes.map((b) => ({ i: b.i, s: lineSide(line, boxFoot(b.box), LINE_BAND) })).filter((x) => x.s);
+    // Tres posiciones, o dos bien claras (una lejos afuera y otra lejos adentro).
+    if (sides.length < 2 || (sides.length === 2 && tr.boxes.filter((b) => lineSide(line, boxFoot(b.box), LINE_BAND * 2)).length < 2)) return null;
     const first = majority(sides, false), last = majority(sides, true);
     if (first === last) return null;
     const at = sides.find((x) => x.s === last && x.i > sides[0].i);
@@ -2127,6 +2181,138 @@
     if (n) { save(); renderCams(); }
   }
 
+  // ---------------------------------------------------------------- luz del validador (sin IA)
+  // Cada vez que alguien paga, la pantalla del validador se pone verde. La zona del validador se aprende sola
+  // (el punto donde aparece y desaparece un verde intenso, paradero tras paradero) o se marca a mano.
+  function learnValZone(c, mot) {
+    if (!hasValidator(c) || !mot || !mot.green || !mot.green.length || !mot.W) return;
+    if (c.valz && !c.valz.auto) return;
+    const W = mot.W, H = mot.H, n = mot.green.length;
+    if (!c.gheat || c.gheat.length !== W * H) c.gheat = new Float32Array(W * H);
+    // Solo cuentan los destellos: un verde que se prende 0,5 a 3,5 s y que antes y después estuvo apagado al menos
+    // 1 s (un pago). El pasto, el techo verde de un auto o un letrero quedan prendidos o parpadean sin apagarse.
+    const N = W * H, F = mot.green.length;
+    const on = new Uint8Array(N * F);
+    mot.green.forEach((g, k) => { for (const i of g.idx) on[i * F + k] = 1; });
+    const gap = Math.round(1 / MOTION_STEP), maxRun = Math.round(VAL_MAX / MOTION_STEP);
+    for (let i = 0; i < N; i++) {
+      const base = i * F;
+      let k = 0;
+      while (k < F) {
+        if (!on[base + k]) { k++; continue; }
+        let e = k;
+        while (e < F && on[base + e]) e++;
+        const len = e - k;
+        let before = 0, after = 0;
+        for (let j = k - 1; j >= 0 && !on[base + j] && before < gap; j--) before++;
+        for (let j = e; j < F && !on[base + j] && after < gap; j++) after++;
+        if (len >= 2 && len <= maxRun && before >= gap && after >= gap) c.gheat[i] += 1;
+        k = e;
+      }
+    }
+    if (n < 2) return;
+    const r = 3;
+    let best = 0, bx = 0, by = 0;
+    for (let y = Math.round(H * 0.12); y < Math.round(H * 0.88) - r; y++) {
+      for (let x = 0; x < W - r; x++) {
+        let sum = 0;
+        for (let yy = y; yy < y + r; yy++) for (let xx = x; xx < x + r; xx++) sum += c.gheat[yy * W + xx];
+        if (sum > best) { best = sum; bx = x; by = y; }
+      }
+    }
+    if (best < 12) return;
+    const cx = (bx + r / 2) / W, cy = (by + r / 2) / H;
+    c.valz = { x0: clamp(cx - 0.07, 0, 1), y0: clamp(cy - 0.09, 0, 1), x1: clamp(cx + 0.07, 0, 1), y1: clamp(cy + 0.09, 0, 1), auto: true };
+    tileLineBtn(c);
+  }
+  const VAL_MAX = 3.5;
+  // Momentos en que el validador se puso verde (cada uno es un pago).
+  function greenEvents(mot, z) {
+    if (!mot || !mot.green || !mot.W || !z) return [];
+    const W = mot.W, H = mot.H;
+    const x0 = Math.floor(z.x0 * W), x1 = Math.ceil(z.x1 * W), y0 = Math.floor(z.y0 * H), y1 = Math.ceil(z.y1 * H);
+    const ev = [];
+    let cur = null;
+    for (const g of mot.green) {
+      let n = 0;
+      for (const i of g.idx) { const x = i % W, y = (i / W) | 0; if (x >= x0 && x < x1 && y >= y0 && y < y1) n++; }
+      if (n < 2) continue;
+      if (cur && g.t - cur.t1 <= MOTION_STEP * 1.6) cur.t1 = g.t;
+      else { cur = { t0: g.t, t1: g.t }; ev.push(cur); }
+    }
+    // Un verde que se queda prendido mucho rato no es un pago (es algo verde del paisaje).
+    const out = ev.filter((e) => e.t1 - e.t0 <= VAL_MAX).map((e) => ({ t: (e.t0 + e.t1) / 2 }));
+    // Un destello que se repite como un reloj (cada segundo, sin parar) es ruido del video, no pagos.
+    if (out.length >= 6) {
+      const gaps = out.slice(1).map((e, k) => e.t - out[k].t).sort((a, b) => a - b);
+      const med = gaps[gaps.length >> 1];
+      const regular = gaps.filter((g) => Math.abs(g - med) <= 0.35).length / gaps.length;
+      if (med <= 1.6 && regular >= 0.7) return [];
+    }
+    return out;
+  }
+  const VAL_MEM = (c) => { const k = lineKey(c); return k ? `${k}|validador` : null; };
+  function rememberVal(c) {
+    const k = VAL_MEM(c);
+    if (!k) return;
+    const m = store.get(LINE_MEM, {}) || {};
+    if (c.valz && !c.valz.auto) m[k] = c.valz; else delete m[k];
+    store.set(LINE_MEM, m);
+  }
+  function recallVals() {
+    const m = store.get(LINE_MEM, {}) || {};
+    for (const c of S.cams) { const k = VAL_MEM(c); if (k && m[k] && (!c.valz || c.valz.auto)) c.valz = m[k]; }
+  }
+  // Marcar a mano la luz del validador: un clic sobre la pantalla del validador.
+  async function editVal(c) {
+    const f = await frameOf(c, clamp(tRef(), 0, Math.max(0, c.dur - 1)), 960);
+    if (!f) return status('No se pudo tomar una imagen de esa cámara en este momento. Mueve el video y reintenta.', null, true);
+    const box = el('div', 'line-modal');
+    const inner = el('div', 'line-box');
+    const help = el('div', 'line-help', c.valz && c.valz.auto ? `${camName(c)}: el programa cree que el validador está en el recuadro verde. Si es correcto, toca «Guardar validador»; si no, haz clic sobre la pantalla del validador.` : `${camName(c)}: haz clic sobre la pantalla del validador (donde se enciende la luz verde al pagar). Conviene pausar el video en un momento en que se vea verde.`);
+    const cv = document.createElement('canvas');
+    cv.width = f.width;
+    cv.height = f.height;
+    const g = cv.getContext('2d');
+    let z = c.valz ? { ...c.valz } : null;
+    const draw = () => {
+      g.drawImage(f, 0, 0);
+      if (!z) return;
+      g.lineWidth = 4;
+      g.strokeStyle = '#22c55e';
+      g.strokeRect(z.x0 * cv.width, z.y0 * cv.height, (z.x1 - z.x0) * cv.width, (z.y1 - z.y0) * cv.height);
+    };
+    cv.onclick = (e) => {
+      const r = cv.getBoundingClientRect();
+      const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+      z = { x0: clamp(x - 0.05, 0, 1), y0: clamp(y - 0.07, 0, 1), x1: clamp(x + 0.05, 0, 1), y1: clamp(y + 0.07, 0, 1) };
+      help.textContent = 'Listo: el recuadro verde debe encerrar la pantalla del validador. Guarda, o haz clic de nuevo.';
+      draw();
+    };
+    const bar = el('div', 'line-bar');
+    const ok = el('button', 'btn small', 'Guardar validador');
+    const auto = el('button', 'btn small ghost', 'Que lo busque solo');
+    const cancel = el('button', 'btn small ghost', 'Cancelar');
+    [ok, auto, cancel].forEach((b) => { b.type = 'button'; });
+    const close = () => box.remove();
+    ok.onclick = () => {
+      if (!z) return (help.textContent = 'Falta hacer clic sobre el validador.');
+      c.valz = { x0: z.x0, y0: z.y0, x1: z.x1, y1: z.y1 };
+      rememberVal(c);
+      save();
+      renderCams();
+      close();
+      status(`Validador marcado en ${camName(c)}. Usa «Volver a contar» para aplicarlo a los paraderos ya contados.`, null);
+    };
+    auto.onclick = () => { c.valz = null; c.gheat = null; rememberVal(c); save(); renderCams(); close(); };
+    cancel.onclick = close;
+    bar.append(ok, auto, cancel);
+    inner.append(help, cv, bar);
+    box.append(inner);
+    document.body.append(box);
+    draw();
+  }
+
   // ---------------------------------------------------------------- detección en vivo sobre cada cámara
   // Como el contador de Supervision: recuadro y número de cada persona, su recorrido, la línea de la puerta y
   // cuántos la cruzan hacia adentro (suben) y hacia afuera (bajan) mientras se ve el video.
@@ -2164,7 +2350,7 @@
       g.setLineDash(c.line.auto ? [10 * dpr, 6 * dpr] : []);
       g.beginPath(); g.moveTo(X(a[0]), Yp(a[1])); g.lineTo(X(b[0]), Yp(b[1])); g.stroke();
       g.setLineDash([]);
-      const txt = `SUBEN ${L ? L.cin : 0} · BAJAN ${L ? L.cout : 0}`;
+      const txt = hasValidator(c) && c.valz ? `SUBEN ${L ? L.cin : 0} · PAGAN ${L ? L.pay || 0 : 0} · BAJAN ${L ? L.cout : 0}` : `SUBEN ${L ? L.cin : 0} · BAJAN ${L ? L.cout : 0}`;
       g.font = `bold ${13 * dpr}px system-ui, sans-serif`;
       const tw = g.measureText(txt).width + 12 * dpr;
       // El marcador va en el extremo derecho de la línea, para no tapar a quien pasa por el medio.
@@ -2174,6 +2360,24 @@
       g.fillRect(mx, my, tw, 20 * dpr);
       g.fillStyle = '#fff';
       g.fillText(txt, mx + 6 * dpr, my + 15 * dpr);
+    }
+    if (c.valz) {
+      const z = c.valz;
+      const on = L && L.gOn;
+      g.lineWidth = 2 * dpr;
+      g.strokeStyle = '#22c55e';
+      g.setLineDash(on ? [] : [5 * dpr, 4 * dpr]);
+      g.strokeRect(X(z.x0), Yp(z.y0), X(z.x1) - X(z.x0), Yp(z.y1) - Yp(z.y0));
+      g.setLineDash([]);
+      if (on) {
+        g.fillStyle = 'rgba(34,197,94,.25)';
+        g.fillRect(X(z.x0), Yp(z.y0), X(z.x1) - X(z.x0), Yp(z.y1) - Yp(z.y0));
+        g.font = `bold ${12 * dpr}px system-ui, sans-serif`;
+        g.fillStyle = '#22c55e';
+        g.fillRect(X(z.x0), Yp(z.y1), 60 * dpr, 16 * dpr);
+        g.fillStyle = '#052e12';
+        g.fillText('✓ PAGÓ', X(z.x0) + 4 * dpr, Yp(z.y1) + 12 * dpr);
+      }
     }
     if (!fresh) return;
     for (const d of L.dets) {
@@ -2223,7 +2427,7 @@
         const t = c.video.currentTime;
         const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [], cin: 0, cout: 0 });
         if (Math.abs(t - L.t) < 0.04) { drawLive(c); await nap(120); continue; }
-        if (t < L.t || t - L.t > 2.5) { L.T = makeTracker(); L.cin = 0; L.cout = 0; }
+        if (t < L.t || t - L.t > 2.5) { L.T = makeTracker(); L.cin = 0; L.cout = 0; L.pay = 0; }
         const dets = await yoloDetect(c.video, true);
         if (!dets) { if (Y.failed) { liveNote(`No se pudo cargar el detector de personas (${Y.failed}).`); break; } await nap(250); continue; }
         L.t = t;
@@ -2234,12 +2438,17 @@
             const last = tr.boxes[tr.boxes.length - 1];
             if (last.i !== tr.last) continue;
             if (segDist(c.line, boxFoot(last.box)) < 0.12) tr.door = true;
-            const sd = lineSide(c.line, boxFoot(last.box));
+            const sd = lineSide(c.line, boxFoot(last.box), LINE_BAND);
             if (!sd) continue;
-            if (tr.side && sd !== tr.side) {
-              if (sd === c.line.inside) { L.cin++; tr.dir = 'in'; } else { L.cout++; tr.dir = 'out'; }
+            // El lado cuenta cuando se repite dos veces seguidas; si la persona vuelve, se descuenta: cada una
+            // suma a lo más una vez.
+            tr.hist = [...(tr.hist || []), sd].slice(-2);
+            if (tr.hist.length < 2 || tr.hist[0] !== tr.hist[1]) continue;
+            if (tr.est && sd !== tr.est) {
+              if (sd === c.line.inside) { if (tr.dir === 'out') { L.cout--; tr.dir = null; } else { L.cin++; tr.dir = 'in'; } }
+              else if (tr.dir === 'in') { L.cin--; tr.dir = null; } else { L.cout++; tr.dir = 'out'; }
             }
-            tr.side = sd;
+            tr.est = sd;
           }
         }
         for (const x of cams) drawLive(x);
@@ -2249,6 +2458,31 @@
       LIVE.busy = false;
     }
   }
+  // Luz del validador en vivo: se mira la zona varias veces por segundo (es muy barato) y cada verde suma un pago.
+  function zoneGreen(c) {
+    const z = c.valz, v = c.video;
+    const W = v.videoWidth, H = v.videoHeight;
+    if (!W || !H) return 0;
+    const cv = Y.gz || (Y.gz = newCanvas(32, 32));
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    g.drawImage(v, z.x0 * W, z.y0 * H, (z.x1 - z.x0) * W, (z.y1 - z.y0) * H, 0, 0, 32, 32);
+    const d = g.getImageData(0, 0, 32, 32).data;
+    let n = 0;
+    for (let i = 0; i < 1024; i++) if (isGreen(d[i * 4], d[i * 4 + 1], d[i * 4 + 2])) n++;
+    return n;
+  }
+  setInterval(() => {
+    if (!LIVE.on || document.hidden) return;
+    for (const c of S.cams) {
+      if (!c.valz || c.bad || !c.tile || c.tile.hidden || c.video.readyState < 2) continue;
+      const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [], cin: 0, cout: 0, pay: 0 });
+      const on = zoneGreen(c) >= 12;
+      const t = c.video.currentTime;
+      if (on && !L.gOn && t - (L.gEnd ?? -9) > 0.4) L.pay = (L.pay || 0) + 1;
+      if (!on && L.gOn) L.gEnd = t;
+      if (on !== !!L.gOn) { L.gOn = on; drawLive(c); }
+    }
+  }, 150);
   function setLive(on) {
     LIVE.on = on;
     store.set('cofsimple:vivo', on);
@@ -2288,10 +2522,11 @@
     return cv;
   }
   // Tiempos a revisar en una puerta: cada medio segundo, solo cerca de los momentos con movimiento.
-  async function lineTimes(c, s, run, cap = 96) {
+  async function lineTimes(c, s, run, cap = 96, keepMot = null) {
     const all = [];
     for (let t = s.t0; t <= s.t1 + 1e-6; t += LINE_STEP) all.push(+t.toFixed(2));
     const mot = await withTimeout(motionOf(c, s.t0, s.t1, run), Math.max(20000, (s.t1 - s.t0) * 1500), null);
+    if (keepMot) keepMot.mot = mot;
     const busy = mot && mot.length ? mot.filter((m) => m.e >= 0.8).map((m) => m.t) : null;
     if (busy && !busy.length) return [];
     const keep = busy ? all.filter((t) => busy.some((b) => Math.abs(b - t) <= 1.5)) : all;
@@ -2303,9 +2538,15 @@
   // Conteo de una puerta con línea: devuelve a quienes subieron (con fotos anotadas) o null si no se pudo.
   async function lineCount(s, c, run) {
     // Con el detector en el computador (sin costo) se miran más fotos por paradero.
-    const times = await lineTimes(c, s, run, (await yolo()) ? 160 : 96);
+    const keep = {};
+    const times = await lineTimes(c, s, run, (await yolo()) ? 160 : 96, keep);
     if (run !== S.run) return null;
-    if (!times.length) return { c, quiet: true, boarders: [], bajan: 0 };
+    // Luz del validador en esta detención (pagos), sin IA.
+    learnValZone(c, keep.mot);
+    const greens = hasValidator(c) ? greenEvents(keep.mot, c.valz) : [];
+    if (c.valz && greens.length) c.valz.hits = (c.valz.hits || 0) + greens.length;
+    if (window.__cofDebug && keep.mot && keep.mot.green) (window.__cofDebug.greens = window.__cofDebug.greens || []).push({ cam: c.label, valz: c.valz, W: keep.mot.W, H: keep.mot.H, n: keep.mot.green.length, t: keep.mot.green.map((g) => +g.t.toFixed(2)), px: keep.mot.green.map((g) => g.idx.length), greens }); // solo para pruebas
+    if (!times.length) return { c, quiet: true, boarders: [], bajan: 0, greens };
     // Detector YOLO en el computador; si no se pudo cargar, la IA rápida marca a las personas.
     let frames = (await yolo()) ? await yoloFrames(c, times, run, s) : null;
     const how = frames ? 'detector YOLO' : 'IA';
@@ -2332,7 +2573,7 @@
         if (dd[0].d > 0.08) continue;
         const k = tr.boxes.indexOf(dd[0].b);
         const pick = [tr.boxes[0], tr.boxes[k], tr.boxes[tr.boxes.length - 1]].filter((v, j, a) => a.indexOf(v) === j);
-        specs.push({ near: true, tr, at: dd[0].b.i, d: dd[0].d, box: dd[0].b.box, pick, where: pick.map((b) => ['en el umbral', 'adentro', 'afuera'][[0, 1, -1].indexOf(pos(b))] || 'en el umbral') });
+        specs.push({ near: true, fromOut: majority(ps, false) === -1 && tr.boxes.length >= 3, tr, at: dd[0].b.i, d: dd[0].d, box: dd[0].b.box, pick, where: pick.map((b) => ['en el umbral', 'adentro', 'afuera'][[0, 1, -1].indexOf(pos(b))] || 'en el umbral') });
         continue;
       }
       if (x.dir === 'out') { bajan++; continue; }
@@ -2349,12 +2590,12 @@
       need.forEach((i, j) => { frames[i].f = got[j]; });
     }
     const out = use.filter((x) => frames[x.at].f).map((x) => ({
-      c, tr: x.tr, t: frames[x.at].t, d: x.d, near: x.near, box: x.box,
+      c, tr: x.tr, t: frames[x.at].t, d: x.d, near: x.near, fromOut: !!x.fromOut, box: x.box,
       thumb: annotate(frames[x.at], c.line, x.tr, frames).toDataURL('image/jpeg', 0.8),
       views: x.pick.filter((b) => frames[b.i].f).map((b) => annotate(frames[b.i], c.line, x.tr, frames, '#00e5ff')),
       where: x.pick.filter((b) => frames[b.i].f).map((b) => x.where[x.pick.indexOf(b)]),
     }));
-    return { c, boarders: out.filter((x) => !x.near), near: out.filter((x) => x.near), bajan, frames: frames.length, tracks: tracks.length, how };
+    return { c, boarders: out.filter((x) => !x.near), near: out.filter((x) => x.near), bajan, frames: frames.length, tracks: tracks.length, how, greens };
   }
   // La IA de conteo revisa a cada pasajero que cruzó la línea: si es personal y si pagó.
   async function verifyBoarders(s, boarders, valCams, run) {
@@ -2466,7 +2707,11 @@
     for (const c of outside) { const f = await frameOf(c, s.t0 + span / 2, 640); if (f) extra.push({ t: s.t0 + span / 2, f }); }
     let results;
     try {
-      results = await Promise.all(plans.map((p, i) => (p.quiet ? Promise.resolve({ meta: [], r: { suben: [], resumen: 'Sin movimiento en esta puerta: nadie sube.' }, quiet: true }) : countDoor(s, p.c, p.times, run, hasValidator(p.c) && i === 0 ? extra : null))));
+      // Sin la revisión con IA activada, una puerta que el detector no pudo seguir queda para revisar a mano
+      // (no se gasta IA).
+      results = await Promise.all(plans.map((p, i) => (p.quiet ? Promise.resolve({ meta: [], r: { suben: [], resumen: 'Sin movimiento en esta puerta: nadie sube.' }, quiet: true })
+        : !S.iaRev ? Promise.resolve({ meta: [], r: { suben: [], resumen: 'el detector no pudo seguir a las personas en esta puerta: revísala en el video' }, quiet: true, nodet: true })
+          : countDoor(s, p.c, p.times, run, hasValidator(p.c) && i === 0 ? extra : null))));
     } catch (e) {
       if (e.badKey || e.claudeKey || e.stop) throw e;
       s.estado = 'error';
@@ -2482,12 +2727,35 @@
     const crossed = lineRes.flatMap((x) => x.boarders);
     const boarders = [...crossed, ...lineRes.flatMap((x) => x.near || []).sort((p, q) => p.d - q.d).slice(0, Math.max(0, 12 - crossed.length))];
     let ver = null;
-    if (boarders.length) {
+    if (boarders.length && S.iaRev) {
       const valCams = allDoors.filter((c) => hasValidator(c) && lineRes.some((x) => x.c === c));
       try { ver = await verifyBoarders(s, boarders, boarders.some((b) => !hasValidator(b.c)) ? valCams : [], run); } catch (e) { if (e.badKey || e.claudeKey || e.stop) throw e; ver = null; }
       if (run !== S.run) return false;
     }
     if (!results.some((x) => x.meta.length || x.quiet) && !lineRes.length) { s.estado = 'error'; s.resumen = 'Ninguna cámara de puerta grabó este momento.'; S.counting = null; save(); rebuild(); return true; }
+    // Pagos según la luz verde del validador: cada verde se asigna a quien subió por la puerta delantera más cerca
+    // de ese momento; los verdes que sobran, a quienes subieron por otra puerta y fueron a validar. Quien sube
+    // por la puerta del validador sin un verde queda como posible evasión (con su foto para revisar).
+    const valDoors = lineRes.filter((x) => hasValidator(x.c));
+    // Solo un validador confirmado por el fiscalizador decide quién pagó; el que ubica el programa es una sugerencia.
+    const valKnown = valDoors.some((x) => x.c.valz && !x.c.valz.auto);
+    const greens = valDoors.flatMap((x) => x.greens || []).map((g) => ({ t: g.t, used: false })).sort((a, b) => a.t - b.t);
+    const payOf = new Map();
+    if (valKnown) {
+      const ordered = [...boarders].sort((a, b) => a.t - b.t);
+      const front = ordered.filter((b) => hasValidator(b.c));
+      for (const g of greens) {
+        let pick = null;
+        for (const b of front) if (!payOf.has(b) && Math.abs(b.t - g.t) <= 8 && (!pick || Math.abs(b.t - g.t) < Math.abs(pick.t - g.t))) pick = b;
+        if (pick) { payOf.set(pick, true); g.used = true; }
+      }
+      for (const g of greens.filter((x) => !x.used)) {
+        const b = ordered.find((x) => !hasValidator(x.c) && !payOf.has(x) && g.t >= x.t - 2 && g.t - x.t <= 30);
+        if (b) { payOf.set(b, true); g.used = true; }
+      }
+      // Sin verde = posible evasión (con su foto, para que el fiscalizador lo confirme).
+      for (const b of front) if (!payOf.has(b)) payOf.set(b, false);
+    }
     // Unir las puertas: cada imagen de cada puerta queda numerada en una sola lista (para las fotos del detalle).
     const allMeta = [];
     const personas = [];
@@ -2525,7 +2793,7 @@
       if (val) fromInside += Math.max(0, Math.round(num(r.validan_desde_adentro) || 0));
       if (r.zona_paga && typeof r.zona_paga === 'object') zp = zp && zp.es ? zp : r.zona_paga;
       if (r.personal_visto) personal.push(`${camName(c)}: ${String(r.personal_visto).trim()}`);
-      porCamara.push(`${camName(c)}: ${res.quiet ? 'sin movimiento, nadie sube' : `suben ${(Array.isArray(r.suben) ? r.suben : []).length}${r.resumen ? ` · ${String(r.resumen).trim()}` : ''}`}`);
+      porCamara.push(`${camName(c)}: ${res.nodet ? `⚠ ${r.resumen}` : res.quiet ? 'sin movimiento, nadie sube' : `suben ${(Array.isArray(r.suben) ? r.suben : []).length}${r.resumen ? ` · ${String(r.resumen).trim()}` : ''}`}`);
       bajan += Math.max(0, Math.round(num(r.bajan) || 0));
     });
     // Personas contadas por línea: cada una con su foto anotada (línea, recuadro, número y trayectoria).
@@ -2542,25 +2810,58 @@
       if (roja && v !== true) v = null;
       const desc = String(q.descripcion || `persona #${b.tr.id}`).trim();
       const sube = q.subio === true || q.subio === 'true' ? true : q.subio === false || q.subio === 'false' ? false : null;
-      // Quien solo llegó a la puerta se cuenta si la IA ve que sube; si la IA no está segura, queda para revisar.
-      if (b.near && (!ver || sube === false)) return;
+      const pay = payOf.has(b) ? payOf.get(b) : null;
+      // Quien llegó desde afuera hasta la puerta y no volvió a salir se cuenta (sin IA): si no hay luz verde es la
+      // posible evasión que se busca. Si solo se asomó al umbral, se cuenta si pagó o si la IA ve que sube.
+      if (b.near && pay !== true && !(ver ? sube === true : b.fromOut)) return;
       const noSube = !b.near && sube === false;
+      // La luz del validador manda sobre lo que diga la IA (se ve directo en la imagen).
+      if (pay !== null) v = pay;
+      const how = noSube ? 'cruzó la línea, pero la IA revisó y NO subió (ya estaba adentro o se bajó)' : b.near ? `llegó desde afuera hasta la puerta${pay ? ' y pagó' : sube ? ' y la IA vio que sube' : ''}` : 'cruzó la línea';
+      const light = pay === true ? ' · luz verde en el validador' : pay === false ? ' · NO se vio luz verde en el validador' : '';
       allMeta.push({ cam: b.c.key, t: b.t, thumb: b.thumb });
       personas.push({
-        t: b.t, cam: b.c.key, desc: `${desc} · ${noSube ? 'cruzó la línea, pero la IA revisó y NO subió (ya estaba adentro o se bajó)' : b.near ? `llegó a la puerta${sube ? ' y la IA vio que sube' : '; la IA no alcanzó a ver si sube'}` : 'cruzó la línea'} (#${b.tr.id})`,
-        luz: verde ? 'verde' : roja ? 'roja' : null,
-        valida: val ? v : null, sinValidador: !val, fueraZona: false, desdeAfuera: true,
+        t: b.t, cam: b.c.key, desc: `${desc} · ${how}${light} (#${b.tr.id})`,
+        luz: pay === true || verde ? 'verde' : roja ? 'roja' : null,
+        // Por una puerta sin validador, quien fue a validar adelante (verde que sobró) queda como pagado.
+        valida: val ? v : pay === true ? true : null, sinValidador: !val, fueraZona: false, desdeAfuera: true,
         staff: noSube || truthy(q.es_personal) || STAFF_RE.test(desc),
-        img: allMeta.length - 1, box: null, linea: true, revisar: !ver || (b.near && sube !== true),
-        res: !ver ? 'dudoso' : val ? (v === true ? 'paga' : v === false ? 'evade' : 'dudoso') : 'evade',
+        img: allMeta.length - 1, box: null, linea: true,
+        // Sin validador confirmado no se sabe si pagó (ni adelante ni atrás): queda para revisar.
+        revisar: pay === null && (S.iaRev ? !ver || (b.near && sube !== true) : !valKnown),
+        res: v === true ? 'paga' : v === false ? 'evade' : val ? 'dudoso' : 'evade',
       });
     });
+    // Cada verde del validador es un pasajero que pagó: si el detector no siguió a esa persona (tapada por un
+    // pasamanos o por otra persona), igual se cuenta, con la foto de ese momento.
+    if (valKnown) {
+      const vc = valDoors.find((x) => x.c.valz && !x.c.valz.auto).c;
+      for (const g of greens.filter((x) => !x.used)) {
+        const f = await frameOf(vc, g.t, 640);
+        if (run !== S.run) return false;
+        if (!f) continue;
+        const z = vc.valz, gg = f.getContext('2d');
+        gg.lineWidth = 3;
+        gg.strokeStyle = '#22c55e';
+        gg.strokeRect(z.x0 * f.width, z.y0 * f.height, (z.x1 - z.x0) * f.width, (z.y1 - z.y0) * f.height);
+        allMeta.push({ cam: vc.key, t: g.t, thumb: thumbOf(f) });
+        personas.push({
+          t: g.t, cam: vc.key, desc: 'pasajero que pagó (luz verde en el validador); el detector no alcanzó a seguirlo',
+          luz: 'verde', valida: true, sinValidador: false, fueraZona: false, desdeAfuera: true, staff: false,
+          img: allMeta.length - 1, box: null, linea: true, revisar: false, res: 'paga',
+        });
+      }
+    }
     if (ver) fromInside += Math.max(0, Math.round(num(ver.validan_desde_adentro) || 0));
     for (const x of lineRes) {
-      porCamara.push(`${camName(x.c)}: ${x.quiet ? 'sin movimiento, nadie sube' : `línea de conteo${x.c.line && x.c.line.auto ? ' automática' : ''} (${x.how}): cruzan hacia adentro ${x.boarders.length}, hacia afuera ${x.bajan}${(x.near || []).length ? `, ${x.near.length} más llegaron a la puerta (revisados por la IA)` : ''} · ${x.tracks} personas seguidas en ${x.frames} fotos`}`);
+      const ng = (x.greens || []).length;
+      const luces = !hasValidator(x.c) ? '' : !x.c.valz ? ' · validador: márcalo con «💡 Marcar el validador» sobre la cámara para saber quién pagó'
+        : x.c.valz.auto ? ` · validador sin confirmar (${ng} posible${ng === 1 ? '' : 's'} luz${ng === 1 ? '' : 'es'} verde${ng === 1 ? '' : 's'}): confírmalo con «💡» sobre la cámara`
+          : ` · validador: ${ng} ${ng === 1 ? 'luz' : 'luces'} verde${ng === 1 ? '' : 's'} (pagos)`;
+      porCamara.push(`${camName(x.c)}: ${x.quiet ? `sin movimiento, nadie sube${luces}` : `línea de conteo${x.c.line && x.c.line.auto ? ' automática' : ''} (${x.how}): cruzan hacia adentro ${x.boarders.length}, hacia afuera ${x.bajan}${(x.near || []).length ? `, ${x.near.length} más llegaron a la puerta` : ''} · ${x.tracks} personas seguidas en ${x.frames} fotos${luces}`}`);
       bajan += x.bajan;
     }
-    if (boarders.length && !ver) porCamara.push('No se pudo revisar si los pasajeros contados por línea son personal o pagaron: quedan para revisar.');
+    if (boarders.length && S.iaRev && !ver) porCamara.push('No se pudo revisar con IA si los pasajeros contados son personal: quedan para revisar.');
     // Quienes subieron por una puerta sin validador y validaron adelante: se marcan como pagados, en orden.
     for (const p of personas.filter((x) => x.sinValidador && !x.staff).sort((a, b) => a.t - b.t)) {
       if (fromInside <= 0) break;
