@@ -394,7 +394,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 5;
+  const COUNT_V = 6;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -408,7 +408,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.26-8';
+  const VERSION = '2026.09.26-9';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -2063,7 +2063,7 @@
     }
     return cv;
   }
-  const AUTO_V = 2;
+  const AUTO_V = 3;
   function autoLine(c, run) {
     if (c.line) return Promise.resolve(c.line);
     if (c.linePr) return c.linePr;
@@ -2088,14 +2088,18 @@
       if (bad) { y0 = y1 = 0.65; x0 = 0.25; x1 = 0.75; }
       if (x1 < x0) { [x0, x1] = [x1, x0]; [y0, y1] = [y1, y0]; }
       let a = [x0, y0], b = [x1, y1];
-      // El vano a veces queda corto: la línea se alarga (mínimo un 40 % del ancho de la imagen).
+      // El vano a veces queda corto: la línea se alarga un poco (mínimo un 30 % del ancho de la imagen), sin llegar
+      // a los asientos de los costados.
       const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
-      const want = Math.max(0.4, len * 1.3);
+      const want = Math.max(0.3, len * 1.1);
       const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, k = want / len;
       a = [clamp(mx + (a[0] - mx) * k, 0, 1), clamp(my + (a[1] - my) * k, 0, 1)];
       b = [clamp(mx + (b[0] - mx) * k, 0, 1), clamp(my + (b[1] - my) * k, 0, 1)];
+      // Lado de adentro: la cámara está en el techo DENTRO del bus, así que con una línea horizontal el interior es
+      // siempre el lado de abajo (el más cercano a la cámara). Solo si la línea es vertical se usa lo que dice la IA.
       const dir = String((r && r.adentro) || 'abajo').toLowerCase();
-      const q = /arriba/.test(dir) ? [mx, my - 0.2] : /izq/.test(dir) ? [mx - 0.2, my] : /der/.test(dir) ? [mx + 0.2, my] : [mx, my + 0.2];
+      const flat = Math.abs(b[1] - a[1]) <= Math.abs(b[0] - a[0]);
+      const q = flat ? [mx, my + 0.2] : /izq/.test(dir) ? [mx - 0.2, my] : /der/.test(dir) ? [mx + 0.2, my] : [mx, my + 0.2];
       const inside = Math.sign((b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0])) || 1;
       if (!c.line) { c.line = { a, b, inside, auto: true, v: AUTO_V, guess: bad || undefined }; save(); renderCams(); }
       return c.line;
@@ -2323,7 +2327,7 @@
         // o se queda afuera no es candidato.
         if (tr.boxes.length < 2) continue;
         const ps = tr.boxes.map((b) => ({ s: pos(b) }));
-        if (majority(ps, false) === 1 || majority(ps, true) === -1) continue;
+        if ((majority(ps, false) === 1 && ps[0].s === 1) || majority(ps, true) === -1) continue;
         const dd = tr.boxes.map((b) => ({ b, d: segDist(c.line, boxFoot(b.box)) })).sort((p, q) => p.d - q.d);
         if (dd[0].d > 0.08) continue;
         const k = tr.boxes.indexOf(dd[0].b);
