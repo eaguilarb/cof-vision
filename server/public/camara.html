@@ -394,7 +394,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.26-2';
+  const VERSION = '2026.09.26-3';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1676,11 +1676,11 @@
       'TAREA PRINCIPAL: cuenta exactamente cuántas personas SUBEN al bus por ESTA puerta: personas que en una imagen están afuera (andén, calle) o en el escalón y en una imagen posterior ya están adentro del bus. Recorre las imágenes en orden y numera a cada persona nueva que cruza la puerta hacia adentro, distinguiéndola por ropa, pelo, bolso y estatura. Un adulto con un niño son 2 personas. Si suben muy seguidas, revisa bien: es fácil que una quede detrás de otra.',
       'NO cuentes: a quien ya estaba adentro y solo se mueve o está parado; a quien está afuera y no entra; a quien baja; al conductor; al personal.',
       ...staffRules(),
-      val ? 'VALIDADOR: para cada persona que sube por esta puerta, indica si pagó: la luz o pantalla del validador se pone VERDE = pagó. ROJA = tarjeta rechazada, pero puede volver a intentarlo con otra tarjeta o el celular: vale el ÚLTIMO intento. Si se ve que acerca la tarjeta o el celular aunque no se vea la luz, pagó. Si pasa sin acercar nada al validador, no pagó.' : 'Esta puerta no tiene validador: solo cuenta a quienes suben por ella (el pago se revisa con la cámara de adelante).',
+      val ? 'VALIDADOR: para cada persona que sube por esta puerta, indica si pagó: la luz o pantalla del validador se pone VERDE = pagó. ROJA = tarjeta rechazada, pero puede volver a intentarlo con otra tarjeta o el celular: vale el ÚLTIMO intento. Si se ve que acerca la tarjeta o el celular aunque no se vea la luz, pagó ("valida": true). Pon "sin_validar_visto": true SOLO si se ve claramente que la persona pasa frente al validador sin acercar nada; si el validador o las manos no se alcanzan a ver, pon "valida": null y "sin_validar_visto": false (no la acuses de evasión sin verlo).' : 'Esta puerta no tiene validador: solo cuenta a quienes suben por ella (el pago se revisa con la cámara de adelante).',
       val ? 'Cuenta aparte, en "validan_desde_adentro", cuántas personas que ya estaban ADENTRO (subieron por otra puerta, por ejemplo por atrás) se acercan a ESTE validador y validan (luz verde o acercan la tarjeta). No cuentes aquí al personal.' : '',
       'Personas con movilidad reducida (silla de ruedas, bastón, coche, adulto mayor) suben a menudo por atrás, por la rampa, ayudadas por un agente: son pasajeros y se cuentan una vez (el agente no).',
       val ? 'ZONA PAGA: si el andén está cerrado con rejas y torniquetes o validadores en el paradero, la gente pagó abajo antes de subir. Indica en "zona_paga" si ves eso (si no hay señales claras, es false).' : '',
-      `Responde SOLO con JSON: {"suben":[{"imagen":4,"caja":[120,340,860,610],"descripcion":"mujer con chaqueta roja y mochila","desde_afuera":true${val ? ',"luz":"verde","valida":true' : ''}}]${val ? ',"validan_desde_adentro":0,"zona_paga":{"es":false,"motivo":"qué viste"}' : ''},"personal_visto":"agente de negro en el escalón","bajan":0,"resumen":"qué pasa en esta puerta en 1 frase"}`,
+      `Responde SOLO con JSON: {"suben":[{"imagen":4,"caja":[120,340,860,610],"descripcion":"mujer con chaqueta roja y mochila","desde_afuera":true${val ? ',"luz":"verde","valida":true,"sin_validar_visto":false' : ''}}]${val ? ',"validan_desde_adentro":0,"zona_paga":{"es":false,"motivo":"qué viste"}' : ''},"personal_visto":"agente de negro en el escalón","bajan":0,"resumen":"qué pasa en esta puerta en 1 frase"}`,
       'En "imagen" pon el número de la imagen donde mejor se ve a esa persona entrando, y en "caja" el recuadro de esa persona en esa imagen como [ymin, xmin, ymax, xmax] en escala de 0 a 1000. Si nadie sube por esta puerta, "suben" es [].',
     ].filter(Boolean).join('\n');
     const r = await gemini(parts, run, 'main');
@@ -1752,12 +1752,13 @@
         personas.push({
           t: mi.t, cam: c.key, desc: String(p.descripcion || 'persona').trim(),
           luz: verde ? 'verde' : roja ? 'roja' : null,
-          valida: val ? v : null, sinValidador: !val, fueraZona: false,
+          valida: val ? (v === false && !truthy(p.sin_validar_visto) ? null : v) : null, sinValidador: !val, fueraZona: false,
           desdeAfuera: p.desde_afuera === undefined ? true : truthy(p.desde_afuera),
           staff: STAFF_RE.test(String(p.descripcion || '')),
           img: res.meta.length ? base + k : -1,
           box: boxOf(p.caja),
-          res: val ? (v === true ? 'paga' : v === false ? 'evade' : 'dudoso') : 'evade',
+          // Evasión en la puerta con validador solo si la IA vio que pasó sin validar; si no, se revisa.
+          res: val ? (v === true ? 'paga' : v === false && truthy(p.sin_validar_visto) ? 'evade' : 'dudoso') : 'evade',
         });
       }
       if (val) fromInside += Math.max(0, Math.round(num(r.validan_desde_adentro) || 0));
