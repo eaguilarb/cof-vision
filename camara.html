@@ -394,7 +394,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.26-3';
+  const VERSION = '2026.09.26-4';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -448,7 +448,15 @@
     auto: store.get('cofsimple:auto', true), userPaused: false, autoPausing: false, waiting: false, rate: 1,
   };
   // La primera vez que se abre una copia con clave de Claude, se cuenta con Claude Haiku aunque antes se usara otra IA.
-  if (!EMBED_CKEY.startsWith('__') && !store.get('cofsimple:ckeyseen', false)) { S.ai = 'haiku'; store.set('cofsimple:ai', 'haiku'); store.set('cofsimple:ckeyseen', true); }
+  // Una copia con una clave de Claude nueva la adopta (aunque el navegador tuviera guardada otra, por ejemplo una
+  // que ya se borró) y cuenta con Claude Haiku. Si después se pega otra clave en la página, esa se respeta.
+  if (!EMBED_CKEY.startsWith('__') && store.get('cofsimple:ckeyemb', '') !== EMBED_CKEY) {
+    S.ckey = EMBED_CKEY;
+    store.set('cofsimple:ckey', EMBED_CKEY);
+    store.set('cofsimple:ckeyemb', EMBED_CKEY);
+    S.ai = 'haiku';
+    store.set('cofsimple:ai', 'haiku');
+  }
   const save = () => store.set(S.id, {
     v: 3, step: S.step, moments: S.moments, stops: S.stops, range: S.range, startManual: S.startManual, meta: S.meta,
     cams: Object.fromEntries(S.cams.map((c) => [c.key, { tipo: c.tipo, validador: c.validador, off: c.off, desc: c.desc, coords: c.coords, manual: c.manual }])),
