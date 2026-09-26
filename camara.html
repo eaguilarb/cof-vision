@@ -70,6 +70,9 @@
   .tile .ov { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .live-note { position: absolute; left: 8px; top: 8px; z-index: 3; background: rgba(0,0,0,.75); color: #fff; font: 600 12px system-ui, sans-serif; padding: 4px 10px; border-radius: 6px; pointer-events: none; }
   .cam-chip.live.on { background: #1a7f37; border-color: #1a7f37; color: #fff; }
+  .tile-line { position: absolute; right: 8px; top: 18%; z-index: 2; border: 1px solid #f5a300; background: rgba(0,0,0,.72); color: #ffd27a; font: 600 12px system-ui, sans-serif; padding: 4px 9px; border-radius: 6px; cursor: pointer; }
+  .tile-line.warn { background: #f5a300; color: #1b1300; }
+  .wall.grid .tile-line { top: 16%; font-size: 11px; padding: 3px 7px; }
   .tile .lbl { position: absolute; left: 6px; bottom: 6px; background: rgba(0,0,0,.65); color: #fff; font: 600 12px system-ui, sans-serif; padding: 2px 8px; border-radius: 4px; pointer-events: none; }
   .wall:not(.grid) .tile .lbl { display: none; }
   .drop { color: #c9d3dc; text-align: center; padding: 24px; }
@@ -391,7 +394,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 4;
+  const COUNT_V = 5;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -405,7 +408,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.26-7';
+  const VERSION = '2026.09.26-8';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -532,8 +535,15 @@
       const url = URL.createObjectURL(f);
       const key = `${f.name}|${f.size}`;
       const c = { key, name: f.name, label: chLabel(f.name, i), url, video: makeVideo(url, false), probe: makeVideo(url, true), off: 0, tipo: null, validador: null, desc: '', coords: null, manual: false, dur: 0, bad: false, ...(cfg[key] || {}), file: f };
+      // Líneas automáticas de la versión anterior (a veces quedaban arriba de la imagen): se vuelven a calcular.
+      if (c.line && c.line.auto && c.line.v !== AUTO_V) c.line = null;
       const tile = el('div', 'tile');
-      tile.append(c.video, el('span', 'lbl', c.label));
+      const lb = el('button', 'tile-line', '');
+      lb.type = 'button';
+      lb.hidden = true;
+      lb.onclick = (e) => { e.stopPropagation(); editLine(c); };
+      tile.append(c.video, el('span', 'lbl', c.label), lb);
+      c.lineBtn = lb;
       c.live = null;
       c.linePr = null;
       tile.onclick = () => { if (S.grid && S.main !== S.cams.indexOf(c)) setMain(S.cams.indexOf(c)); };
@@ -723,13 +733,14 @@
       if (pts.length < 2 || !inside) return (help.textContent = 'Faltan puntos: dos para la línea y uno del lado de adentro.');
       c.line = { a: pts[0], b: pts[1], inside };
       c.linePr = null;
+      rememberLine(c);
       if (c.live) { c.live.cin = 0; c.live.cout = 0; }
       save();
       renderCams();
       close();
       status(`Línea de conteo guardada para ${camName(c)}. Los paraderos se cuentan con esa línea desde ahora (usa «Volver a contar» para los ya contados).`, null);
     };
-    del.onclick = () => { c.line = null; c.linePr = null; save(); renderCams(); close(); autoLine(c, S.run).catch(() => {}); };
+    del.onclick = () => { c.line = null; c.linePr = null; rememberLine(c); save(); renderCams(); close(); autoLine(c, S.run).catch(() => {}); };
     cancel.onclick = close;
     bar.append(ok, del, cancel);
     inner.append(help, cv, bar);
@@ -737,7 +748,16 @@
     document.body.append(box);
     draw();
   }
+  // Botón sobre cada cámara de puerta para dibujar o corregir su línea de conteo.
+  function tileLineBtn(c) {
+    if (!c.lineBtn) return;
+    const door = /^puerta_/.test(c.tipo || '') && !c.bad;
+    c.lineBtn.hidden = !door;
+    c.lineBtn.classList.toggle('warn', door && (!c.line || !!c.line.auto));
+    c.lineBtn.textContent = !c.line ? '✏ Dibujar la línea de esta puerta' : c.line.auto ? '✏ Línea automática: revísala' : '✏ Línea de conteo';
+  }
   function renderCams() {
+    S.cams.forEach(tileLineBtn);
     const panel = $('#camPanel');
     panel.hidden = !S.cams.length;
     $('#camSummary').textContent = `Cámaras (${S.cams.length}) · tipo de cada una y sincronización`;
@@ -765,6 +785,7 @@
         c.validador = val.checked;
         c.off = num(off.value) || 0;
         c.manual = true;
+        tileLineBtn(c);
         pickRef();
         orderCams();
         renderCamBar();
@@ -1054,8 +1075,9 @@
     renderControls();
     try {
       if (!(await identify(run))) return;
-      for (const c of doorCams()) if (!c.line) autoLine(c, run).catch(() => {});
       if (!(await readMeta(run))) return;
+      recallLines();
+      for (const c of doorCams()) if (!c.line) autoLine(c, run).catch(() => {});
       S.step = S.D <= 120 ? 2 : S.D <= 1200 ? 3 : 4;
       const m = mainCam();
       if (m && (tRef() < S.range.from - 1 || tRef() > S.range.to)) m.video.currentTime = clamp(S.range.from + m.off, 0, Math.max(0, m.dur - 0.1));
@@ -2014,40 +2036,91 @@
     return out;
   }
   // Línea de conteo automática: la IA marca el umbral de la puerta (se puede corregir con «Dibujar línea»).
+  // La foto va con una regla en los bordes (0 a 100): así cualquier IA da la altura del umbral sin confundir
+  // el orden de las coordenadas.
+  function rulerImage(f) {
+    const pad = 34;
+    const cv = newCanvas(f.width + pad, f.height + pad);
+    const g = cv.getContext('2d');
+    g.fillStyle = '#fff';
+    g.fillRect(0, 0, cv.width, cv.height);
+    g.drawImage(f, pad, pad);
+    g.font = 'bold 13px sans-serif';
+    g.textBaseline = 'middle';
+    for (let k = 0; k <= 20; k++) {
+      const y = pad + (f.height * k) / 20, x = pad + (f.width * k) / 20;
+      g.strokeStyle = k % 2 ? 'rgba(255,255,0,.35)' : 'rgba(255,255,0,.7)';
+      g.lineWidth = 1;
+      g.beginPath(); g.moveTo(pad, y); g.lineTo(cv.width, y); g.stroke();
+      g.beginPath(); g.moveTo(x, pad); g.lineTo(x, cv.height); g.stroke();
+      if (k % 2 === 0) {
+        g.fillStyle = '#000';
+        g.textAlign = 'right';
+        g.fillText(String(k * 5), pad - 3, y);
+        g.textAlign = 'center';
+        g.fillText(String(k * 5), x, pad / 2);
+      }
+    }
+    return cv;
+  }
+  const AUTO_V = 2;
   function autoLine(c, run) {
     if (c.line) return Promise.resolve(c.line);
     if (c.linePr) return c.linePr;
     c.linePr = (async () => {
       const s = S.stops.find((x) => x.t1 + c.off <= c.dur) || null;
-      const f = await frameOf(c, s ? (s.t0 + s.t1) / 2 : clamp(c.dur * 0.2, 0, Math.max(0, c.dur - 1)), 960);
+      const f = await frameOf(c, s ? (s.t0 + s.t1) / 2 : clamp(c.dur * 0.2, 0, Math.max(0, c.dur - 1)), 800);
       if (!f || run !== S.run) return null;
       const parts = [{ text: [
-        'Imagen de una cámara de techo DENTRO de un bus, que mira hacia una puerta de pasajeros.',
-        'Marca la línea del UMBRAL de la puerta: el borde del piso del bus donde se entra desde la calle (el borde del escalón de entrada), de un lado al otro del vano de la puerta. Quien cruza esa línea hacia adentro está subiendo al bus.',
-        'Da los dos extremos de la línea ("a" y "b") y un punto del piso DENTRO del bus ("adentro"), cada uno como [y, x] normalizado de 0 a 1000.',
-        'Responde SOLO JSON: {"hay_puerta":true,"a":[700,300],"b":[700,650],"adentro":[900,480]}',
-      ].join('\n') }, img(f, 0.85)];
+        'Imagen de una cámara de techo DENTRO de un bus, que mira hacia una puerta de pasajeros. La imagen tiene una regla amarilla: a la IZQUIERDA la altura (0 = arriba, 100 = abajo) y ARRIBA el ancho (0 = izquierda, 100 = derecha).',
+        'Busca el UMBRAL de la puerta: el borde del piso del bus donde se pisa al entrar desde la calle (el borde del escalón o la parte de abajo de las hojas de la puerta), de un lado al otro del vano. Quien cruza esa línea hacia adentro está subiendo. No es el marco de arriba de la puerta ni una ventana, y no está en las franjas de texto (fecha arriba, coordenadas abajo).',
+        'Indica con la regla: "y_izq" y "y_der" = altura del umbral en su extremo izquierdo y derecho; "x_desde" y "x_hasta" = dónde empieza y termina el vano de la puerta; "adentro" = hacia qué lado de esa línea queda el interior del bus ("abajo", "arriba", "izquierda" o "derecha").',
+        'Responde SOLO JSON: {"puerta_visible":true,"y_izq":62,"y_der":64,"x_desde":30,"x_hasta":72,"adentro":"abajo"}',
+      ].join('\n') }, img(rulerImage(f), 0.85)];
       let r = null;
       try { r = await gemini(parts, run, 'quick'); } catch (e) { if (e.badKey || e.claudeKey || e.stop) throw e; }
       if (run !== S.run) return null;
-      const pt = (v) => (Array.isArray(v) && v.length >= 2 && v.every((x) => Number.isFinite(+x)) ? [clamp(+v[1] / 1000, 0, 1), clamp(+v[0] / 1000, 0, 1)] : null);
-      let a = r && pt(r.a), b = r && pt(r.b), q = r && pt(r.adentro);
-      if (!a || !b || !q || Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.02) { a = [0.25, 0.7]; b = [0.75, 0.7]; q = [0.5, 0.95]; }
-      // La altura del umbral la marca bien; el ancho a veces queda corto: mínimo un 35 % del ancho de la imagen.
-      const len = Math.hypot(a[0] - b[0], a[1] - b[1]);
-      if (len < 0.35) {
-        const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, k = 0.35 / len;
-        a = [mx + (a[0] - mx) * k, my + (a[1] - my) * k];
-        b = [mx + (b[0] - mx) * k, my + (b[1] - my) * k];
-      }
+      const n = (v) => (Number.isFinite(+v) ? clamp(+v / 100, 0, 1) : null);
+      let y0 = r && n(r.y_izq), y1 = r && n(r.y_der), x0 = r && n(r.x_desde), x1 = r && n(r.x_hasta);
+      if (y1 == null) y1 = y0;
+      if (y0 == null) y0 = y1;
+      const bad = y0 == null || x0 == null || x1 == null || Math.min(y0, y1) < 0.15 || Math.max(y0, y1) > 0.9 || Math.abs(x1 - x0) < 0.08;
+      if (bad) { y0 = y1 = 0.65; x0 = 0.25; x1 = 0.75; }
+      if (x1 < x0) { [x0, x1] = [x1, x0]; [y0, y1] = [y1, y0]; }
+      let a = [x0, y0], b = [x1, y1];
+      // El vano a veces queda corto: la línea se alarga (mínimo un 40 % del ancho de la imagen).
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      const want = Math.max(0.4, len * 1.3);
+      const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2, k = want / len;
+      a = [clamp(mx + (a[0] - mx) * k, 0, 1), clamp(my + (a[1] - my) * k, 0, 1)];
+      b = [clamp(mx + (b[0] - mx) * k, 0, 1), clamp(my + (b[1] - my) * k, 0, 1)];
+      const dir = String((r && r.adentro) || 'abajo').toLowerCase();
+      const q = /arriba/.test(dir) ? [mx, my - 0.2] : /izq/.test(dir) ? [mx - 0.2, my] : /der/.test(dir) ? [mx + 0.2, my] : [mx, my + 0.2];
       const inside = Math.sign((b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0])) || 1;
-      // La IA suele marcar el vano más angosto de lo que es: la línea se alarga un 30 % por cada lado.
-      const ext = (p0, p1) => [clamp(p0[0] + (p0[0] - p1[0]) * 0.3, 0, 1), clamp(p0[1] + (p0[1] - p1[1]) * 0.3, 0, 1)];
-      [a, b] = [ext(a, b), ext(b, a)];
-      if (!c.line) { c.line = { a, b, inside, auto: true }; save(); renderCams(); }
+      if (!c.line) { c.line = { a, b, inside, auto: true, v: AUTO_V, guess: bad || undefined }; save(); renderCams(); }
       return c.line;
     })().catch((e) => { c.linePr = null; throw e; });
     return c.linePr;
+  }
+  // Las líneas dibujadas a mano se recuerdan por bus (patente) y cámara: los videos siguientes del mismo bus ya las traen.
+  const LINE_MEM = 'cofsimple:lineas';
+  const lineKey = (c) => (S.meta && S.meta.patente ? `${String(S.meta.patente).replace(/[^A-Za-z0-9]/g, '').toUpperCase()}|${c.label}` : null);
+  function rememberLine(c) {
+    const k = lineKey(c);
+    if (!k) return;
+    const m = store.get(LINE_MEM, {}) || {};
+    if (c.line && !c.line.auto) m[k] = c.line; else delete m[k];
+    store.set(LINE_MEM, m);
+  }
+  function recallLines() {
+    const m = store.get(LINE_MEM, {}) || {};
+    let n = 0;
+    for (const c of doorCams()) {
+      const k = lineKey(c);
+      const l = k && m[k];
+      if (l && (!c.line || c.line.auto)) { c.line = l; c.linePr = null; n++; }
+    }
+    if (n) { save(); renderCams(); }
   }
 
   // ---------------------------------------------------------------- detección en vivo sobre cada cámara
@@ -2101,6 +2174,16 @@
     if (!fresh) return;
     for (const d of L.dets) {
       const tr = L.T.tracks.find((x) => x.id === d.id);
+      // Quien no llega a la puerta (sentado, de pie en el pasillo, afuera lejos) va en gris: no se cuenta.
+      if (!tr || !tr.door) {
+        const [y0, x0, y1, x1] = d.box;
+        g.lineWidth = 1 * dpr;
+        g.strokeStyle = 'rgba(200,200,200,.55)';
+        g.setLineDash([4 * dpr, 4 * dpr]);
+        g.strokeRect(X(x0), Yp(y0), X(x1) - X(x0), Yp(y1) - Yp(y0));
+        g.setLineDash([]);
+        continue;
+      }
       const col = idColor(d.id);
       if (tr && tr.boxes.length > 1) {
         g.strokeStyle = col;
@@ -2146,6 +2229,7 @@
           for (const tr of L.T.tracks) {
             const last = tr.boxes[tr.boxes.length - 1];
             if (last.i !== tr.last) continue;
+            if (segDist(c.line, boxFoot(last.box)) < 0.12) tr.door = true;
             const sd = lineSide(c.line, boxFoot(last.box));
             if (!sd) continue;
             if (tr.side && sd !== tr.side) {
