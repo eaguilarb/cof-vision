@@ -73,6 +73,12 @@
   .tile-line { position: absolute; right: 8px; top: 18%; z-index: 2; border: 1px solid #f5a300; background: rgba(0,0,0,.72); color: #ffd27a; font: 600 12px system-ui, sans-serif; padding: 4px 9px; border-radius: 6px; cursor: pointer; }
   .tile-line.warn { background: #f5a300; color: #1b1300; }
   .wall.grid .tile-line { top: 16%; font-size: 11px; padding: 3px 7px; }
+  .live-count { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; background: #10181f; color: #fff; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font: 600 13px system-ui, sans-serif; }
+  .live-count b { color: var(--accent); font-weight: 700; }
+  .live-count .lc-evade { color: #ff8a8a; }
+  .live-count .lc-pay { color: #6ee7a0; }
+  .live-count small { color: #9fb0bf; font-weight: 400; }
+  .vivo-badge { display: inline-block; margin-left: 4px; font-size: 10px; color: #1a7f37; font-weight: 700; }
   .tile-line.val { top: calc(18% + 34px); border-color: #22c55e; color: #bbf7d0; }
   .tile-line.val.warn { background: #22c55e; color: #052e12; }
   .wall.grid .tile-line.val { top: calc(16% + 28px); }
@@ -243,6 +249,7 @@
       <div class="drop" id="dropHint"><b>Elige los videos de las cámaras (hasta 8)</b>Toca «Elegir videos» y selecciona todas las cámaras del mismo recorrido, o arrástralas aquí. Se analiza solo: lo que pasa, dónde, y cuántos pagan y evaden en cada paradero.</div>
     </div>
     <div class="now" id="now">
+      <div class="live-count" id="liveCount" hidden></div>
       <div class="meta" id="nowMeta"></div>
       <div class="text" id="nowText">Aquí verás lo que pasa en el bus, momento a momento.</div>
       <div class="fare" id="nowFare" hidden></div>
@@ -398,7 +405,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 7;
+  const COUNT_V = 9;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -412,7 +419,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.26-10';
+  const VERSION = '2026.09.26-12';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -2231,12 +2238,20 @@
     if (!mot || !mot.green || !mot.W || !z) return [];
     const W = mot.W, H = mot.H;
     const x0 = Math.floor(z.x0 * W), x1 = Math.ceil(z.x1 * W), y0 = Math.floor(z.y0 * H), y1 = Math.ceil(z.y1 * H);
+    const area = Math.max(1, (x1 - x0) * (y1 - y0));
     const ev = [];
     let cur = null;
     for (const g of mot.green) {
-      let n = 0;
-      for (const i of g.idx) { const x = i % W, y = (i / W) | 0; if (x >= x0 && x < x1 && y >= y0 && y < y1) n++; }
-      if (n < 2) continue;
+      let n = 0, ring = 0;
+      for (const i of g.idx) {
+        const x = i % W, y = (i / W) | 0;
+        if (x < x0 || x >= x1 || y < y0 || y >= y1) continue;
+        if (x === x0 || y === y0 || x === x1 - 1 || y === y1 - 1) ring++; else n++;
+      }
+      // Un pago es una mancha verde en el centro del recuadro; si el recuadro entero o su borde se ponen verdes
+      // (pasto detrás del vidrio, un auto), no es el validador.
+      const ringN = 2 * (x1 - x0 + y1 - y0);
+      if (n < 2 || n > area * 0.5 || ring > ringN * 0.2) continue;
       if (cur && g.t - cur.t1 <= MOTION_STEP * 1.6) cur.t1 = g.t;
       else { cur = { t0: g.t, t1: g.t }; ev.push(cur); }
     }
@@ -2350,7 +2365,10 @@
       g.setLineDash(c.line.auto ? [10 * dpr, 6 * dpr] : []);
       g.beginPath(); g.moveTo(X(a[0]), Yp(a[1])); g.lineTo(X(b[0]), Yp(b[1])); g.stroke();
       g.setLineDash([]);
-      const txt = hasValidator(c) && c.valz ? `SUBEN ${L ? L.cin : 0} · PAGAN ${L ? L.pay || 0 : 0} · BAJAN ${L ? L.cout : 0}` : `SUBEN ${L ? L.cin : 0} · BAJAN ${L ? L.cout : 0}`;
+      const st = stopAtRef(c.video.currentTime - c.off);
+      const cc = st && st.vivo && st.vivo.cams[c.key];
+      const conf = hasValidator(c) && c.valz && !c.valz.auto;
+      const txt = !st ? 'EN RUTA' : `PARADERO ${stopLabel(st)} · SUBEN ${cc ? cc.in : 0}${conf ? ` · PAGAN ${cc ? cc.pay : 0}` : ''} · BAJAN ${cc ? cc.out : 0}`;
       g.font = `bold ${13 * dpr}px system-ui, sans-serif`;
       const tw = g.measureText(txt).width + 12 * dpr;
       // El marcador va en el extremo derecho de la línea, para no tapar a quien pasa por el medio.
@@ -2361,7 +2379,7 @@
       g.fillStyle = '#fff';
       g.fillText(txt, mx + 6 * dpr, my + 15 * dpr);
     }
-    if (c.valz) {
+    if (c.valz && !c.valz.auto) {
       const z = c.valz;
       const on = L && L.gOn;
       g.lineWidth = 2 * dpr;
@@ -2425,9 +2443,9 @@
         cams.sort((x, y) => (/^puerta_/.test(y.tipo || '') ? 1 : 0) - (/^puerta_/.test(x.tipo || '') ? 1 : 0));
         const c = cams[LIVE.rr++ % cams.length];
         const t = c.video.currentTime;
-        const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [], cin: 0, cout: 0 });
+        const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [] });
         if (Math.abs(t - L.t) < 0.04) { drawLive(c); await nap(120); continue; }
-        if (t < L.t || t - L.t > 2.5) { L.T = makeTracker(); L.cin = 0; L.cout = 0; L.pay = 0; }
+        if (t < L.t || t - L.t > 2.5) L.T = makeTracker();
         const dets = await yoloDetect(c.video, true);
         if (!dets) { if (Y.failed) { liveNote(`No se pudo cargar el detector de personas (${Y.failed}).`); break; } await nap(250); continue; }
         L.t = t;
@@ -2445,8 +2463,8 @@
             tr.hist = [...(tr.hist || []), sd].slice(-2);
             if (tr.hist.length < 2 || tr.hist[0] !== tr.hist[1]) continue;
             if (tr.est && sd !== tr.est) {
-              if (sd === c.line.inside) { if (tr.dir === 'out') { L.cout--; tr.dir = null; } else { L.cin++; tr.dir = 'in'; } }
-              else if (tr.dir === 'in') { L.cin--; tr.dir = null; } else { L.cout++; tr.dir = 'out'; }
+              if (sd === c.line.inside) { if (tr.dir === 'out') { liveEvent(c, t, 'out', -1); tr.dir = null; } else { liveEvent(c, t, 'in', 1); tr.dir = 'in'; } }
+              else if (tr.dir === 'in') { liveEvent(c, t, 'in', -1); tr.dir = null; } else { liveEvent(c, t, 'out', 1); tr.dir = 'out'; }
             }
             tr.est = sd;
           }
@@ -2458,6 +2476,90 @@
       LIVE.busy = false;
     }
   }
+  // ---- conteo en vivo por paradero: cada paradero parte de cero; la expedición suma todos.
+  // Lo que el detector ve mientras corre el video se anota al instante en el paradero (y en la tabla); cuando
+  // termina el conteo completo de ese paradero, la tabla muestra el conteo completo.
+  const stopAtRef = (tr) => S.stops.find((x) => tr >= x.t0 - 4 && tr <= x.t1 + 2) || null;
+  const stoppedAt = (tr) => S.stops.some((x) => tr >= x.t0 - 2 && tr <= x.t1 + 1);
+  const vivoOf = (s) => (s.vivo = s.vivo || { cams: {}, max: {} });
+  function vivoCounts(s) {
+    const v = s && s.vivo;
+    if (!v) return null;
+    const o = { suben: 0, pagan: 0, bajan: 0, subenVal: 0 };
+    for (const [k, x] of Object.entries(v.cams)) {
+      o.suben += x.in; o.bajan += x.out; o.pagan += x.pay;
+      const c = camByKey(k);
+      if (c && hasValidator(c)) o.subenVal += x.in;
+    }
+    // Cada verde es alguien que subió y pagó, aunque el detector no lo haya visto cruzar.
+    o.suben = Math.max(o.suben, o.pagan);
+    // Con el validador confirmado: quien subió y no generó verde es posible evasión.
+    const conf = S.cams.some((c) => c.valz && !c.valz.auto);
+    o.evaden = conf ? Math.max(0, o.suben - o.pagan) : null;
+    return o;
+  }
+  let vivoTimer = 0;
+  const vivoPend = [];
+  function applyVivo(s, key, tr, kind, delta) {
+    const v = vivoOf(s);
+    const cc = (v.cams[key] = v.cams[key] || { in: 0, out: 0, pay: 0 });
+    const mk = `${key}|${kind}`;
+    // Si el video se vuelve a ver, lo ya contado en ese tramo no se suma otra vez.
+    if (delta > 0 && tr <= (v.max[mk] ?? -1)) return;
+    cc[kind] = Math.max(0, cc[kind] + delta);
+    if (delta > 0) v.max[mk] = tr;
+    if (!vivoTimer) vivoTimer = setTimeout(() => { vivoTimer = 0; save(); renderStops(); renderLiveCount(); }, 300);
+  }
+  function liveEvent(c, t, kind, delta) {
+    const tr = t - c.off;
+    const s = stopAtRef(tr);
+    // Si todavía no se sabe dónde paró el bus (el recorrido se sigue leyendo), se guarda y se anota al aparecer.
+    if (!s) { if (S.running) vivoPend.push({ key: c.key, tr, kind, delta }); return null; }
+    if (beforeStart(s) || (kind === 'pay' && !stoppedAt(tr))) return null;
+    applyVivo(s, c.key, tr, kind, delta);
+    return s;
+  }
+  function flushVivo() {
+    for (let i = vivoPend.length - 1; i >= 0; i--) {
+      const e = vivoPend[i];
+      const s = stopAtRef(e.tr);
+      if (s) { if (!beforeStart(s) && (e.kind !== 'pay' || stoppedAt(e.tr))) applyVivo(s, e.key, e.tr, e.kind, e.delta); vivoPend.splice(i, 1); }
+      else if (!S.running || S.frontier > e.tr + 30) vivoPend.splice(i, 1);
+    }
+  }
+  // Recuadro bajo el video: el paradero actual (desde cero) y el total de la expedición.
+  function renderLiveCount() {
+    const box = $('#liveCount');
+    if (!box) return;
+    const m = mainCam();
+    if (!m || !S.stops.length) { box.hidden = true; return; }
+    const s = stopAtRef(tRef());
+    const T = { suben: 0, pagan: 0, evaden: 0, bajan: 0 };
+    let anyVivo = false;
+    for (const x of S.stops) {
+      if (!inRange(x) || beforeStart(x)) continue;
+      if (x.estado === 'listo') { const c = counts(x); T.suben += c.suben; T.pagan += c.pagan + c.zp; T.evaden += c.evaden; T.bajan += c.bajan; continue; }
+      const v = vivoCounts(x);
+      if (!v) continue;
+      anyVivo = true;
+      T.suben += v.suben; T.pagan += v.pagan; T.evaden += v.evaden || 0; T.bajan += v.bajan;
+    }
+    const parts = [];
+    if (s && !beforeStart(s)) {
+      const off = s.estado === 'listo';
+      const c = off ? counts(s) : vivoCounts(s) || { suben: 0, pagan: 0, bajan: 0, evaden: null };
+      const ev = off ? c.evaden : c.evaden;
+      const p = el('span');
+      const po = parOf(s);
+      p.append(el('b', null, `Paradero ${stopLabel(s)}${po && po.n ? ` · ${shortName(po.n)}` : ''}:`), ` suben ${c.suben} · `, el('span', 'lc-pay', `pagan ${off ? c.pagan + c.zp : c.pagan}`), ' · ', el('span', 'lc-evade', `evaden ${ev == null ? '—' : ev}`), ` · bajan ${c.bajan}`, el('small', null, off ? ' (conteo completo)' : ' (en vivo, parte de cero en cada paradero)'));
+      parts.push(p);
+    } else parts.push(el('span', null, 'En ruta'));
+    const t = el('span');
+    t.append(el('b', null, 'Expedición:'), ` suben ${T.suben} · `, el('span', 'lc-pay', `pagan ${T.pagan}`), ' · ', el('span', 'lc-evade', `evaden ${T.evaden}`), ` · bajan ${T.bajan}`, anyVivo ? el('small', null, ' (incluye conteo en vivo)') : '');
+    parts.push(t);
+    box.replaceChildren(...parts);
+    box.hidden = false;
+  }
   // Luz del validador en vivo: se mira la zona varias veces por segundo (es muy barato) y cada verde suma un pago.
   function zoneGreen(c) {
     const z = c.valz, v = c.video;
@@ -2467,18 +2569,24 @@
     const g = cv.getContext('2d', { willReadFrequently: true });
     g.drawImage(v, z.x0 * W, z.y0 * H, (z.x1 - z.x0) * W, (z.y1 - z.y0) * H, 0, 0, 32, 32);
     const d = g.getImageData(0, 0, 32, 32).data;
-    let n = 0;
-    for (let i = 0; i < 1024; i++) if (isGreen(d[i * 4], d[i * 4 + 1], d[i * 4 + 2])) n++;
-    return n;
+    let n = 0, ring = 0, ringN = 0;
+    for (let i = 0; i < 1024; i++) {
+      const x = i % 32, y = i >> 5, edge = x < 3 || y < 3 || x > 28 || y > 28;
+      const gr = isGreen(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]);
+      if (edge) { ringN++; if (gr) ring++; } else if (gr) n++;
+    }
+    // Un pago es una mancha verde en el centro; si el borde también está verde (pasto, un auto) no es el validador.
+    return n >= 12 && n <= 480 && ring <= ringN * 0.15 ? n : 0;
   }
   setInterval(() => {
     if (!LIVE.on || document.hidden) return;
     for (const c of S.cams) {
-      if (!c.valz || c.bad || !c.tile || c.tile.hidden || c.video.readyState < 2) continue;
-      const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [], cin: 0, cout: 0, pay: 0 });
-      const on = zoneGreen(c) >= 12;
+      // Solo el validador confirmado por el fiscalizador, y solo con el bus detenido en un paradero.
+      if (!c.valz || c.valz.auto || c.bad || !c.tile || c.tile.hidden || c.video.readyState < 2) continue;
+      const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [] });
       const t = c.video.currentTime;
-      if (on && !L.gOn && t - (L.gEnd ?? -9) > 0.4) L.pay = (L.pay || 0) + 1;
+      const on = !!zoneGreen(c) && (stoppedAt(t - c.off) || (S.running && !stopAtRef(t - c.off)));
+      if (on && !L.gOn && t - (L.gEnd ?? -9) > 0.6) liveEvent(c, t, 'pay', 1);
       if (!on && L.gOn) L.gEnd = t;
       if (on !== !!L.gOn) { L.gOn = on; drawLive(c); }
     }
@@ -2539,11 +2647,14 @@
   async function lineCount(s, c, run) {
     // Con el detector en el computador (sin costo) se miran más fotos por paradero.
     const keep = {};
-    const times = await lineTimes(c, s, run, (await yolo()) ? 160 : 96, keep);
+    // La puerta se abre mientras el bus frena y se cierra cuando ya parte: se mira desde 4 s antes hasta 2 s después.
+    const win = { t0: Math.max(0, s.t0 - 4), t1: s.t1 + 2 };
+    const times = await lineTimes(c, win, run, (await yolo()) ? 160 : 96, keep);
     if (run !== S.run) return null;
     // Luz del validador en esta detención (pagos), sin IA.
     learnValZone(c, keep.mot);
-    const greens = hasValidator(c) ? greenEvents(keep.mot, c.valz) : [];
+    // Pagos: solo con el bus detenido (con un pequeño margen), así el pasto que pasa por el vidrio no suma.
+    const greens = hasValidator(c) ? greenEvents(keep.mot, c.valz).filter((g) => g.t >= s.t0 - 2 && g.t <= s.t1 + 1) : [];
     if (c.valz && greens.length) c.valz.hits = (c.valz.hits || 0) + greens.length;
     if (window.__cofDebug && keep.mot && keep.mot.green) (window.__cofDebug.greens = window.__cofDebug.greens || []).push({ cam: c.label, valz: c.valz, W: keep.mot.W, H: keep.mot.H, n: keep.mot.green.length, t: keep.mot.green.map((g) => +g.t.toFixed(2)), px: keep.mot.green.map((g) => g.idx.length), greens }); // solo para pruebas
     if (!times.length) return { c, quiet: true, boarders: [], bajan: 0, greens };
@@ -2560,13 +2671,28 @@
     const specs = [];
     let bajan = 0;
     const pos = (b) => { const P = boxFoot(b.box); const d = segDist(c.line, P); return d <= 0.08 ? 0 : lineSide(c.line, P) === c.line.inside ? 1 : -1; };
+    // Distancia con signo a la línea (positiva hacia adentro del bus).
+    const sdist = (b) => { const [ax, ay] = c.line.a, [bx, by] = c.line.b, P = boxFoot(b.box); return (((bx - ax) * (P[1] - ay) - (by - ay) * (P[0] - ax)) / (Math.hypot(bx - ax, by - ay) || 1)) * c.line.inside; };
+    const med = (a) => { const v = [...a].sort((p, q) => p - q); return v[v.length >> 1]; };
     for (const tr of tracks) {
       const x = crossing(tr, c.line);
       if (!x) {
         // No cruzó claramente (tapado por un pasamanos, pocas fotos): si llegó a la puerta, lo revisa la IA.
         // Solo quien aparece afuera (o en el umbral) y termina en el umbral o adentro: el que ya estaba adentro
         // o se queda afuera no es candidato.
-        if (tr.boxes.length < 2) continue;
+        // Solo en la puerta del validador: por atrás casi siempre se baja, y ahí se cuentan solo subidas claras.
+        if (tr.boxes.length < 2 || !hasValidator(c)) continue;
+        // Viene de afuera y avanza hacia adentro (aunque pague parado antes de la línea y se pierda tras un
+        // pasamanos al entrar): es alguien que sube.
+        if (tr.boxes.length >= 3) {
+          const s0 = med(tr.boxes.slice(0, 3).map(sdist)), s1 = med(tr.boxes.slice(-3).map(sdist));
+          if (s0 < -0.08 && s1 - s0 >= 0.1 && s1 >= -0.12) {
+            const k = tr.boxes.length - 1;
+            const pick = [tr.boxes[0], tr.boxes[k >> 1], tr.boxes[k]].filter((v, j, a) => a.indexOf(v) === j);
+            specs.push({ near: true, fromOut: true, tr, at: tr.boxes[k].i, d: Math.abs(s1), box: tr.boxes[k].box, pick, where: pick.map((b) => ['en el umbral', 'adentro', 'afuera'][[0, 1, -1].indexOf(pos(b))] || 'en el umbral') });
+            continue;
+          }
+        }
         const ps = tr.boxes.map((b) => ({ s: pos(b) }));
         if ((majority(ps, false) === 1 && ps[0].s === 1) || majority(ps, true) === -1) continue;
         const dd = tr.boxes.map((b) => ({ b, d: segDist(c.line, boxFoot(b.box)) })).sort((p, q) => p.d - q.d);
@@ -2581,7 +2707,16 @@
       const pick = [tr.boxes[0], tr.boxes[Math.max(0, k - 1)], tr.boxes[k], tr.boxes[tr.boxes.length - 1]].filter((v, j, a) => v && a.indexOf(v) === j);
       specs.push({ near: false, tr, at: x.i, d: 0, box: tr.boxes[k].box, pick, where: pick.map((b) => (lineSide(c.line, boxFoot(b.box)) === c.line.inside ? 'adentro' : 'afuera')) });
     }
-    const use = [...specs.filter((x) => !x.near), ...specs.filter((x) => x.near).sort((p, q) => p.d - q.d).slice(0, 6)];
+    // La misma persona seguida en dos tramos (se perdió un momento): el segundo tramo no se cuenta otra vez.
+    const tOf = (i) => frames[i].t;
+    const kept = [];
+    for (const x of [...specs].sort((p, q) => tOf(p.tr.boxes[0].i) - tOf(q.tr.boxes[0].i))) {
+      const b0 = x.tr.boxes[0];
+      const dup = kept.find((y) => { const e = y.tr.boxes[y.tr.boxes.length - 1]; const dt = tOf(b0.i) - tOf(e.i); const [ax, ay] = boxFoot(e.box), [bx, by] = boxFoot(b0.box); return dt >= 0 && dt <= 2 && Math.hypot(ax - bx, ay - by) < 0.15; });
+      if (dup && x.near) continue;
+      kept.push(x);
+    }
+    const use = [...kept.filter((x) => !x.near), ...kept.filter((x) => x.near).sort((p, q) => p.d - q.d).slice(0, 8)];
     // Solo se vuelven a leer las fotos que sirven de evidencia (el detector no las guarda, para no llenar la memoria).
     const need = [...new Set(use.flatMap((x) => [x.at, ...x.pick.map((b) => b.i)]))].filter((i) => !frames[i].f).sort((p, q) => p - q);
     if (need.length) {
@@ -3564,6 +3699,7 @@
     if (!S.moments.length) M.fitted = false;
     drawRoute();
     renderRows();
+    if (typeof flushVivo === 'function' && vivoPend.length) flushVivo();
     renderStops();
     renderReview();
     S.cur = -2;
@@ -3624,16 +3760,17 @@
       const c = counts(s);
       const tr = el('tr', `stop-row${S.curStop === s ? ' cur' : ''}`);
       const ready = s.estado === 'listo';
+      const vv = !ready ? vivoCounts(s) : null;
       const lugar = [parText(parOf(s)), s.dir].filter(Boolean).join(' · ') || (s.lat != null ? `${s.lat.toFixed(5)}, ${s.lon.toFixed(5)}` : '—');
       tr.append(
         (() => { const td = el('td', null, stopLabel(s)); if (zpOf(s)) td.append(el('span', 'zp-badge', 'ZP')); if (s.verificado) td.append(el('span', 'ok-badge', '✓')); return td; })(),
         el('td', null, horaAt(s.t0) || mmss(s.t0)),
         el('td', 'hide-sm', lugar),
-        el('td', 'n', ready ? String(c.suben) : s.estado === 'error' ? '!' : '…'),
-        el('td', 'n pay', ready ? String(c.pagan) : ''),
-        el('td', 'n evade', ready ? String(c.evaden) : ''),
+        (() => { const td = el('td', 'n', ready ? String(c.suben) : vv ? String(vv.suben) : s.estado === 'error' ? '!' : '…'); if (vv) td.append(el('span', 'vivo-badge', '● en vivo')); return td; })(),
+        el('td', 'n pay', ready ? String(c.pagan) : vv ? String(vv.pagan) : ''),
+        el('td', 'n evade', ready ? String(c.evaden) : vv && vv.evaden != null ? String(vv.evaden) : ''),
         el('td', 'n doubt hide-sm', ready ? String(c.dudosos) : ''),
-        el('td', 'n hide-sm', ready ? String(c.bajan) : ''),
+        el('td', 'n hide-sm', ready ? String(c.bajan) : vv ? String(vv.bajan) : ''),
       );
       tr.onclick = () => { S.open = S.open === s ? null : s; renderStops(); goTo(s.t0); };
       rows.push(tr);
@@ -3754,6 +3891,7 @@
     const stopChanged = stop !== S.curStop;
     S.cur = k;
     S.curStop = stop;
+    if (stopChanged) renderLiveCount();
     if (stopChanged) document.querySelectorAll('tr.stop-row.cur').forEach((r) => r.classList.remove('cur'));
     document.querySelectorAll('.row.cur').forEach((r) => r.classList.remove('cur'));
     const m = S.moments[k];
