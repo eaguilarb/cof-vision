@@ -2228,7 +2228,8 @@
     if (sides.length < 2 || (sides.length === 2 && tr.boxes.filter((b) => lineSide(line, boxFoot(b.box), LINE_BAND * 2)).length < 2)) return null;
     const first = majority(sides, false), last = majority(sides, true);
     if (first === last) return null;
-    if (!travelled(tr.boxes, line, last === line.inside ? 'in' : 'out')) return null;
+    // Cruzó sin recorrer (apoyado o parado encima de la línea): no es subida ni bajada, y tampoco candidato.
+    if (!travelled(tr.boxes, line, last === line.inside ? 'in' : 'out')) return { still: true };
     const at = sides.find((x) => x.s === last && x.i > sides[0].i);
     return { dir: last === line.inside ? 'in' : 'out', i: at ? at.i : sides[sides.length - 1].i };
   }
@@ -2684,14 +2685,21 @@
       for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) P[k++] = g.lum[y * W + x];
       return { t: g.t, P };
     });
+    // Solo destellos de golpe: antes y después (hasta 3,5 s) el validador está quieto, y dura a lo más 2,5 s. Un
+    // cambio de luz del paisaje o el sol que entra al partir el bus se queda o cambia de a poco: no cuenta.
+    const ser = flashSeries(frames, inZone);
     const ev = [];
-    let cur = null;
-    for (const s of flashSeries(frames, inZone)) {
-      if (!s.on) continue;
-      if (cur && s.t - cur.t1 <= MOTION_STEP * 1.6) cur.t1 = s.t;
-      else { cur = { t0: s.t, t1: s.t }; ev.push(cur); }
+    for (let k = 0; k < ser.length;) {
+      if (!ser[k].on) { k++; continue; }
+      let e = k;
+      while (e + 1 < ser.length && ser[e + 1].on && ser[e + 1].t - ser[e].t <= MOTION_STEP * 1.6) e++;
+      const quietBefore = k > 0 && !ser[k - 1].on;
+      const after = ser.slice(e + 1).find((q) => !q.on);
+      const quietAfter = after && after.t - ser[e].t <= 3.5;
+      if (quietBefore && quietAfter && ser[e].t - ser[k].t <= 2.5) ev.push({ t: (ser[k].t + ser[e].t) / 2 });
+      k = e + 1;
     }
-    return ev.map((e) => ({ t: (e.t0 + e.t1) / 2 }));
+    return ev;
   }
   function greenEvents(mot, z) {
     if (!mot || !mot.green || !mot.W || !z) return [];
@@ -3246,6 +3254,7 @@
     const med = (a) => { const v = [...a].sort((p, q) => p - q); return v[v.length >> 1]; };
     for (const tr of tracks) {
       const x = crossing(tr, c.line);
+      if (x && x.still) continue;
       if (!x) {
         // No cruzó claramente (tapado por un pasamanos, pocas fotos): si llegó a la puerta, lo revisa la IA.
         // Solo quien aparece afuera (o en el umbral) y termina en el umbral o adentro: el que ya estaba adentro
