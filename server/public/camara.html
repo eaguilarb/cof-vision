@@ -1053,7 +1053,10 @@
           // Gemma no tiene modo JSON: se le pide en el texto y se extrae de la respuesta.
           body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: /gemma/.test(model) ? { temperature: 0.1 } : { temperature: 0.1, responseMimeType: 'application/json' } }),
         });
-      } catch {
+      } catch (e) {
+        // El modelo no respondió en 2 minutos: descansa 3 minutos y se prueba el siguiente (antes se reintentaba el
+        // mismo modelo lento para siempre).
+        if (e && e.name === 'TimeoutError') { COOL[model] = Date.now() + 180000; continue; }
         status('Sin conexión con Google. Reintentando…', null);
         await wait(4000);
         continue;
@@ -1080,7 +1083,8 @@
         continue;
       }
       if (res.status === 404) { COOL[model] = Infinity; continue; }
-      if (res.status >= 500) { COOL[model] = now + 60000; await wait(800); continue; }
+      // «Mucha demanda» (503) suele pasar en segundos: el modelo descansa 15 s, no un minuto.
+      if (res.status >= 500) { COOL[model] = now + 15000; await wait(800); continue; }
       if (res.status === 400 && !/api key|API_KEY/i.test(msg)) throw new Error(msg);
       const e = new Error(msg);
       e.badKey = true;
