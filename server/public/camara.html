@@ -420,7 +420,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.29-2';
+  const VERSION = '2026.09.29-3';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -2224,12 +2224,30 @@
     return Y.load;
   }
   // Personas en una imagen (canvas o video): recuadros [ymin, xmin, ymax, xmax] de 0 a 1 y su confianza.
+  // Cola del detector: la vista en vivo pasa antes que el conteo de fondo (si no, en vivo se atrasa varios segundos).
+  const YQ = { hi: [], lo: [], busy: false };
+  function yoloRun(sess, feeds, live) {
+    return new Promise((ok, fail) => { (live ? YQ.hi : YQ.lo).push({ sess, feeds, ok, fail }); yoloPump(); });
+  }
+  async function yoloPump() {
+    if (YQ.busy) return;
+    YQ.busy = true;
+    try {
+      while (YQ.hi.length || YQ.lo.length) {
+        const j = (YQ.hi.length ? YQ.hi : YQ.lo).shift();
+        const t0 = performance.now();
+        try { j.ok(await j.sess.run(j.feeds)); } catch (e) { j.fail(e); }
+        const ms = performance.now() - t0;
+        Y.ms = Y.ms ? Y.ms * 0.8 + ms * 0.2 : ms;
+      }
+    } finally { YQ.busy = false; }
+  }
   // Una pasada del detector sobre la imagen de 640×640 que arma «paint»; devuelve las personas en píxeles.
   async function yoloRaw(paint, live) {
     const sess = Y.sess || (await yolo());
     if (!sess) return null;
-    if (live && Y.wait > 1 && performance.now() - (Y.lastLive || 0) < 1500) return null;
-    if (live) Y.lastLive = performance.now();
+    // La vista en vivo no se acumula: si ya hay una pasada en vivo esperando, esta se salta.
+    if (live && YQ.hi.length) return null;
     const cv = Y.cv || (Y.cv = newCanvas(YOLO_IN, YOLO_IN));
     const g = cv.getContext('2d', { willReadFrequently: true });
     g.fillStyle = '#727272';
@@ -2238,13 +2256,8 @@
     const d = g.getImageData(0, 0, YOLO_IN, YOLO_IN).data;
     const N = YOLO_IN * YOLO_IN, arr = new Float32Array(3 * N);
     for (let i = 0; i < N; i++) { arr[i] = d[i * 4] / 255; arr[N + i] = d[i * 4 + 1] / 255; arr[2 * N + i] = d[i * 4 + 2] / 255; }
-    Y.wait++;
-    const t0 = performance.now();
-    const job = Y.queue.then(() => sess.run({ [sess.inputNames[0]]: new ort.Tensor('float32', arr, [1, 3, YOLO_IN, YOLO_IN]) }));
-    Y.queue = job.catch(() => null);
     let out;
-    try { out = await job; } catch (e) { console.warn('YOLO', e); return null; } finally { Y.wait--; }
-    Y.ms = Y.ms ? Y.ms * 0.8 + (performance.now() - t0) * 0.2 : performance.now() - t0;
+    try { out = await yoloRun(sess, { [sess.inputNames[0]]: new ort.Tensor('float32', arr, [1, 3, YOLO_IN, YOLO_IN]) }, live); } catch (e) { console.warn('YOLO', e); return null; }
     const o = out[sess.outputNames[0]];
     const res = [];
     for (let k = 0; k < o.dims[1]; k++) {
@@ -2751,7 +2764,7 @@
     }
   }
   const nap = (ms) => new Promise((ok) => setTimeout(ok, ms));
-  window.__cofDebug = { ...(window.__cofDebug || {}), live: () => S.cams.map((c) => [c.label, +c.video.currentTime.toFixed(1), c.live ? +c.live.t.toFixed(1) : null, c.live ? c.live.dets.length : null, c.live ? +c.live.dt.toFixed(2) : null, c.line ? 1 : 0]).concat([[Y.ep, Math.round(Y.ms || 0), S.stops.length, (S.provs || []).map((p) => `${p.t0.toFixed(0)}-${p.t1.toFixed(0)}:${JSON.stringify(p.vivo && p.vivo.cams)}`).join(' ')]]) }; // solo para pruebas automáticas
+  window.__cofDebug = { ...(window.__cofDebug || {}), live: () => S.cams.map((c) => [c.label, +c.video.currentTime.toFixed(1), c.live ? +c.live.t.toFixed(1) : null, c.live ? c.live.dets.length : null, c.live ? +c.live.dt.toFixed(2) : null, c.line ? `${c.line.guess || (c.line.auto ? "ia" : "mano")}:${c.line.a.map((v) => v.toFixed(2))}-${c.line.b.map((v) => v.toFixed(2))}` : 0, (c.flow || []).length]).concat([[Y.ep, Math.round(Y.ms || 0), S.stops.length, (S.provs || []).map((p) => `${p.t0.toFixed(0)}-${p.t1.toFixed(0)}:${JSON.stringify(p.vivo && p.vivo.cams)}`).join(' ')]]) }; // solo para pruebas automáticas
   // Una foto nueva de una cámara: se sigue a cada persona y se cuenta quien cruza la línea de la puerta.
   function liveFeed(c, t, dets) {
     const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [], dt: 0.3 });
