@@ -802,7 +802,7 @@
       const v = door && hasValidator(c);
       c.valBtn.hidden = !v;
       c.valBtn.classList.toggle('warn', v && (!c.valz || !!c.valz.auto));
-      c.valBtn.textContent = !c.valz ? '💡 Marcar el validador' : c.valz.auto ? '💡 ¿Es este el validador? Confírmalo' : '💡 Validador ✓';
+      c.valBtn.textContent = !c.valz ? (c.mono ? '💡 Cámara en blanco y negro: marca el validador' : '💡 Marcar el validador') : c.valz.auto ? '💡 ¿Es este el validador? Confírmalo' : '💡 Validador ✓';
     }
   }
   function renderCams() {
@@ -1942,9 +1942,23 @@
   };
   // Puntos verdes de una foto, solo en manchas compactas (una pantalla encendida): las líneas finas verdes en los
   // bordes de los fierros son ruido de la compresión del video y se descartan.
+  // Cámara en blanco y negro (modo noche o infrarrojo): no hay color, así que la luz verde no se ve como verde.
+  function isMonoData(d) {
+    let s = 0, n = 0;
+    for (let i = 0; i < d.length; i += 4 * 13) { s += Math.abs(d[i] - d[i + 1]) + Math.abs(d[i + 1] - d[i + 2]); n++; }
+    return n > 0 && s / n < 6;
+  }
   function greenIdx(f) {
     const full = f.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, f.width, f.height).data;
     const W = f.width, N = W * f.height;
+    // En blanco y negro se guarda la luminancia: el pago se ve como un destello de la pantalla del validador.
+    if (isMonoData(full)) {
+      const lum = new Uint8Array(N);
+      for (let i = 0; i < N; i++) lum[i] = (full[i * 4] + full[i * 4 + 1] + full[i * 4 + 2]) / 3;
+      const none = [];
+      none.lum = lum;
+      return none;
+    }
     const m = new Uint8Array(N);
     for (let i = 0; i < N; i++) if (isGreen(full[i * 4], full[i * 4 + 1], full[i * 4 + 2])) m[i] = 1;
     const idx = [];
@@ -1967,7 +1981,7 @@
     for await (const { t, f } of motionFrames(c, times)) {
       if (run !== S.run) return [];
       if (!f) continue;
-      mot.green.push({ t, idx: greenIdx(f) });
+      { const gi = greenIdx(f); mot.green.push({ t, idx: gi, lum: gi.lum }); }
       mot.W = f.width;
       mot.H = f.height;
     }
@@ -1984,7 +1998,7 @@
       if (run !== S.run) return out;
       if (!f) { prev = null; continue; }
       {
-        out.green.push({ t, idx: greenIdx(f) });
+        { const gi = greenIdx(f); out.green.push({ t, idx: gi, lum: gi.lum }); }
         out.W = f.width;
         out.H = f.height;
       }
@@ -2575,6 +2589,7 @@
   function learnValZone(c, mot) {
     if (!hasValidator(c) || !mot || !mot.green || !mot.green.length || !mot.W) return;
     if (c.valz && !c.valz.auto) return;
+    if (mot.green.filter((g) => g.lum).length > mot.green.length / 2) { c.mono = true; tileLineBtn(c); return; }
     const W = mot.W, H = mot.H, n = mot.green.length;
     if (!c.gheat || c.gheat.length !== W * H) c.gheat = new Float32Array(W * H);
     // Solo cuentan los destellos: un verde que se prende 0,5 a 3,5 s y que antes y después estuvo apagado al menos
@@ -2615,8 +2630,45 @@
   }
   const VAL_MAX = 3.5;
   // Momentos en que el validador se puso verde (cada uno es un pago).
+  // Blanco y negro: un pago es un cambio de brillo del centro del recuadro del validador (la pantalla se ilumina o
+  // cambia) que dura 0,4 a 3,5 s y vuelve, mientras el borde del recuadro sigue igual (una mano que pasa tapa
+  // también el borde y no cuenta).
+  const FLASH_MIN = 22;
+  function flashEvents(mot, z) {
+    const W = mot.W, H = mot.H;
+    const x0 = Math.floor(z.x0 * W), x1 = Math.ceil(z.x1 * W), y0 = Math.floor(z.y0 * H), y1 = Math.ceil(z.y1 * H);
+    const iw = x1 - x0, ih = y1 - y0;
+    if (iw < 4 || ih < 4) return [];
+    const cx0 = x0 + Math.floor(iw * 0.25), cx1 = x1 - Math.floor(iw * 0.25), cy0 = y0 + Math.floor(ih * 0.25), cy1 = y1 - Math.floor(ih * 0.25);
+    const ser = [];
+    for (const g of mot.green) {
+      if (!g.lum) continue;
+      let c = 0, cn = 0, r = 0, rn = 0;
+      for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+        const v = g.lum[y * W + x];
+        if (x >= cx0 && x < cx1 && y >= cy0 && y < cy1) { c += v; cn++; } else if (x < x0 + 2 || x >= x1 - 2 || y < y0 + 2 || y >= y1 - 2) { r += v; rn++; }
+      }
+      ser.push({ t: g.t, c: c / Math.max(1, cn), r: r / Math.max(1, rn) });
+    }
+    const med = (a) => { const v = [...a].sort((p, q) => p - q); return v[v.length >> 1]; };
+    const ev = [];
+    let cur = null;
+    for (let k = 0; k < ser.length; k++) {
+      const s = ser[k];
+      const past = ser.filter((q) => q.t >= s.t - 5 && q.t <= s.t - 1);
+      if (past.length < 3) continue;
+      const dc = Math.abs(s.c - med(past.map((q) => q.c))), dr = Math.abs(s.r - med(past.map((q) => q.r)));
+      const on = dc >= FLASH_MIN && dr <= dc * 0.5;
+      if (!on) continue;
+      if (cur && s.t - cur.t1 <= MOTION_STEP * 1.6) cur.t1 = s.t;
+      else { cur = { t0: s.t, t1: s.t }; ev.push(cur); }
+    }
+    return ev.filter((e) => e.t1 - e.t0 <= VAL_MAX).map((e) => ({ t: (e.t0 + e.t1) / 2 }));
+  }
   function greenEvents(mot, z) {
     if (!mot || !mot.green || !mot.W || !z) return [];
+    // Mayoría de fotos en blanco y negro: se usa el destello en vez del verde.
+    if (mot.green.filter((g) => g.lum).length > mot.green.length / 2) return flashEvents(mot, z);
     const W = mot.W, H = mot.H;
     const x0 = Math.floor(z.x0 * W), x1 = Math.ceil(z.x1 * W), y0 = Math.floor(z.y0 * H), y1 = Math.ceil(z.y1 * H);
     const area = Math.max(1, (x1 - x0) * (y1 - y0));
@@ -2994,6 +3046,23 @@
     const g = cv.getContext('2d', { willReadFrequently: true });
     g.drawImage(v, z.x0 * W, z.y0 * H, (z.x1 - z.x0) * W, (z.y1 - z.y0) * H, 0, 0, 32, 32);
     const d = g.getImageData(0, 0, 32, 32).data;
+    // Blanco y negro: destello del centro frente a lo que había hace 1 a 5 s, con el borde quieto.
+    if (isMonoData(d)) {
+      let cc = 0, cn = 0, rr = 0, rn = 0;
+      for (let i = 0; i < 1024; i++) {
+        const x = i % 32, y = i >> 5, v = (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / 3;
+        if (x >= 8 && x < 24 && y >= 8 && y < 24) { cc += v; cn++; } else if (x < 2 || y < 2 || x > 29 || y > 29) { rr += v; rn++; }
+      }
+      const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [], dt: 0.3 });
+      const now = c.video.currentTime, cur = { t: now, c: cc / cn, r: rr / rn };
+      L.zh = (L.zh || []).filter((q) => q.t < now && q.t >= now - 5);
+      const past = L.zh.filter((q) => q.t <= now - 1);
+      L.zh.push(cur);
+      if (past.length < 3) return 0;
+      const med = (a) => { const v = [...a].sort((p, q) => p - q); return v[v.length >> 1]; };
+      const dc = Math.abs(cur.c - med(past.map((q) => q.c))), dr = Math.abs(cur.r - med(past.map((q) => q.r)));
+      return dc >= FLASH_MIN && dr <= dc * 0.5 ? Math.round(dc) : 0;
+    }
     let n = 0, ring = 0, ringN = 0;
     for (let i = 0; i < 1024; i++) {
       const x = i % 32, y = i >> 5, edge = x < 3 || y < 3 || x > 28 || y > 28;
