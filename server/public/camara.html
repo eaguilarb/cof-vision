@@ -420,7 +420,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.28-3';
+  const VERSION = '2026.09.29-1';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -2021,7 +2021,7 @@
   // no gasta cupo de IA y detecta en cada foto a todas las personas con su recuadro. Se descarga una sola vez.
   const ORT_DIR = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
   // Primero el modelo entrenado con videos de las cámaras de los buses (COF); si no se puede bajar, el modelo general.
-  const YOLO_COF = 'https://eaguilarb.github.io/cof-vision/models/cof-v1.onnx';
+  const YOLO_COF = 'https://eaguilarb.github.io/cof-vision/models/cof-v2.onnx';
   const YOLO_URL = 'https://huggingface.co/onnx-community/yolov10s/resolve/main/onnx/model.onnx';
   const YOLO_IN = 640;
   const Y = { load: null, sess: null, ep: '', failed: '', queue: Promise.resolve(), wait: 0, pct: 0 };
