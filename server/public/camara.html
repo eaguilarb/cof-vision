@@ -2667,7 +2667,7 @@
           if (inZone[k] === 2) { if (Math.abs(dd) > 18) ring++; } else { n++; if (dd > 18) up++; }
         }
         // La pantalla es una parte chica del recuadro: si se ilumina casi todo (sol que entra, el bus que parte), no es un pago.
-        out.push({ t: fr.t, on: up >= Math.max(3, n * FLASH_PX) && up <= n * 0.35 && up >= ring * 0.8 });
+        out.push({ t: fr.t, on: up >= Math.max(3, n * FLASH_PX) && up <= n * 0.35 && up >= ring * 0.8, over: up > n * 0.35 });
       }
       hist.push(fr);
       while (hist.length && hist[0].t < fr.t - 5) hist.shift();
@@ -2694,9 +2694,11 @@
       if (!ser[k].on) { k++; continue; }
       let e = k;
       while (e + 1 < ser.length && ser[e + 1].on && ser[e + 1].t - ser[e].t <= MOTION_STEP * 1.6) e++;
-      const quietBefore = k > 0 && !ser[k - 1].on;
-      const after = ser.slice(e + 1).find((q) => !q.on);
-      const quietAfter = after && after.t - ser[e].t <= 3.5;
+      // Antes y después, el validador quieto (ni destello ni «se ilumina casi todo»): así una subida o bajada de luz
+      // de a poco, que pasa por el rango de un pago en su camino, no cuenta.
+      const quietBefore = k > 0 && !ser[k - 1].on && !ser[k - 1].over;
+      const after = ser[e + 1];
+      const quietAfter = after && !after.over && after.t - ser[e].t <= 3.5;
       if (quietBefore && quietAfter && ser[e].t - ser[k].t <= 2.5) ev.push({ t: (ser[k].t + ser[e].t) / 2 });
       k = e + 1;
     }
