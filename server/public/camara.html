@@ -1541,17 +1541,25 @@
     const top = ref.active[0] * f.height, AH = (ref.active[1] - ref.active[0]) * f.height;
     const y = Math.round(top + OSD_BOT[0] * AH), h = Math.max(1, Math.round((OSD_BOT[1] - OSD_BOT[0]) * AH)), w = Math.round(f.width * 0.62);
     const d = f.getContext('2d').getImageData(0, y, w, h).data;
-    const L = new Uint8Array(w * h);
+    const L = new Uint8Array(w * h), T = new Uint8Array(w * h);
     for (let i = 0; i < L.length; i++) L[i] = (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / 3;
-    return L;
+    // Letras del texto sobreimpreso: blanco puro, trazo delgado con borde oscuro (el fondo claro no cuenta).
+    for (let yy = 2; yy < h - 2; yy++) for (let x = 2; x < w - 2; x++) {
+      const i = yy * w + x;
+      if (L[i] < 200 || Math.max(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]) - Math.min(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]) > 40) continue;
+      if (L[i - 2] < 110 || L[i + 2] < 110 || L[i - 2 * w] < 110 || L[i + 2 * w] < 110) T[i] = 1;
+    }
+    return { L, T };
   }
-  // Parte de las letras (lo claro) que cambió entre dos lecturas; null si no hay texto claro que comparar.
+  // Parte de las letras que cambió entre dos lecturas (lo que era letra en una y ya no es claro en la otra);
+  // null si no hay texto que comparar.
   function stripChange(A, B) {
-    if (!A || !B || A.length !== B.length) return null;
-    let n = 0, dd = 0;
-    for (let i = 0; i < A.length; i++) if (A[i] > 190 || B[i] > 190) { n++; if (Math.abs(A[i] - B[i]) > 70) dd++; }
-    return n > 30 ? dd / n : null;
+    if (!A || !B || A.L.length !== B.L.length) return null;
+    const one = (P, Q) => { let n = 0, dd = 0; for (let i = 0; i < P.T.length; i++) if (P.T[i]) { n++; if (Q.L[i] < 150) dd++; } return n > 30 ? dd / n : null; };
+    const a = one(A, B), b = one(B, A);
+    return a == null || b == null ? null : Math.max(a, b);
   }
+  const MOVE_MIN = 0.06;
   // Devuelve true (leído), false (se canceló) o 'sin' (la cámara no trae coordenadas que se puedan comparar).
   async function localPass(run) {
     const ref = refCam();
@@ -1560,7 +1568,17 @@
     const byT = new Map(S.moments.map((m) => [m.t, m]));
     // Ya leído antes (por ejemplo, al reabrir los mismos videos): no se vuelve a leer.
     if (times.every((t) => byT.has(t))) return S.moments.some((m) => m.detenido) ? true : 'sin';
-    let prev = null, prevM = null, seen = 0, still = 0;
+    let prev = null, prevM = null, seen = 0, still = 0, unsure = 0;
+    // Si el GPS de este bus «baila» con el bus detenido (cambios chicos que no son ni 0 ni de marcha), la lectura
+    // sin IA no es confiable: se descarta y se lee con IA como antes.
+    const giveUp = () => {
+      S.moments = S.moments.filter((x) => !x.local || x.osd);
+      for (const x of S.moments) delete x.local;
+      S.frontier = S.range.from;
+      S.stops = mergeStops(findStops(), S.stops);
+      return 'sin';
+    };
+    const doubtful = () => seen >= 12 && unsure / seen > 0.15;
     for (let i = 0; i < times.length; i++) {
       if (run !== S.run) return false;
       const t = times[i];
@@ -1574,14 +1592,15 @@
         if (ch <= STILL_MAX) {
           still++;
           for (const x of [m, prevM]) if (x && !x.osd) { x.vel = 0; x.detenido = true; }
-        }
+        } else if (ch < MOVE_MIN) unsure++;
       }
       m.local = true;
       prev = L;
       prevM = m;
       S.frontier = Math.min(t + S.step / 2, S.range.to);
       // Sin texto claro en las primeras 20 lecturas: esta cámara no trae coordenadas.
-      if (i === 20 && !seen) { S.moments = S.moments.filter((x) => !x.local || x.osd); return 'sin'; }
+      if (i === 20 && !seen) return giveUp();
+      if (i === 40 && doubtful()) return giveUp();
       if (i % 15 === 14 || i === times.length - 1) {
         S.moments.sort((a, b) => a.t - b.t);
         S.prog = { k: i + 1, n: times.length, at: t, fase: 'lectura' };
@@ -1592,7 +1611,7 @@
         await nap(0);
       }
     }
-    return still ? true : 'sin';
+    return still && !doubtful() ? true : giveUp();
   }
   // Para la IA: un momento a la mitad de cada paradero (hora y ubicación), más el primero y el último del video.
   function stopTimes() {
