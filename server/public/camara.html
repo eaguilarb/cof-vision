@@ -2666,7 +2666,8 @@
           const vals = past.map((h) => h.P[k]).sort((p, q) => p - q), dd = fr.P[k] - vals[vals.length >> 1];
           if (inZone[k] === 2) { if (Math.abs(dd) > 18) ring++; } else { n++; if (dd > 18) up++; }
         }
-        out.push({ t: fr.t, on: up >= Math.max(3, n * FLASH_PX) && up >= ring * 0.8 });
+        // La pantalla es una parte chica del recuadro: si se ilumina casi todo (sol que entra, el bus que parte), no es un pago.
+        out.push({ t: fr.t, on: up >= Math.max(3, n * FLASH_PX) && up <= n * 0.35 && up >= ring * 0.8 });
       }
       hist.push(fr);
       while (hist.length && hist[0].t < fr.t - 5) hist.shift();
