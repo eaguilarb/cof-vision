@@ -270,6 +270,7 @@
         <span class="range">Desde <input id="dFrom" inputmode="numeric" title="mm:ss o h:mm:ss"> <button type="button" id="dFromHere">aquí</button> hasta <input id="dTo" inputmode="numeric" title="mm:ss o h:mm:ss"> <button type="button" id="dToHere">aquí</button></span>
         <label class="chk">Cámaras <select id="dMode" class="svc-sel"><option value="all">Todas las cámaras (mosaico)</option><option value="one">Solo la que estoy viendo</option><option value="orig">Solo la que estoy viendo, archivo original (instantáneo)</option></select></label>
         <label class="chk">Sonido <select id="dAudio" class="svc-sel"></select></label>
+        <label class="chk">Datos en el video <select id="dData" class="svc-sel"><option value="clean">Solo paradero y ubicación</option><option value="yolo">Con datos de YOLO (recuadros, números y conteo)</option></select></label>
         <label class="chk">Velocidad <select id="dSpeed" class="svc-sel"><option value="1">Normal</option><option value="2">2x (sin sonido)</option><option value="4">4x (sin sonido)</option></select></label>
         <button class="btn small" id="btnClip" type="button">Descargar video</button>
         <button class="btn small ghost" id="btnPhoto" type="button">📷 Foto de este momento</button>
@@ -405,7 +406,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 10;
+  const COUNT_V = 11;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -419,7 +420,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.28-1';
+  const VERSION = '2026.09.28-3';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1407,6 +1408,10 @@
       if (s != null) clocks.set(c, s - ts[i]);
     });
     if (S.cams.filter((c) => !c.bad).length === 1) { const c = S.cams.find((x) => !x.bad); if (c.tipo !== 'puerta_delantera' && !/^puerta_/.test(c.tipo)) c.tipo = 'puerta_delantera'; }
+    // En estos buses los canales son fijos: CH4 puerta delantera (con validador), CH5 central, CH7 trasera. La IA a
+    // veces confunde la delantera con la del conductor; manda la regla del canal (se puede cambiar a mano).
+    const FIXED = { CH4: ['puerta_delantera', true], CH5: ['puerta_central', false], CH7: ['puerta_trasera', false] };
+    if (cams.some((c) => c.label === 'CH4')) for (const c of cams) if (FIXED[c.label]) { [c.tipo, c.validador] = FIXED[c.label]; }
     pickRef();
     // Desfase de cada cámara respecto de la principal según la hora escrita en la imagen.
     const r0 = clocks.get(refCam());
@@ -1452,12 +1457,25 @@
     c.height = Math.max(1, Math.round(h));
     return c;
   }
+  // Zona con imagen de una foto: algunos equipos graban la imagen 16:9 dentro de un cuadro 4:3 con franjas negras
+  // arriba y abajo; el texto sobreimpreso está dentro de la imagen, no en las franjas.
+  function activeRows(f) {
+    const d = f.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, f.width, f.height).data;
+    const W = f.width, H = f.height;
+    const lit = (y) => { let s = 0; for (let x = 0; x < W; x += 4) { const o = (y * W + x) * 4; s += d[o] + d[o + 1] + d[o + 2]; } return s / (3 * Math.ceil(W / 4)) > 14; };
+    let a = 0, b = H - 1;
+    while (a < H * 0.3 && !lit(a)) a++;
+    while (b > H * 0.7 && !lit(b)) b--;
+    return a < H * 0.3 && b > H * 0.7 ? [a, b + 1] : [0, H];
+  }
   async function osdRow(ref, t, n) {
     const f = await frameOf(ref, t, 960);
     if (!f) return null;
     const gut = 64;
-    const y0 = OSD_TOP[0] * f.height, h0 = (OSD_TOP[1] - OSD_TOP[0]) * f.height;
-    const y1 = OSD_BOT[0] * f.height, h1 = (OSD_BOT[1] - OSD_BOT[0]) * f.height;
+    if (!ref.active) ref.active = activeRows(f).map((v) => v / f.height);
+    const top = ref.active[0] * f.height, AH = (ref.active[1] - ref.active[0]) * f.height;
+    const y0 = top + OSD_TOP[0] * AH, h0 = (OSD_TOP[1] - OSD_TOP[0]) * AH;
+    const y1 = top + OSD_BOT[0] * AH, h1 = (OSD_BOT[1] - OSD_BOT[0]) * AH;
     const c = newCanvas(gut + f.width, h0 + h1 + 3);
     const g = c.getContext('2d');
     g.fillStyle = '#26323b';
@@ -2683,6 +2701,54 @@
     const every = Math.ceil(keep.length / cap);
     return keep.filter((_, k) => k % every === 0);
   }
+  // ---- personas que ya iban a bordo (agentes): «firma» de colores de cabeza y torso.
+  // Histograma de tono/saturación/brillo de la parte de arriba del recuadro; se compara por intersección.
+  function sigOf(cv, box) {
+    const W = cv.width, H = cv.height;
+    const [y0, x0, y1, x1] = box;
+    const sx = x0 * W, sy = y0 * H, sw = (x1 - x0) * W, sh = (y1 - y0) * H * 0.55;
+    if (sw < 6 || sh < 6) return null;
+    const t = Y.sigCv || (Y.sigCv = newCanvas(12, 16));
+    const g = t.getContext('2d', { willReadFrequently: true });
+    g.drawImage(cv, sx, sy, sw, sh, 0, 0, 12, 16);
+    const d = g.getImageData(0, 0, 12, 16).data;
+    const h = new Float32Array(8 * 2 * 3 + 4);
+    for (let i = 0; i < 192; i++) {
+      const r = d[i * 4], gg = d[i * 4 + 1], b = d[i * 4 + 2];
+      const mx = Math.max(r, gg, b), mn = Math.min(r, gg, b), v = mx / 255, sat = mx ? (mx - mn) / mx : 0;
+      if (sat < 0.2 || v < 0.15) { h[48 + Math.min(3, Math.floor(v * 4))] += 1; continue; }
+      let hue = mx === r ? ((gg - b) / (mx - mn)) * 60 : mx === gg ? ((b - r) / (mx - mn)) * 60 + 120 : ((r - gg) / (mx - mn)) * 60 + 240;
+      hue = (hue + 360) % 360;
+      h[Math.floor(hue / 45) * 6 + (sat > 0.55 ? 3 : 0) + Math.min(2, Math.floor(v * 3))] += 1;
+    }
+    for (let i = 0; i < h.length; i++) h[i] /= 192;
+    return h;
+  }
+  const sigSim = (a, b) => { let s = 0; for (let i = 0; i < a.length; i++) s += Math.min(a[i], b[i]); return s; };
+  const SIG_SAME = 0.8;
+  // Quienes se ven adentro del bus justo antes del paradero (el bus todavía anda, puertas cerradas).
+  async function onboardSigs(c, s, run) {
+    if (!Y.sess || !c.line) return [];
+    const ts = [];
+    for (let t = Math.max(0, s.t0 - 12); t <= s.t0 - 5 + 1e-6; t += 1) ts.push(t);
+    if (!ts.length) return [];
+    const fr = await framesAt(c, ts);
+    const out = [];
+    for (const f of fr) {
+      if (run !== S.run) return [];
+      if (!f) continue;
+      const dets = await yoloDetect(f, false);
+      for (const d of dets || []) {
+        if (d.s < 0.4) continue;
+        const [ax, ay] = c.line.a, [bx, by] = c.line.b, P = boxFoot(d.box);
+        const sd = (((bx - ax) * (P[1] - ay) - (by - ay) * (P[0] - ax)) / (Math.hypot(bx - ax, by - ay) || 1)) * c.line.inside;
+        if (sd < 0.02) continue;
+        const sg = sigOf(f, d.box);
+        if (sg) out.push(sg);
+      }
+    }
+    return out;
+  }
   // Conteo de una puerta con línea: devuelve a quienes subieron (con fotos anotadas) o null si no se pudo.
   async function lineCount(s, c, run) {
     // Con el detector en el computador (sin costo) se miran más fotos por paradero.
@@ -2764,7 +2830,18 @@
       if (run !== S.run) return null;
       need.forEach((i, j) => { frames[i].f = got[j]; });
     }
+    // Personas que ya iban a bordo antes del paradero (y la «tripulación» vista en paraderos anteriores): si una de
+    // ellas «sube», es un agente o alguien que bajó y volvió a subir, y no se cuenta como pasajero.
+    const pre = use.length ? await onboardSigs(c, s, run) : [];
+    if (run !== S.run) return null;
+    c.crew = c.crew || [];
+    for (const sg of pre) {
+      const m = c.crew.find((q) => sigSim(q.sig, sg) >= SIG_SAME);
+      if (m) m.n++; else c.crew.push({ sig: sg, n: 1, stop: s.t0 });
+    }
+    const known = [...pre, ...c.crew.filter((q) => q.n >= 3 || q.stop !== s.t0).map((q) => q.sig)];
     const out = use.filter((x) => frames[x.at].f).map((x) => ({
+      onboard: (() => { const sg = sigOf(frames[x.at].f, x.box); return !!sg && known.some((k) => sigSim(k, sg) >= SIG_SAME); })(),
       c, tr: x.tr, t: frames[x.at].t, d: x.d, near: x.near, fromOut: !!x.fromOut, box: x.box,
       thumb: annotate(frames[x.at], c.line, x.tr, frames).toDataURL('image/jpeg', 0.8),
       views: x.pick.filter((b) => frames[b.i].f).map((b) => annotate(frames[b.i], c.line, x.tr, frames, '#00e5ff')),
@@ -2989,10 +3066,10 @@
       // Quien llegó desde afuera hasta la puerta y no volvió a salir se cuenta (sin IA): si no hay luz verde es la
       // posible evasión que se busca. Si solo se asomó al umbral, se cuenta si pagó o si la IA ve que sube.
       if (b.near && pay !== true && !(ver ? sube === true : b.fromOut)) return;
-      const noSube = !b.near && sube === false;
+      const noSube = (!b.near && sube === false) || b.onboard;
       // La luz del validador manda sobre lo que diga la IA (se ve directo en la imagen).
       if (pay !== null) v = pay;
-      const how = noSube ? 'cruzó la línea, pero la IA revisó y NO subió (ya estaba adentro o se bajó)' : b.near ? `llegó desde afuera hasta la puerta${pay ? ' y pagó' : sube ? ' y la IA vio que sube' : ''}` : 'cruzó la línea';
+      const how = b.onboard ? 'ya iba a bordo antes del paradero (agente, o alguien que bajó y volvió a subir): no se cuenta' : noSube ? 'cruzó la línea, pero la IA revisó y NO subió (ya estaba adentro o se bajó)' : b.near ? `llegó desde afuera hasta la puerta${pay ? ' y pagó' : sube ? ' y la IA vio que sube' : ''}` : 'cruzó la línea';
       const light = pay === true ? ' · luz verde en el validador' : pay === false ? ' · NO se vio luz verde en el validador' : '';
       allMeta.push({ cam: b.c.key, t: b.t, thumb: b.thumb });
       personas.push({
@@ -3066,7 +3143,7 @@
     for (const x of lineRes) {
       const ng = (x.greens || []).length;
       const luces = !hasValidator(x.c) ? '' : !x.c.valz ? ' · validador: márcalo con «💡 Marcar el validador» sobre la cámara para saber quién pagó'
-        : x.c.valz.auto ? ` · validador sin confirmar (${ng} posible${ng === 1 ? '' : 's'} luz${ng === 1 ? '' : 'es'} verde${ng === 1 ? '' : 's'}): confírmalo con «💡» sobre la cámara`
+        : x.c.valz.auto ? ` · validador sin confirmar (${ng} posible${ng === 1 ? '' : 's'} ${ng === 1 ? 'luz' : 'luces'} verde${ng === 1 ? '' : 's'}): confírmalo con «💡» sobre la cámara`
           : ` · validador: ${ng} ${ng === 1 ? 'luz' : 'luces'} verde${ng === 1 ? '' : 's'} (pagos)`;
       porCamara.push(`${camName(x.c)}: ${x.quiet ? `sin movimiento, nadie sube${luces}` : `línea de conteo${x.c.line && x.c.line.auto ? ' automática' : ''} (${x.how}): cruzan hacia adentro ${x.boarders.length}, hacia afuera ${x.bajan}${(x.near || []).length ? `, ${x.near.length} más llegaron a la puerta` : ''} · ${x.tracks} personas seguidas en ${x.frames} fotos${luces}`}`);
       bajan += x.bajan;
@@ -3082,10 +3159,13 @@
     }
     keepThumbs(s, allMeta.map((m) => m.thumb));
     const suben = personas.filter((p) => !p.staff).length;
+    const rearBoard = personas.filter((p) => !p.staff && p.linea && p.sinValidador).length;
     Object.assign(s, {
       estado: 'listo', v: COUNT_V, personas, bajan, bajanDet: [], bajanManual: null, porCamara,
       resumen: `Suben ${suben} ${suben === 1 ? 'persona' : 'personas'} (conteo por puerta).`,
-      zpModel: truthy(zp && zp.es), zpMotivo: String((zp && zp.motivo) || '').trim(),
+      // Sin IA: si suben varias personas por las puertas sin validador, es típico de una zona paga.
+      zpModel: truthy(zp && zp.es) || rearBoard >= 3,
+      zpMotivo: String((zp && zp.motivo) || (rearBoard >= 3 ? `subieron ${rearBoard} personas por las puertas sin validador (típico de zona paga)` : '')).trim(),
       personal: personal.join(' · '),
       modelo: lineRes.some((x) => /^detector /.test(x.how || '')) ? `yolo|${ver ? S.lastModel || '' : ''}` : S.lastModel || '',
     });
@@ -4437,6 +4517,66 @@
     const conv = await M.Conversion.init({ input, output, composable: true, tracks: 'primary', video: { discard: true }, trim: { start, end }, showWarnings: false });
     return conv.utilizedTracks.length ? { conv } : { none: true };
   }
+  // Datos de YOLO sobre una cámara del video descargado: recuadro y número de cada persona, su recorrido, la línea
+  // de la puerta, el validador y el conteo del paradero en ese momento.
+  function drawYoloCell(g, c, x, y, cw, ch, st, t) {
+    const vw = c.probe.videoWidth || 16, vh = c.probe.videoHeight || 9;
+    const k = Math.min(cw / vw, ch / vh), ox = x + (cw - vw * k) / 2, oy = y + (ch - vh * k) / 2;
+    const X = (u) => ox + u * vw * k, Yc = (v) => oy + v * vh * k;
+    // Recuadros detectados en la foto de la celda (cw × ch) → a la zona del video.
+    const toC = (b) => [(b[1] * cw - (ox - x)) / (vw * k), (b[0] * ch - (oy - y)) / (vh * k), (b[3] * cw - (ox - x)) / (vw * k), (b[2] * ch - (oy - y)) / (vh * k)];
+    g.save();
+    if (c.line) {
+      g.lineWidth = 3;
+      g.strokeStyle = '#f5a300';
+      g.beginPath(); g.moveTo(X(c.line.a[0]), Yc(c.line.a[1])); g.lineTo(X(c.line.b[0]), Yc(c.line.b[1])); g.stroke();
+    }
+    if (c.valz && !c.valz.auto) {
+      const z = c.valz;
+      g.lineWidth = 2;
+      g.strokeStyle = '#22c55e';
+      g.strokeRect(X(z.x0), Yc(z.y0), (z.x1 - z.x0) * vw * k, (z.y1 - z.y0) * vh * k);
+    }
+    for (const d of st.dets) {
+      const [x0, y0, x1, y1] = toC(d.box);
+      const foot = [(x0 + x1) / 2, y1];
+      const tr = st.T.tracks.find((q) => q.id === d.id);
+      if (tr && c.line && segDist(c.line, foot) < 0.12) tr.door = true;
+      const door = tr && tr.door;
+      const col = door ? idColor(d.id) : 'rgba(200,200,200,.7)';
+      if (door && tr.feet && tr.feet.length > 1) {
+        g.strokeStyle = col;
+        g.lineWidth = 2;
+        g.beginPath();
+        tr.feet.slice(-15).forEach((p, j) => { if (j) g.lineTo(X(p[0]), Yc(p[1])); else g.moveTo(X(p[0]), Yc(p[1])); });
+        g.stroke();
+      }
+      g.lineWidth = door ? 2.5 : 1;
+      g.strokeStyle = col;
+      g.strokeRect(X(x0), Yc(y0), (x1 - x0) * vw * k, (y1 - y0) * vh * k);
+      if (door) {
+        g.font = 'bold 12px sans-serif';
+        g.fillStyle = col;
+        g.fillRect(X(x0), Yc(y0) - 15, 34, 15);
+        g.fillStyle = '#000';
+        g.textBaseline = 'alphabetic';
+        g.fillText(`#${d.id}`, X(x0) + 3, Yc(y0) - 3);
+      }
+    }
+    const s = S.stops.find((q) => t >= q.t0 - 4 && t <= q.t1 + 2);
+    if (s) {
+      const cc = s.estado === 'listo' ? counts(s) : vivoCounts(s);
+      const txt = cc ? `PARADERO ${stopLabel(s)} · SUBEN ${cc.suben} · PAGAN ${(cc.pagan || 0) + (cc.zp || 0)} · EVADEN ${cc.evaden ?? '—'}` : `PARADERO ${stopLabel(s)}`;
+      g.font = 'bold 14px sans-serif';
+      const w = g.measureText(txt).width + 14;
+      g.fillStyle = 'rgba(0,0,0,.72)';
+      g.fillRect(x + cw - w - 6, y + 6, w, 22);
+      g.fillStyle = '#fff';
+      g.textBaseline = 'middle';
+      g.fillText(txt, x + cw - w + 1, y + 17);
+    }
+    g.restore();
+  }
   // Mosaico (o una cámara) con la franja de datos, decodificado y codificado directamente.
   async function buildClip(M, from, to, cams, speed) {
     const FPS = 25;
@@ -4469,10 +4609,31 @@
       return sink.canvasesAtTimestamps(times());
     });
     const t0 = performance.now();
+    // Con datos de YOLO: se detecta cada medio segundo de video en cada cámara y se sigue a cada persona.
+    const withYolo = $('#dData').value === 'yolo' && !!(await yolo());
+    const trk = cams.map(() => ({ T: makeTracker(), dets: [], last: -9 }));
     for (let k = 0; k < n; k++) {
       if (CLIP.cancel) { await output.cancel(); return null; }
       const t = from + k * dt;
       const frames = await Promise.all(iters.map((it) => (it ? it.next() : null)));
+      if (withYolo) {
+        for (let i = 0; i < cams.length; i++) {
+          const f = frames[i] && !frames[i].done && frames[i].value;
+          if (!f || t - trk[i].last < 0.5) continue;
+          const dets = await yoloDetect(f.canvas, false);
+          if (!dets) continue;
+          trk[i].last = t;
+          trk[i].dets = trk[i].T.step(dets);
+          trk[i].T.prune(40);
+          const c = cams[i], vw = c.probe.videoWidth || 16, vh = c.probe.videoHeight || 9, kk = Math.min(L0.cw / vw, L0.ch / vh);
+          for (const d of trk[i].dets) {
+            const tr = trk[i].T.tracks.find((q) => q.id === d.id);
+            if (!tr) continue;
+            const fx = (((d.box[1] + d.box[3]) / 2) * L0.cw - (L0.cw - vw * kk) / 2) / (vw * kk), fy = (d.box[2] * L0.ch - (L0.ch - vh * kk) / 2) / (vh * kk);
+            (tr.feet = tr.feet || []).push([fx, fy]);
+          }
+        }
+      }
       drawBar(g, cv.width, L0.bar, t);
       if (cams.length < L0.cols * L0.rows) drawInfo(g, t, (cams.length % L0.cols) * L0.cw, L0.bar + Math.floor(cams.length / L0.cols) * L0.ch, L0.cw, L0.ch);
       cams.forEach((c, i) => {
@@ -4480,12 +4641,13 @@
         const f = frames[i] && !frames[i].done && frames[i].value;
         const ok = f && tc >= 0 && tc <= c.dur;
         drawCell(g, ok ? f.canvas : null, c, (i % L0.cols) * L0.cw, L0.bar + Math.floor(i / L0.cols) * L0.ch, L0.cw, L0.ch);
+        if (withYolo && ok) drawYoloCell(g, c, (i % L0.cols) * L0.cw, L0.bar + Math.floor(i / L0.cols) * L0.ch, L0.cw, L0.ch, trk[i], t);
       });
       await video.add(k / FPS, 1 / FPS);
       if (k % 10 === 0) {
         const el2 = (performance.now() - t0) / 1000;
         const left = k ? (el2 / k) * (n - k) : 0;
-        $('#dlInfo').textContent = `Armando el video: ${Math.round((k / n) * 100)}%${k > 20 ? ` · faltan ~${Math.ceil(left)} s` : ''}…`;
+        $('#dlInfo').textContent = `Armando el video${withYolo ? ' con los datos de YOLO' : ''}: ${Math.round((k / n) * 100)}%${k > 20 ? ` · faltan ~${Math.ceil(left)} s` : ''}…`;
       }
     }
     video.close();
@@ -4525,7 +4687,8 @@
       let M = null;
       if (window.VideoDecoder && window.VideoEncoder) M = await mediabunny().catch(() => null);
       let r;
-      if (M && mode === 'orig') r = await cutOriginal(M, from, to, cams[0], $('#dAudio').value === cams[0].key);
+      // El archivo original se copia tal cual: con datos de YOLO hay que armar el video cuadro a cuadro.
+      if (M && mode === 'orig' && $('#dData').value !== 'yolo') r = await cutOriginal(M, from, to, cams[0], $('#dAudio').value === cams[0].key);
       else if (M) r = await buildClip(M, from, to, cams, speed).catch((e) => { if (CLIP.cancel) return null; console.warn(e); return 'grabar'; });
       if (!M || r === 'grabar') { $('#dlInfo').textContent = 'Este navegador no puede armar el video directo; se grabará reproduciéndolo…'; await recordClip(from, to, cams, speed); return; }
       if (!r || CLIP.cancel) { $('#dlInfo').textContent = 'Descarga cancelada.'; return; }
