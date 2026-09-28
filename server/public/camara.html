@@ -3310,7 +3310,8 @@
     }
     // Personas que ya iban a bordo antes del paradero (y la «tripulación» vista en paraderos anteriores): si una de
     // ellas «sube», es un agente o alguien que bajó y volvió a subir, y no se cuenta como pasajero.
-    const pre = use.length ? await onboardSigs(c, s, run) : [];
+    // En blanco y negro todos se ven del mismo «color»: no se reconoce a la tripulación por la ropa.
+    const pre = use.length && !c.mono ? await onboardSigs(c, s, run) : [];
     if (run !== S.run) return null;
     c.crew = c.crew || [];
     for (const sg of pre) {
@@ -3319,7 +3320,7 @@
     }
     const known = [...pre, ...c.crew.filter((q) => q.n >= 3 || q.stop !== s.t0).map((q) => q.sig)];
     const out = use.filter((x) => frames[x.at].f).map((x) => ({
-      onboard: (() => { const sg = sigOf(frames[x.at].f, x.box); return !!sg && known.some((k) => sigSim(k, sg) >= SIG_SAME); })(),
+      onboard: !c.mono && (() => { const sg = sigOf(frames[x.at].f, x.box); return !!sg && known.some((k) => sigSim(k, sg) >= SIG_SAME); })(),
       c, tr: x.tr, t: frames[x.at].t, d: x.d, near: x.near, fromOut: !!x.fromOut, box: x.box,
       thumb: annotate(frames[x.at], c.line, x.tr, frames).toDataURL('image/jpeg', 0.8),
       views: x.pick.filter((b) => frames[b.i].f).map((b) => annotate(frames[b.i], c.line, x.tr, frames, '#00e5ff')),
@@ -3541,7 +3542,11 @@
       if (roja && v !== true) v = null;
       const desc = String(q.descripcion || `persona #${b.tr.id}`).trim();
       const sube = q.subio === true || q.subio === 'true' ? true : q.subio === false || q.subio === 'false' ? false : null;
-      const pay = payOf.has(b) ? payOf.get(b) : null;
+      let pay = payOf.has(b) ? payOf.get(b) : null;
+      // En blanco y negro el destello a veces no se ve (manos sobre el validador): sin destello queda dudoso para
+      // revisar, no como evasión.
+      const monoNo = pay === false && !!b.c.mono;
+      if (monoNo) pay = null;
       // Quien llegó desde afuera hasta la puerta y no volvió a salir se cuenta (sin IA): si no hay luz verde es la
       // posible evasión que se busca. Si solo se asomó al umbral, se cuenta si pagó o si la IA ve que sube.
       if (b.near && pay !== true && !(ver ? sube === true : b.fromOut)) return;
@@ -3549,7 +3554,7 @@
       // La luz del validador manda sobre lo que diga la IA (se ve directo en la imagen).
       if (pay !== null) v = pay;
       const how = b.onboard ? 'ya iba a bordo antes del paradero (agente, o alguien que bajó y volvió a subir): no se cuenta' : noSube ? 'cruzó la línea, pero la IA revisó y NO subió (ya estaba adentro o se bajó)' : b.near ? `llegó desde afuera hasta la puerta${pay ? ' y pagó' : sube ? ' y la IA vio que sube' : ''}` : 'cruzó la línea';
-      const light = pay === true ? ' · luz verde en el validador' : pay === false ? ' · NO se vio luz verde en el validador' : '';
+      const light = pay === true ? (b.c.mono ? ' · destello en el validador (cámara en blanco y negro)' : ' · luz verde en el validador') : pay === false ? ' · NO se vio luz verde en el validador' : monoNo ? ' · cámara en blanco y negro: no se vio el destello del validador, revisar' : '';
       allMeta.push({ cam: b.c.key, t: b.t, thumb: b.thumb });
       personas.push({
         t: b.t, cam: b.c.key, desc: `${desc} · ${how}${light} (#${b.tr.id})`,
@@ -3559,7 +3564,7 @@
         staff: noSube || truthy(q.es_personal) || STAFF_RE.test(desc),
         img: allMeta.length - 1, box: null, linea: true,
         // Sin validador confirmado no se sabe si pagó (ni adelante ni atrás): queda para revisar.
-        revisar: pay === null && (S.iaRev ? !ver || (b.near && sube !== true) : !valKnown),
+        revisar: monoNo || (pay === null && (S.iaRev ? !ver || (b.near && sube !== true) : !valKnown)),
         res: v === true ? 'paga' : v === false ? 'evade' : val ? 'dudoso' : 'evade',
       });
     });
