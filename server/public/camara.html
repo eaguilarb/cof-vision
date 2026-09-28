@@ -2,6 +2,26 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
+<script>
+  // Claves que trae el acceso directo personal (tras el #, no se envían a ningún servidor): se guardan en este
+  // navegador y se borran de la barra de direcciones.
+  (function () {
+    var h = location.hash, g = h.match(/[#&]k=([^&]+)/), c = h.match(/[#&]ck=([^&]+)/);
+    try {
+      if (g) localStorage.setItem('cofsimple:key', JSON.stringify(decodeURIComponent(g[1])));
+      if (c) localStorage.setItem('cofsimple:ckey', JSON.stringify(decodeURIComponent(c[1])));
+    } catch (e) {}
+    if (g || c) history.replaceState(null, '', location.pathname + location.search);
+    // Todos los núcleos del procesador para el detector: el ayudante coi-sw.js aísla la página (una sola recarga).
+    if (!window.crossOriginIsolated && window.isSecureContext && location.protocol === 'https:' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.register('coi-sw.js').then(function (r) {
+        var again = function () { if (!sessionStorage.getItem('coi-recarga')) { sessionStorage.setItem('coi-recarga', '1'); location.reload(); } };
+        if (navigator.serviceWorker.controller) again();
+        else r.addEventListener('updatefound', function () { var w = r.installing; if (w) w.addEventListener('statechange', function () { if (w.state === 'activated') again(); }); });
+      }).catch(function () {});
+    } else if (window.crossOriginIsolated) { try { sessionStorage.removeItem('coi-recarga'); } catch (e) {} }
+  })();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#10181f">
 <title>COF Vision</title>
@@ -70,6 +90,7 @@
   .tile .ov { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
   .live-note { position: absolute; left: 8px; top: 8px; z-index: 3; background: rgba(0,0,0,.75); color: #fff; font: 600 12px system-ui, sans-serif; padding: 4px 10px; border-radius: 6px; pointer-events: none; }
   .cam-chip.live.on { background: #1a7f37; border-color: #1a7f37; color: #fff; }
+  .det-speed { flex: none; align-self: center; color: #9fb0bf; font: 12px system-ui, sans-serif; white-space: nowrap; }
   .tile-line { position: absolute; right: 8px; top: 18%; z-index: 2; border: 1px solid #f5a300; background: rgba(0,0,0,.72); color: #ffd27a; font: 600 12px system-ui, sans-serif; padding: 4px 9px; border-radius: 6px; cursor: pointer; }
   .tile-line.warn { background: #f5a300; color: #1b1300; }
   .wall.grid .tile-line { top: 16%; font-size: 11px; padding: 3px 7px; }
@@ -420,7 +441,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.29-3';
+  const VERSION = '2026.09.29-4';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -466,7 +487,7 @@
     staffRef: store.get('cofsimple:staffref', null),
     staffN: store.get('cofsimple:staffn', null),
     // Una copia personal puede traer la clave de Claude incorporada: entonces cuenta con Claude Haiku salvo que se elija otra IA.
-    ai: ({ flash: 'flash', pro: 'pro', haiku: 'haiku', sonnet: 'sonnet', gratis: 'gratis' })[store.get('cofsimple:ai', EMBED_CKEY.startsWith('__') ? 'gratis' : 'haiku')] || 'gratis',
+    ai: ({ flash: 'flash', pro: 'pro', haiku: 'haiku', sonnet: 'sonnet', gratis: 'gratis' })[store.get('cofsimple:ai', EMBED_CKEY.startsWith('__') && !store.get('cofsimple:ckey', '') ? 'gratis' : 'haiku')] || 'gratis',
     ckey: store.get('cofsimple:ckey', '') || (EMBED_CKEY.startsWith('__') ? '' : EMBED_CKEY),
     tope: store.get('cofsimple:tope', 1),
     spend: store.get('cofsimple:gasto', null),
@@ -668,7 +689,10 @@
     all.type = 'button';
     all.onclick = () => { S.grid = !S.grid; wall.classList.toggle('grid', S.grid); layoutGrid(); setMain(S.main); };
     all.hidden = S.cams.length < 2;
-    bar.append(lv, all);
+    // Con qué corre el detector y cuánto tarda cada foto (para saber si el computador va rápido o lento).
+    const sp = el('small', 'det-speed', detSpeedText());
+    sp.id = 'detSpeed';
+    bar.append(lv, sp, all);
   }
   function layoutGrid() {
     const n = S.cams.length;
@@ -2212,17 +2236,43 @@
       let buf = null;
       try { buf = await modelBytes(YOLO_COF); Y.name = 'YOLO entrenado COF'; } catch { buf = null; }
       if (!buf) { buf = await modelBytes(YOLO_URL); Y.name = 'YOLO general'; }
-      let sess = null;
+      // Se prueban la tarjeta gráfica (WebGPU) y el procesador con todos sus núcleos, y se queda el más rápido.
+      const probe = async (s) => {
+        const x = new ort.Tensor('float32', new Float32Array(3 * YOLO_IN * YOLO_IN).fill(0.45), [1, 3, YOLO_IN, YOLO_IN]);
+        await s.run({ [s.inputNames[0]]: x });
+        const t0 = performance.now();
+        await s.run({ [s.inputNames[0]]: x });
+        return performance.now() - t0;
+      };
+      let sess = null, ms = Infinity;
       try {
-        if (navigator.gpu && (await navigator.gpu.requestAdapter())) { sess = await ort.InferenceSession.create(buf.slice(0), { executionProviders: ['webgpu'] }); Y.ep = 'webgpu'; }
-      } catch { sess = null; }
-      if (!sess) { ort.env.wasm.proxy = true; sess = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'] }); Y.ep = 'wasm'; }
+        if (navigator.gpu && (await navigator.gpu.requestAdapter())) {
+          sess = await ort.InferenceSession.create(buf.slice(0), { executionProviders: ['webgpu'] });
+          ms = await probe(sess);
+          Y.ep = 'webgpu';
+        }
+      } catch { sess = null; ms = Infinity; }
+      if (!sess || ms > 150) {
+        // Varios hilos solo si la página está aislada (lo hace coi-sw.js); si no, uno en un hilo aparte (proxy).
+        // Los dos juntos no funcionan en esta versión del motor.
+        ort.env.wasm.numThreads = window.crossOriginIsolated ? Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1)) : 1;
+        ort.env.wasm.proxy = ort.env.wasm.numThreads === 1;
+        try {
+          const cpu = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'] });
+          const cms = await probe(cpu);
+          if (cms < ms) { sess = cpu; ms = cms; Y.ep = 'wasm'; }
+        } catch (e) { if (!sess) throw e; }
+      }
       Y.sess = sess;
+      Y.ms = ms;
+      Y.how = Y.ep === 'webgpu' ? 'tarjeta gráfica' : `procesador, ${ort.env.wasm.numThreads} ${ort.env.wasm.numThreads === 1 ? 'núcleo' : 'núcleos'}`;
       liveNote('');
       return sess;
     })().catch((e) => { Y.failed = String((e && e.message) || e); liveNote(''); return null; });
     return Y.load;
   }
+  const detSpeedText = () => (Y.sess && Y.ms ? `YOLO con ${Y.how} · ${(Y.ms / 1000).toFixed(2).replace('.', ',')} s por foto` : '');
+  setInterval(() => { const e = $('#detSpeed'); if (e) e.textContent = detSpeedText(); }, 3000);
   // Personas en una imagen (canvas o video): recuadros [ymin, xmin, ymax, xmax] de 0 a 1 y su confianza.
   // Cola del detector: la vista en vivo pasa antes que el conteo de fondo (si no, en vivo se atrasa varios segundos).
   const YQ = { hi: [], lo: [], busy: false };
