@@ -405,7 +405,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 9;
+  const COUNT_V = 10;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -419,7 +419,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.26-12';
+  const VERSION = '2026.09.28-1';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1669,7 +1669,9 @@
       if (run !== S.run || stopped) return false;
       if (failure) throw failure;
       const limit = S.ai === 'gratis' ? 2 : 3;
-      const ready = (s) => s.estado === 'pendiente' && !busy.has(s) && inRange(s) && !beforeStart(s) && (tourDone() || s.t1 + S.step / 2 <= S.frontier);
+      // Se espera a leer el minuto siguiente (o hasta el próximo paradero): ahí se ven los que pagan ya en marcha.
+      const lateEnd = (s) => { const nx = S.stops.find((x) => x.t0 > s.t1); return Math.min(nx ? nx.t0 : Infinity, s.t1 + LATE_WIN); };
+      const ready = (s) => s.estado === 'pendiente' && !busy.has(s) && inRange(s) && !beforeStart(s) && (tourDone() || lateEnd(s) <= S.frontier);
       let s;
       while (busy.size < limit && (s = S.stops.find(ready))) {
         const one = s;
@@ -1733,8 +1735,47 @@
     for (const t of times) yield { t, f: await frameOf(c, t, 160) };
   }
   // Verde intenso: la pantalla del validador cuando acepta la tarjeta.
-  // Acepta también el verde claro (cámaras con mucha luz lo lavan) y descarta blancos y grises.
-  const isGreen = (r, g, b) => g > 100 && g - Math.max(r, b) >= 30 && g - Math.min(r, b) >= 60;
+  // La pantalla del validador es verde esmeralda muy saturado (tono ~150°); el pasto o los árboles que se ven por el
+  // vidrio son verde amarillento y apagado (tono ~90°): así se distinguen aunque el bus vaya en movimiento.
+  const isGreen = (r, g, b) => {
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    if (mx !== g || g < 90 || mx - mn < mx * 0.55) return false;
+    const h = (60 * (b - r)) / (mx - mn) + 120;
+    return h >= 125 && h <= 175;
+  };
+  // Puntos verdes de una foto, solo en manchas compactas (una pantalla encendida): las líneas finas verdes en los
+  // bordes de los fierros son ruido de la compresión del video y se descartan.
+  function greenIdx(f) {
+    const full = f.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, f.width, f.height).data;
+    const W = f.width, N = W * f.height;
+    const m = new Uint8Array(N);
+    for (let i = 0; i < N; i++) if (isGreen(full[i * 4], full[i * 4 + 1], full[i * 4 + 2])) m[i] = 1;
+    const idx = [];
+    for (let i = W + 1; i < N - W - 1; i++) {
+      if (!m[i]) continue;
+      const nb = m[i - 1] + m[i + 1] + m[i - W] + m[i + W] + m[i - W - 1] + m[i - W + 1] + m[i + W - 1] + m[i + W + 1];
+      if (nb >= 3) idx.push(i);
+    }
+    return idx;
+  }
+  // Pagos después de partir: mucha gente valida con el bus ya en marcha. Se revisa el validador entre el fin de un
+  // paradero y el comienzo del siguiente (hasta un minuto).
+  const LATE_WIN = 60;
+  async function lateGreens(c, t0, t1, run) {
+    if (!c.valz || c.valz.auto || t1 - t0 < 0.5) return [];
+    const times = [];
+    for (let t = t0; t <= t1 + 1e-6; t += MOTION_STEP) times.push(t);
+    const mot = [];
+    mot.green = [];
+    for await (const { t, f } of motionFrames(c, times)) {
+      if (run !== S.run) return [];
+      if (!f) continue;
+      mot.green.push({ t, idx: greenIdx(f) });
+      mot.W = f.width;
+      mot.H = f.height;
+    }
+    return greenEvents(mot, c.valz);
+  }
   async function motionOf(c, t0, t1, run) {
     const out = [];
     const times = [];
@@ -1746,19 +1787,7 @@
       if (run !== S.run) return out;
       if (!f) { prev = null; continue; }
       {
-        const full = f.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, f.width, f.height).data;
-        // Solo manchas verdes compactas (una pantalla encendida): las líneas finas verdes en los bordes de los
-        // fierros son ruido de la compresión del video y se descartan.
-        const W = f.width, N = W * f.height;
-        const m = new Uint8Array(N);
-        for (let i = 0; i < N; i++) if (isGreen(full[i * 4], full[i * 4 + 1], full[i * 4 + 2])) m[i] = 1;
-        const idx = [];
-        for (let i = W + 1; i < N - W - 1; i++) {
-          if (!m[i]) continue;
-          const nb = m[i - 1] + m[i + 1] + m[i - W] + m[i + W] + m[i - W - 1] + m[i - W + 1] + m[i + W - 1] + m[i + W + 1];
-          if (nb >= 3) idx.push(i);
-        }
-        out.green.push({ t, idx });
+        out.green.push({ t, idx: greenIdx(f) });
         out.W = f.width;
         out.H = f.height;
       }
@@ -1973,6 +2002,8 @@
   // YOLOv10 corre en el propio computador (tarjeta de video con WebGPU, o el procesador en un hilo aparte):
   // no gasta cupo de IA y detecta en cada foto a todas las personas con su recuadro. Se descarga una sola vez.
   const ORT_DIR = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
+  // Primero el modelo entrenado con videos de las cámaras de los buses (COF); si no se puede bajar, el modelo general.
+  const YOLO_COF = 'https://eaguilarb.github.io/cof-vision/models/cof-v1.onnx';
   const YOLO_URL = 'https://huggingface.co/onnx-community/yolov10s/resolve/main/onnx/model.onnx';
   const YOLO_IN = 640;
   const Y = { load: null, sess: null, ep: '', failed: '', queue: Promise.resolve(), wait: 0, pct: 0 };
@@ -2001,7 +2032,9 @@
     Y.load = Y.load || (async () => {
       if (!window.ort) await loadScript(`${ORT_DIR}ort.webgpu.min.js`);
       ort.env.wasm.wasmPaths = ORT_DIR;
-      const buf = await modelBytes(YOLO_URL);
+      let buf = null;
+      try { buf = await modelBytes(YOLO_COF); Y.name = 'YOLO entrenado COF'; } catch { buf = null; }
+      if (!buf) { buf = await modelBytes(YOLO_URL); Y.name = 'YOLO general'; }
       let sess = null;
       try {
         if (navigator.gpu && (await navigator.gpu.requestAdapter())) { sess = await ort.InferenceSession.create(buf.slice(0), { executionProviders: ['webgpu'] }); Y.ep = 'webgpu'; }
@@ -2481,6 +2514,13 @@
   // termina el conteo completo de ese paradero, la tabla muestra el conteo completo.
   const stopAtRef = (tr) => S.stops.find((x) => tr >= x.t0 - 4 && tr <= x.t1 + 2) || null;
   const stoppedAt = (tr) => S.stops.some((x) => tr >= x.t0 - 2 && tr <= x.t1 + 1);
+  // Paradero al que corresponde un pago: el de la detención, o el anterior si se pagó ya en marcha (hasta un minuto).
+  function stopForPay(tr) {
+    const s = S.stops.find((x) => tr >= x.t0 - 2 && tr <= x.t1 + 1);
+    if (s) return s;
+    const prev = S.stops.filter((x) => x.t1 < tr).sort((a, b) => b.t1 - a.t1)[0];
+    return prev && tr - prev.t1 <= LATE_WIN ? prev : null;
+  }
   const vivoOf = (s) => (s.vivo = s.vivo || { cams: {}, max: {} });
   function vivoCounts(s) {
     const v = s && s.vivo;
@@ -2512,18 +2552,18 @@
   }
   function liveEvent(c, t, kind, delta) {
     const tr = t - c.off;
-    const s = stopAtRef(tr);
+    const s = kind === 'pay' ? stopForPay(tr) : stopAtRef(tr);
     // Si todavía no se sabe dónde paró el bus (el recorrido se sigue leyendo), se guarda y se anota al aparecer.
     if (!s) { if (S.running) vivoPend.push({ key: c.key, tr, kind, delta }); return null; }
-    if (beforeStart(s) || (kind === 'pay' && !stoppedAt(tr))) return null;
+    if (beforeStart(s)) return null;
     applyVivo(s, c.key, tr, kind, delta);
     return s;
   }
   function flushVivo() {
     for (let i = vivoPend.length - 1; i >= 0; i--) {
       const e = vivoPend[i];
-      const s = stopAtRef(e.tr);
-      if (s) { if (!beforeStart(s) && (e.kind !== 'pay' || stoppedAt(e.tr))) applyVivo(s, e.key, e.tr, e.kind, e.delta); vivoPend.splice(i, 1); }
+      const s = e.kind === 'pay' ? stopForPay(e.tr) : stopAtRef(e.tr);
+      if (s) { if (!beforeStart(s)) applyVivo(s, e.key, e.tr, e.kind, e.delta); vivoPend.splice(i, 1); }
       else if (!S.running || S.frontier > e.tr + 30) vivoPend.splice(i, 1);
     }
   }
@@ -2585,7 +2625,7 @@
       if (!c.valz || c.valz.auto || c.bad || !c.tile || c.tile.hidden || c.video.readyState < 2) continue;
       const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [] });
       const t = c.video.currentTime;
-      const on = !!zoneGreen(c) && (stoppedAt(t - c.off) || (S.running && !stopAtRef(t - c.off)));
+      const on = !!zoneGreen(c);
       if (on && !L.gOn && t - (L.gEnd ?? -9) > 0.6) liveEvent(c, t, 'pay', 1);
       if (!on && L.gOn) L.gEnd = t;
       if (on !== !!L.gOn) { L.gOn = on; drawLive(c); }
@@ -2660,7 +2700,7 @@
     if (!times.length) return { c, quiet: true, boarders: [], bajan: 0, greens };
     // Detector YOLO en el computador; si no se pudo cargar, la IA rápida marca a las personas.
     let frames = (await yolo()) ? await yoloFrames(c, times, run, s) : null;
-    const how = frames ? 'detector YOLO' : 'IA';
+    const how = frames ? `detector ${Y.name || 'YOLO'}` : 'IA';
     if (!frames && run === S.run) frames = await detectFrames(c, times, run);
     if (!frames) return null;
     // Hubo movimiento pero el detector no vio a nadie en ninguna foto (noche, cámara empañada): esa puerta se
@@ -2967,6 +3007,41 @@
         res: v === true ? 'paga' : v === false ? 'evade' : val ? 'dudoso' : 'evade',
       });
     });
+    // Pagos con el bus ya en marcha: los verdes entre este paradero y el siguiente se asignan, en orden, a quienes
+    // subieron aquí sin verde (primero por la puerta del validador, luego por las otras).
+    if (valKnown) {
+      const vc0 = valDoors.find((x) => x.c.valz && !x.c.valz.auto).c;
+      const next = S.stops.filter((x) => x.t0 > s.t1).sort((a, b) => a.t0 - b.t0)[0];
+      const lt0 = s.t1 + 1;
+      const lt1 = Math.min(next ? next.t0 - 4 : Infinity, s.t1 + LATE_WIN, S.running ? S.frontier : S.D);
+      const late = await lateGreens(vc0, lt0, lt1, run);
+      if (run !== S.run) return false;
+      const owed = [...personas.filter((p) => !p.staff && !p.sinValidador && p.valida === false), ...personas.filter((p) => !p.staff && p.sinValidador && p.valida !== true)];
+      for (const g of late) {
+        const p = owed.find((x) => !x.late && x.t < g.t);
+        if (!p) break;
+        p.late = true;
+        p.valida = true;
+        p.luz = 'verde';
+        p.res = 'paga';
+        p.revisar = false;
+        p.desc = p.desc.replace(' · NO se vio luz verde en el validador', '') + ` · pagó después, con el bus en marcha (${horaAt(g.t) || mmss(g.t)})`;
+      }
+      // Un pago en marcha que no calza con nadie visto (el detector no lo siguió) igual es alguien que subió aquí.
+      const used = personas.filter((p) => p.late).length;
+      for (const g of late.slice(used)) {
+        const f = await frameOf(vc0, g.t, 640);
+        if (run !== S.run) return false;
+        if (!f) continue;
+        allMeta.push({ cam: vc0.key, t: g.t, thumb: thumbOf(f) });
+        personas.push({
+          t: g.t, cam: vc0.key, desc: `pasajero que pagó con el bus en marcha (${horaAt(g.t) || mmss(g.t)}); el detector no alcanzó a seguirlo al subir`,
+          luz: 'verde', valida: true, sinValidador: false, fueraZona: false, desdeAfuera: true, staff: false,
+          img: allMeta.length - 1, box: null, linea: true, revisar: false, res: 'paga', late: true,
+        });
+      }
+      if (late.length) porCamara.push(`Validador después de partir: ${late.length} pago${late.length === 1 ? '' : 's'} con el bus en marcha.`);
+    }
     // Cada verde del validador es un pasajero que pagó: si el detector no siguió a esa persona (tapada por un
     // pasamanos o por otra persona), igual se cuenta, con la foto de ese momento.
     if (valKnown) {
@@ -3012,7 +3087,7 @@
       resumen: `Suben ${suben} ${suben === 1 ? 'persona' : 'personas'} (conteo por puerta).`,
       zpModel: truthy(zp && zp.es), zpMotivo: String((zp && zp.motivo) || '').trim(),
       personal: personal.join(' · '),
-      modelo: lineRes.some((x) => x.how === 'detector YOLO') ? `yolo|${ver ? S.lastModel || '' : ''}` : S.lastModel || '',
+      modelo: lineRes.some((x) => /^detector /.test(x.how || '')) ? `yolo|${ver ? S.lastModel || '' : ''}` : S.lastModel || '',
     });
     S.counting = null;
     save();
