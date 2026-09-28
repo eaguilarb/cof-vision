@@ -406,7 +406,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 11;
+  const COUNT_V = 12;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -420,7 +420,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.29-1';
+  const VERSION = '2026.09.29-2';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -571,6 +571,8 @@
     S.main = 0;
     S.moments = Array.isArray(saved.moments) ? saved.moments : [];
     S.stops = (Array.isArray(saved.stops) ? saved.stops : []).map((s) => (s.estado === 'listo' && s.v !== COUNT_V ? { ...s, estado: 'pendiente' } : s));
+    S.provs = [];
+    vivoPend.length = 0;
     S.cur = -1;
     S.open = null;
     $('#fileName').textContent = S.cams.length === 1 ? files[0].name : `${S.cams.length} cámaras: ${S.cams.map((c) => c.label).join(', ')}`;
@@ -1051,7 +1053,10 @@
           // Gemma no tiene modo JSON: se le pide en el texto y se extrae de la respuesta.
           body: JSON.stringify({ contents: [{ role: 'user', parts }], generationConfig: /gemma/.test(model) ? { temperature: 0.1 } : { temperature: 0.1, responseMimeType: 'application/json' } }),
         });
-      } catch {
+      } catch (e) {
+        // El modelo no respondió en 2 minutos: descansa 3 minutos y se prueba el siguiente (antes se reintentaba el
+        // mismo modelo lento para siempre).
+        if (e && e.name === 'TimeoutError') { COOL[model] = Date.now() + 180000; continue; }
         status('Sin conexión con Google. Reintentando…', null);
         await wait(4000);
         continue;
@@ -1078,7 +1083,8 @@
         continue;
       }
       if (res.status === 404) { COOL[model] = Infinity; continue; }
-      if (res.status >= 500) { COOL[model] = now + 60000; await wait(800); continue; }
+      // «Mucha demanda» (503) suele pasar en segundos: el modelo descansa 15 s, no un minuto.
+      if (res.status >= 500) { COOL[model] = now + 15000; await wait(800); continue; }
       if (res.status === 400 && !/api key|API_KEY/i.test(msg)) throw new Error(msg);
       const e = new Error(msg);
       e.badKey = true;
@@ -1103,10 +1109,11 @@
     renderControls();
     try {
       if (!(await identify(run))) return;
-      if (!(await readMeta(run))) return;
-      recallLines();
-      recallVals();
-      for (const c of doorCams()) if (!c.line) autoLine(c, run).catch(() => {});
+      // La línea de cada puerta se busca de inmediato (una foto por puerta): así el conteo en vivo parte al tiro.
+      for (const c of doorCams()) if (!c.line || c.line.guess) { guessLine(c); autoLine(c, run).catch(() => {}); }
+      // La patente (para recordar las líneas y el validador de este bus) se lee en paralelo con el recorrido.
+      const meta = readMeta(run).then((ok) => { if (ok && run === S.run) { recallLines(); recallVals(); } return ok; });
+      meta.catch(() => {});
       S.step = S.D <= 120 ? 2 : S.D <= 1200 ? 3 : 4;
       const m = mainCam();
       if (m && (tRef() < S.range.from - 1 || tRef() > S.range.to)) m.video.currentTime = clamp(S.range.from + m.off, 0, Math.max(0, m.dur - 0.1));
@@ -1114,9 +1121,16 @@
       let tourDone = false;
       const counting = counter(run, () => tourDone);
       counting.catch(() => {});
-      const ok = await osdPass(run);
+      // El recorrido se lee sin IA (con el bus detenido las coordenadas no cambian). Solo si la cámara no trae
+      // coordenadas legibles se lee todo con IA, como antes.
+      const loc = await localPass(run);
+      if (!loc) return;
+      const ok = loc === 'sin' ? await osdPass(run) : true;
       tourDone = true;
       if (!ok) return;
+      // Después, la IA lee solo la hora y la ubicación de cada paradero (pocas consultas).
+      if (loc !== 'sin' && !(await osdPass(run, stopTimes()).catch((e) => { if (e.badKey || e.claudeKey || e.stop) throw e; return true; }))) return;
+      if (!(await meta)) return;
       // La descripción de lo que pasa va en segundo plano mientras se terminan de contar los paraderos.
       const describing = descPass(run);
       describing.catch(() => {});
@@ -1207,6 +1221,8 @@
     if (!confirm('¿Borrar todo lo analizado de estos videos (recorrido, paraderos, conteos y correcciones) y empezar desde cero?')) return;
     S.moments = [];
     S.stops = [];
+    S.provs = [];
+    vivoPend.length = 0;
     S.frontier = S.range.from;
     S.cur = -1;
     S.open = null;
@@ -1375,9 +1391,30 @@
   }
 
   // Paso 0: qué muestra cada cámara y a qué hora empieza (para sincronizarlas).
+  // Puerta de cada cámara sin IA: en estos buses los canales son fijos (CH4 delantera con validador, CH5 central, CH7
+  // trasera), y los archivos suelen traer la puerta en el nombre («primera_puerta», «puerta trasera»…).
+  const FIXED = { CH4: ['puerta_delantera', true], CH5: ['puerta_central', false], CH7: ['puerta_trasera', false] };
+  function doorGuess(c) {
+    if (FIXED[c.label] && S.cams.some((x) => x.label === 'CH4')) return FIXED[c.label];
+    const n = c.name.toLowerCase().replace(/[_\-.]+/g, ' ');
+    if (/primera puerta|puerta (1|uno|delantera)|delantera/.test(n)) return FIXED.CH4;
+    if (/segunda puerta|puerta (2|dos|central|media|del medio)|central/.test(n)) return FIXED.CH5;
+    if (/tercera puerta|puerta (3|tres|trasera)|trasera/.test(n)) return FIXED.CH7;
+    return null;
+  }
   async function identify(run) {
     const cams = S.cams.filter((c) => !c.bad && !c.manual && c.tipo == null);
     if (!cams.length) { orderCams(); renderCamBar(); return true; }
+    // Si todas las puertas se conocen por el canal o el nombre, no se gasta una consulta a la IA (queda al instante).
+    if (cams.every(doorGuess)) {
+      for (const c of cams) [c.tipo, c.validador] = doorGuess(c);
+      pickRef();
+      orderCams();
+      save();
+      renderCams();
+      renderCamBar();
+      return true;
+    }
     status('Reconociendo las cámaras…', 0.02);
     const ts = cams.map((c) => clamp(Math.min(20, c.dur * 0.1), 0, Math.max(0, c.dur - 0.5)));
     const frames = [];
@@ -1408,10 +1445,9 @@
       if (s != null) clocks.set(c, s - ts[i]);
     });
     if (S.cams.filter((c) => !c.bad).length === 1) { const c = S.cams.find((x) => !x.bad); if (c.tipo !== 'puerta_delantera' && !/^puerta_/.test(c.tipo)) c.tipo = 'puerta_delantera'; }
-    // En estos buses los canales son fijos: CH4 puerta delantera (con validador), CH5 central, CH7 trasera. La IA a
-    // veces confunde la delantera con la del conductor; manda la regla del canal (se puede cambiar a mano).
-    const FIXED = { CH4: ['puerta_delantera', true], CH5: ['puerta_central', false], CH7: ['puerta_trasera', false] };
-    if (cams.some((c) => c.label === 'CH4')) for (const c of cams) if (FIXED[c.label]) { [c.tipo, c.validador] = FIXED[c.label]; }
+    // La IA a veces confunde la delantera con la del conductor; manda la regla del canal o del nombre (se puede
+    // cambiar a mano).
+    for (const c of cams) { const g = doorGuess(c); if (g) [c.tipo, c.validador] = g; }
     pickRef();
     // Desfase de cada cámara respecto de la principal según la hora escrita en la imagen.
     const r0 = clocks.get(refCam());
@@ -1498,25 +1534,123 @@
     for (const r of rows) { g.drawImage(r, 0, y); y += r.height + 6; }
     return c;
   }
-  async function osdPass(run) {
+  // Lectura del recorrido SIN IA: con el bus detenido el GPS no cambia, así que la franja de coordenadas queda
+  // idéntica de una lectura a la siguiente (0 % de cambio); en marcha cambian los dígitos (12 % a 70 %).
+  // Tarda una décima de segundo por lectura y no gasta nada.
+  const STILL_MAX = 0.005;
+  async function coordStrip(ref, t) {
+    const f = await frameOf(ref, t, 640);
+    if (!f) return null;
+    if (!ref.active) ref.active = activeRows(f).map((v) => v / f.height);
+    const top = ref.active[0] * f.height, AH = (ref.active[1] - ref.active[0]) * f.height;
+    const y = Math.round(top + OSD_BOT[0] * AH), h = Math.max(1, Math.round((OSD_BOT[1] - OSD_BOT[0]) * AH)), w = Math.round(f.width * 0.62);
+    const d = f.getContext('2d').getImageData(0, y, w, h).data;
+    const L = new Uint8Array(w * h), T = new Uint8Array(w * h);
+    for (let i = 0; i < L.length; i++) L[i] = (d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2]) / 3;
+    // Letras del texto sobreimpreso: blanco puro, trazo delgado con borde oscuro (el fondo claro no cuenta).
+    for (let yy = 2; yy < h - 2; yy++) for (let x = 2; x < w - 2; x++) {
+      const i = yy * w + x;
+      if (L[i] < 200 || Math.max(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]) - Math.min(d[i * 4], d[i * 4 + 1], d[i * 4 + 2]) > 40) continue;
+      if (L[i - 2] < 110 || L[i + 2] < 110 || L[i - 2 * w] < 110 || L[i + 2 * w] < 110) T[i] = 1;
+    }
+    return { L, T };
+  }
+  // Parte de las letras que cambió entre dos lecturas (lo que era letra en una y ya no es claro en la otra);
+  // null si no hay texto que comparar.
+  function stripChange(A, B) {
+    if (!A || !B || A.L.length !== B.L.length) return null;
+    const one = (P, Q) => { let n = 0, dd = 0; for (let i = 0; i < P.T.length; i++) if (P.T[i]) { n++; if (Q.L[i] < 150) dd++; } return n > 30 ? dd / n : null; };
+    const a = one(A, B), b = one(B, A);
+    return a == null || b == null ? null : Math.max(a, b);
+  }
+  const MOVE_MIN = 0.06;
+  // Devuelve true (leído), false (se canceló) o 'sin' (la cámara no trae coordenadas que se puedan comparar).
+  async function localPass(run) {
     const ref = refCam();
     const times = gridTimes();
-    const done = new Set(S.moments.filter((m) => m.osd || m.lat != null || m.vel != null).map((m) => m.t));
+    if (!ref || !times.length) return 'sin';
+    const byT = new Map(S.moments.map((m) => [m.t, m]));
+    // Ya leído antes (por ejemplo, al reabrir los mismos videos): no se vuelve a leer.
+    if (times.every((t) => byT.has(t))) return S.moments.some((m) => m.detenido) ? true : 'sin';
+    let prev = null, prevM = null, seen = 0, still = 0, unsure = 0;
+    // Si el GPS de este bus «baila» con el bus detenido (cambios chicos que no son ni 0 ni de marcha), la lectura
+    // sin IA no es confiable: se descarta y se lee con IA como antes.
+    const giveUp = () => {
+      S.moments = S.moments.filter((x) => !x.local || x.osd);
+      for (const x of S.moments) delete x.local;
+      S.frontier = S.range.from;
+      S.stops = mergeStops(findStops(), S.stops);
+      return 'sin';
+    };
+    const doubtful = () => seen >= 12 && unsure / seen > 0.15;
+    for (let i = 0; i < times.length; i++) {
+      if (run !== S.run) return false;
+      const t = times[i];
+      const L = await coordStrip(ref, t);
+      if (run !== S.run) return false;
+      const ch = stripChange(prev, L);
+      let m = byT.get(t);
+      if (!m) { m = { t, lat: null, lon: null, hora: null, vel: null, detenido: false, puertas: false, subiendo: 0, descripcion: '', alerta: false }; S.moments.push(m); byT.set(t, m); }
+      if (ch != null) {
+        seen++;
+        if (ch <= STILL_MAX) {
+          still++;
+          for (const x of [m, prevM]) if (x && !x.osd) { x.vel = 0; x.detenido = true; }
+        } else if (ch < MOVE_MIN) unsure++;
+      }
+      m.local = true;
+      prev = L;
+      prevM = m;
+      S.frontier = Math.min(t + S.step / 2, S.range.to);
+      // Sin texto claro en las primeras 20 lecturas: esta cámara no trae coordenadas.
+      if (i === 20 && !seen) return giveUp();
+      if (i === 40 && doubtful()) return giveUp();
+      if (i % 15 === 14 || i === times.length - 1) {
+        S.moments.sort((a, b) => a.t - b.t);
+        S.prog = { k: i + 1, n: times.length, at: t, fase: 'lectura' };
+        S.stops = mergeStops(findStops(), S.stops);
+        save();
+        rebuild();
+        progress();
+        await nap(0);
+      }
+    }
+    return still && !doubtful() ? true : giveUp();
+  }
+  // Para la IA: un momento a la mitad de cada paradero (hora y ubicación), más el primero y el último del video.
+  function stopTimes() {
+    const g = gridTimes();
+    const near = (x) => g.reduce((a, t) => (Math.abs(t - x) < Math.abs(a - x) ? t : a), g[0]);
+    const out = new Set([g[0], g[g.length - 1]]);
+    for (const s of S.stops) if (inRange(s)) out.add(near((s.t0 + s.t1) / 2));
+    return [...out].filter((t) => t != null).sort((a, b) => a - b);
+  }
+  async function osdPass(run, only) {
+    const ref = refCam();
+    const times = only || gridTimes();
+    const done = new Set(S.moments.filter((m) => m.osd || (!only && (m.lat != null || m.vel != null))).map((m) => m.t));
     const todo = times.filter((t) => !done.has(t));
     const tried = new Set();
+    // Con «only» (solo los paraderos) el recorrido ya se leyó: no se mueve el avance.
     const advance = () => {
+      if (only) return;
       const have = new Set([...S.moments.map((m) => m.t), ...tried]);
       let f = S.range.from;
       for (const t of times) { if (!have.has(t)) break; f = t + S.step / 2; }
       S.frontier = Math.min(f, S.range.to);
     };
     advance();
+    // Mientras la IA lee un grupo, ya se recortan los siguientes (hasta 3 consultas a la vez). El primer grupo es
+    // chico para que los primeros datos aparezcan en segundos.
     const per = OSD_ROWS * OSD_PER_CALL;
-    for (let i = 0; i < todo.length; i += per) {
+    let readN = times.length - todo.length;
+    const flying = new Set();
+    let failed = null;
+    for (let i = 0; i < todo.length;) {
       if (run !== S.run) return false;
-      const chunk = todo.slice(i, i + per);
-      S.prog = { k: times.length - todo.length + i, n: times.length, at: chunk[0], fase: 'lectura' };
-      progress();
+      if (failed) throw failed;
+      const chunk = todo.slice(i, (i += i ? per : OSD_ROWS));
+      if (!only) { S.prog = { k: readN, n: times.length, at: chunk[0], fase: 'lectura' }; progress(); }
       const rows = [];
       const used = [];
       for (let j = 0; j < chunk.length; j++) {
@@ -1524,7 +1658,23 @@
         if (run !== S.run) return false;
         if (r) { rows.push(r); used.push(chunk[j]); }
       }
-      if (!rows.length) { chunk.forEach((t) => tried.add(t)); advance(); continue; }
+      if (!rows.length) { chunk.forEach((t) => tried.add(t)); readN += chunk.length; advance(); continue; }
+      while (flying.size >= 3) await Promise.race(flying);
+      if (failed) throw failed;
+      const job = readChunk(chunk, rows, used).catch((e) => { failed = failed || e; });
+      flying.add(job);
+      job.finally(() => flying.delete(job));
+    }
+    while (flying.size) await Promise.race(flying);
+    if (failed) throw failed;
+    if (run !== S.run) return false;
+    if (!only) S.prog = { k: times.length, n: times.length, at: S.range.to };
+    advance();
+    S.stops = mergeStops(findStops(), S.stops);
+    save();
+    rebuild();
+    return true;
+    async function readChunk(chunk, rows, used) {
       const parts = [{ text: [
         `Te envío ${Math.ceil(rows.length / OSD_ROWS)} imagen(es) con filas numeradas del #1 al #${rows.length}. Cada fila son dos franjas del texto sobreimpreso de la cámara de un bus en un momento distinto: arriba la patente, la fecha, la hora y la velocidad (por ejemplo "16KM/H"); abajo las coordenadas (por ejemplo "33.25.30640S 70.42.12900W", que es grados.minutos.decimales de minuto y hemisferio).`,
         'Para cada fila devuelve "n", "hora" (HH:MM:SS), "velocidad" (solo el número de km/h), "coord_texto" (copia exacta de las coordenadas) y "lat" y "lon" en grados decimales con signo (S y W negativos). Copia los dígitos con cuidado. Si algo no se lee, pon null. No inventes.',
@@ -1533,7 +1683,7 @@
       for (let k = 0; k < rows.length; k += OSD_ROWS) parts.push(img(stackRows(rows.slice(k, k + OSD_ROWS)), 0.85));
       window.__cofDebug = { ...(window.__cofDebug || {}), osdTimes: used, stops: () => S.stops.map((x) => [x.t0, x.estado, inRange(x), beforeStart(x)]), running: () => [S.running, S.run, S.frontier] }; // solo para pruebas automáticas
       const list = await gemini(parts, run, 'quick');
-      if (!list || run !== S.run) return false;
+      if (!list || run !== S.run) return;
       const arr = Array.isArray(list) ? list : list.filas || list.resultados || [];
       used.forEach((t, j) => {
         const r = arr.find((x) => Number(x && x.n) === j + 1);
@@ -1551,18 +1701,13 @@
       S.moments.sort((a, b) => a.t - b.t);
       chunk.forEach((t) => tried.add(t));
       advance();
-      S.prog = { k: times.length - todo.length + i + chunk.length, n: times.length, at: chunk[chunk.length - 1] };
+      readN += chunk.length;
+      if (!only) S.prog = { k: readN, n: times.length, at: S.frontier };
       S.stops = mergeStops(findStops(), S.stops);
       save();
       rebuild();
       progress();
     }
-    S.prog = { k: times.length, n: times.length, at: S.range.to };
-    advance();
-    S.stops = mergeStops(findStops(), S.stops);
-    save();
-    rebuild();
-    return true;
   }
 
   // Paso 3 (en segundo plano): qué pasa en el bus, una vez por minuto, mirando todas las cámaras.
@@ -1653,8 +1798,10 @@
     return found.map((s) => {
       // Se conserva el mismo paradero (contado, en conteo o pendiente) si no cambió su tramo.
       const prev = old.find((o) => Math.abs(o.t0 - s.t0) < 0.5 && Math.abs(o.t1 - s.t1) < 0.5);
-      if (prev) return prev;
       const ll = S.moments.filter((m) => m.t >= s.t0 && m.t <= s.t1 && m.lat != null);
+      // El paradero se encontró sin IA y la ubicación se leyó después: se completa.
+      if (prev && prev.lat == null && ll.length) { prev.lat = ll.reduce((a, m) => a + m.lat, 0) / ll.length; prev.lon = ll.reduce((a, m) => a + m.lon, 0) / ll.length; }
+      if (prev) return prev;
       return {
         ...s,
         estado: 'pendiente',
@@ -1944,8 +2091,10 @@
     const tracks = [];
     let next = 1;
     let i = -1;
-    return {
+    // «reach»: cuánto se puede mover una persona entre dos fotos (más si las fotos están más separadas).
+    const T = {
       tracks,
+      reach: 0.1,
       step(dets) {
         i++;
         const live = tracks.filter((tr) => i - tr.last <= 5);
@@ -1956,7 +2105,7 @@
             const ov = iou(a, d.box);
             const [ax, ay] = boxC(a), [bx, by] = boxC(d.box);
             const dist = Math.hypot(ax - bx, ay - by);
-            if (ov > 0.1 || dist < 0.1 + 0.06 * (i - tr.last)) pairs.push({ tr, j, score: ov - dist });
+            if (ov > 0.1 || dist < T.reach + 0.06 * (i - tr.last)) pairs.push({ tr, j, score: ov - dist });
           });
         }
         pairs.sort((x, y) => y.score - x.score);
@@ -1977,6 +2126,7 @@
       },
       prune(keep) { for (let k = tracks.length - 1; k >= 0; k--) if (i - tracks[k].last > keep) tracks.splice(k, 1); },
     };
+    return T;
   }
   function trackPeople(frames) {
     const T = makeTracker();
@@ -2065,38 +2215,65 @@
     return Y.load;
   }
   // Personas en una imagen (canvas o video): recuadros [ymin, xmin, ymax, xmax] de 0 a 1 y su confianza.
-  async function yoloDetect(src, live) {
+  // Una pasada del detector sobre la imagen de 640×640 que arma «paint»; devuelve las personas en píxeles.
+  async function yoloRaw(paint, live) {
     const sess = Y.sess || (await yolo());
     if (!sess) return null;
-    const W = src.videoWidth || src.width, H = src.videoHeight || src.height;
-    if (!W || !H) return [];
     if (live && Y.wait > 1 && performance.now() - (Y.lastLive || 0) < 1500) return null;
     if (live) Y.lastLive = performance.now();
-    const sc = YOLO_IN / Math.max(W, H);
     const cv = Y.cv || (Y.cv = newCanvas(YOLO_IN, YOLO_IN));
     const g = cv.getContext('2d', { willReadFrequently: true });
     g.fillStyle = '#727272';
     g.fillRect(0, 0, YOLO_IN, YOLO_IN);
-    g.drawImage(src, 0, 0, W * sc, H * sc);
+    paint(g);
     const d = g.getImageData(0, 0, YOLO_IN, YOLO_IN).data;
     const N = YOLO_IN * YOLO_IN, arr = new Float32Array(3 * N);
     for (let i = 0; i < N; i++) { arr[i] = d[i * 4] / 255; arr[N + i] = d[i * 4 + 1] / 255; arr[2 * N + i] = d[i * 4 + 2] / 255; }
     Y.wait++;
+    const t0 = performance.now();
     const job = Y.queue.then(() => sess.run({ [sess.inputNames[0]]: new ort.Tensor('float32', arr, [1, 3, YOLO_IN, YOLO_IN]) }));
     Y.queue = job.catch(() => null);
     let out;
     try { out = await job; } catch (e) { console.warn('YOLO', e); return null; } finally { Y.wait--; }
+    Y.ms = Y.ms ? Y.ms * 0.8 + (performance.now() - t0) * 0.2 : performance.now() - t0;
     const o = out[sess.outputNames[0]];
     const res = [];
-    const w = W * sc, h = H * sc;
     for (let k = 0; k < o.dims[1]; k++) {
       const [x0, y0, x1, y1, s, cls] = o.data.slice(k * 6, k * 6 + 6);
-      if (cls !== 0 || s < 0.2) continue;
-      const box = [clamp(y0 / h, 0, 1), clamp(x0 / w, 0, 1), clamp(y1 / h, 0, 1), clamp(x1 / w, 0, 1)];
-      if (box[2] - box[0] < 0.03 || box[3] - box[1] < 0.02) continue;
-      if (!res.some((r) => iou(r.box, box) > 0.6)) res.push({ box, s });
+      if (cls === 0 && s >= 0.2) res.push({ x0, y0, x1, y1, s });
     }
     return res;
+  }
+  // Pasa las cajas de un rectángulo de la imagen del detector (x, y, w, h en píxeles) a la cámara (0 a 1).
+  function boxesIn(raw, x, y, w, h) {
+    const res = [];
+    for (const r of raw) {
+      const cx = (r.x0 + r.x1) / 2, cy = (r.y0 + r.y1) / 2;
+      if (cx < x || cx > x + w || cy < y || cy > y + h) continue;
+      const box = [clamp((r.y0 - y) / h, 0, 1), clamp((r.x0 - x) / w, 0, 1), clamp((r.y1 - y) / h, 0, 1), clamp((r.x1 - x) / w, 0, 1)];
+      if (box[2] - box[0] < 0.03 || box[3] - box[1] < 0.02) continue;
+      if (!res.some((q) => iou(q.box, box) > 0.6)) res.push({ box, s: r.s });
+    }
+    return res;
+  }
+  async function yoloDetect(src, live) {
+    const W = src.videoWidth || src.width, H = src.videoHeight || src.height;
+    if (!W || !H) return (Y.sess || (await yolo())) ? [] : null;
+    const sc = YOLO_IN / Math.max(W, H);
+    const raw = await yoloRaw((g) => g.drawImage(src, 0, 0, W * sc, H * sc), live);
+    return raw && boxesIn(raw, 0, 0, W * sc, H * sc);
+  }
+  // Varias cámaras en una sola pasada: cada una en su celda (2 una sobre otra, 3 o 4 en cuadrícula de 2×2).
+  // Sin tarjeta gráfica el detector tarda cerca de un segundo por pasada; así cada puerta se mira 3 veces más seguido.
+  async function yoloDetectMany(vids) {
+    const n = vids.length, cols = n > 2 ? 2 : 1, rows = n > 1 ? 2 : 1;
+    const cw = YOLO_IN / cols, ch = YOLO_IN / rows;
+    const cells = vids.map((v, i) => {
+      const W = v.videoWidth, H = v.videoHeight, sc = Math.min(cw / W, ch / H);
+      return { v, x: (i % cols) * cw, y: Math.floor(i / cols) * ch, w: W * sc, h: H * sc };
+    });
+    const raw = await yoloRaw((g) => { for (const c of cells) g.drawImage(c.v, c.x, c.y, c.w, c.h); }, true);
+    return raw && cells.map((c) => boxesIn(raw, c.x, c.y, c.w, c.h));
   }
   // Fotos de una puerta para el detector: se decodifican del archivo (sin mover los videos de la página).
   const detSinks = new WeakMap();
@@ -2118,14 +2295,40 @@
     const src = sink
       ? (async function* () { let i = 0; for await (const w of sink.canvasesAtTimestamps(times.map((t) => Math.max(0, t + c.off)))) { const t = times[i++]; yield { t, f: w && t + c.off >= 0 && t + c.off <= c.dur ? w.canvas : null }; } })()
       : (async function* () { for (const t of times) yield { t, f: await frameOf(c, t, 640) }; })();
+    // Sin tarjeta gráfica, 4 fotos seguidas van juntas en una pasada del detector (cuadrícula de 2×2): el paradero
+    // se cuenta 4 veces más rápido. Cada foto se copia a su celda al tiro (el lector reutiliza sus imágenes).
+    const quad = Y.ep !== 'webgpu' || Y.ms > 120;
+    const Q = quad ? Y.qcv || (Y.qcv = newCanvas(YOLO_IN, YOLO_IN)) : null;
+    const half = YOLO_IN / 2;
+    let pend = [];
+    const flush = async () => {
+      if (!pend.length) return true;
+      const raw = await yoloRaw((g) => g.drawImage(Q, 0, 0), false);
+      if (!raw) return false;
+      for (const p of pend) frames.push({ t: p.t, f: null, dets: boxesIn(raw, p.x, p.y, p.w, p.h) });
+      pend = [];
+      beat(s);
+      return true;
+    };
     for await (const { t, f } of src) {
       if (run !== S.run) return null;
       if (!f) continue;
-      const dets = await yoloDetect(f, false);
-      if (!dets) return null;
-      beat(s);
-      frames.push({ t, f: null, dets });
+      if (!quad) {
+        const dets = await yoloDetect(f, false);
+        if (!dets) return null;
+        beat(s);
+        frames.push({ t, f: null, dets });
+        continue;
+      }
+      const k = pend.length, sc = Math.min(half / f.width, half / f.height);
+      const p = { t, x: (k % 2) * half, y: (k >> 1) * half, w: f.width * sc, h: f.height * sc };
+      const g = Q.getContext('2d', { willReadFrequently: true });
+      if (!k) { g.fillStyle = '#727272'; g.fillRect(0, 0, YOLO_IN, YOLO_IN); }
+      g.drawImage(f, p.x, p.y, p.w, p.h);
+      pend.push(p);
+      if (pend.length === 4 && !(await flush())) return null;
     }
+    if (!(await flush())) return null;
     return frames;
   }
   // Fotos de evidencia de una puerta (copias propias, porque el lector reutiliza sus imágenes).
@@ -2176,8 +2379,15 @@
     return cv;
   }
   const AUTO_V = 3;
+  // Mientras la IA no responde (o si no hay IA), cada puerta parte con una línea estándar a lo ancho del vano:
+  // el conteo en vivo funciona de inmediato. La de la IA la reemplaza; la dibujada a mano se recuerda por bus.
+  function guessLine(c) {
+    if (c.line) return;
+    c.line = { a: [0.25, 0.65], b: [0.75, 0.65], inside: 1, auto: true, v: AUTO_V, guess: true };
+    renderCams();
+  }
   function autoLine(c, run) {
-    if (c.line) return Promise.resolve(c.line);
+    if (c.line && !c.line.guess) return Promise.resolve(c.line);
     if (c.linePr) return c.linePr;
     c.linePr = (async () => {
       const s = S.stops.find((x) => x.t1 + c.off <= c.dur) || null;
@@ -2213,7 +2423,13 @@
       const flat = Math.abs(b[1] - a[1]) <= Math.abs(b[0] - a[0]);
       const q = flat ? [mx, my + 0.2] : /izq/.test(dir) ? [mx - 0.2, my] : /der/.test(dir) ? [mx + 0.2, my] : [mx, my + 0.2];
       const inside = Math.sign((b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0])) || 1;
-      if (!c.line) { c.line = { a, b, inside, auto: true, v: AUTO_V, guess: bad || undefined }; save(); renderCams(); }
+      if ((!c.line || c.line.guess) && !(bad && c.line)) {
+        c.line = { a, b, inside, auto: true, v: AUTO_V, guess: bad || undefined };
+        // Lo contado en vivo con la línea estándar se vuelve a seguir con la nueva.
+        if (c.live) c.live.T = makeTracker();
+        save();
+        renderCams();
+      }
       return c.line;
     })().catch((e) => { c.linePr = null; throw e; });
     return c.linePr;
@@ -2408,7 +2624,8 @@
     if (!LIVE.on) return;
     const X = (x) => ox + x * w, Yp = (y) => oy + y * h;
     const L = c.live;
-    const fresh = L && Math.abs(c.video.currentTime - L.t) < 1.2;
+    // Sin tarjeta gráfica las fotos llegan cada un segundo o algo más: los recuadros se muestran hasta la siguiente.
+    const fresh = L && Math.abs(c.video.currentTime - L.t) < Math.max(1.2, L.dt * 1.8);
     if (c.line) {
       const { a, b } = c.line;
       g.lineWidth = 3 * dpr;
@@ -2416,10 +2633,10 @@
       g.setLineDash(c.line.auto ? [10 * dpr, 6 * dpr] : []);
       g.beginPath(); g.moveTo(X(a[0]), Yp(a[1])); g.lineTo(X(b[0]), Yp(b[1])); g.stroke();
       g.setLineDash([]);
-      const st = stopAtRef(c.video.currentTime - c.off);
+      const st = stopAtRef(c.video.currentTime - c.off) || provAt(c.video.currentTime - c.off);
       const cc = st && st.vivo && st.vivo.cams[c.key];
       const conf = hasValidator(c) && c.valz && !c.valz.auto;
-      const txt = !st ? 'EN RUTA' : `PARADERO ${stopLabel(st)} · SUBEN ${cc ? cc.in : 0}${conf ? ` · PAGAN ${cc ? cc.pay : 0}` : ''} · BAJAN ${cc ? cc.out : 0}`;
+      const txt = !st ? 'EN RUTA' : `${st.prov ? 'EN VIVO' : `PARADERO ${stopLabel(st)}`} · SUBEN ${cc ? cc.in : 0}${conf ? ` · PAGAN ${cc ? cc.pay : 0}` : ''} · BAJAN ${cc ? cc.out : 0}`;
       g.font = `bold ${13 * dpr}px system-ui, sans-serif`;
       const tw = g.measureText(txt).width + 12 * dpr;
       // El marcador va en el extremo derecho de la línea, para no tapar a quien pasa por el medio.
@@ -2483,6 +2700,37 @@
     }
   }
   const nap = (ms) => new Promise((ok) => setTimeout(ok, ms));
+  window.__cofDebug = { ...(window.__cofDebug || {}), live: () => S.cams.map((c) => [c.label, +c.video.currentTime.toFixed(1), c.live ? +c.live.t.toFixed(1) : null, c.live ? c.live.dets.length : null, c.live ? +c.live.dt.toFixed(2) : null, c.line ? 1 : 0]).concat([[Y.ep, Math.round(Y.ms || 0), S.stops.length, (S.provs || []).map((p) => `${p.t0.toFixed(0)}-${p.t1.toFixed(0)}:${JSON.stringify(p.vivo && p.vivo.cams)}`).join(' ')]]) }; // solo para pruebas automáticas
+  // Una foto nueva de una cámara: se sigue a cada persona y se cuenta quien cruza la línea de la puerta.
+  function liveFeed(c, t, dets) {
+    const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [], dt: 0.3 });
+    // Si se saltó en el video (o pasó mucho entre fotos), se parte de nuevo con el seguimiento.
+    if (t < L.t || t - L.t > Math.max(2.5, L.dt * 3)) L.T = makeTracker();
+    else L.dt = L.dt * 0.7 + (t - L.t) * 0.3;
+    L.T.reach = clamp(0.1 + 0.15 * L.dt, 0.1, 0.3);
+    L.t = t;
+    L.dets = L.T.step(dets);
+    L.T.prune(40);
+    if (!c.line) return;
+    // Con fotos seguidas, el lado cuenta cuando se repite dos veces; con fotos cada un segundo o más, basta una
+    // (la franja alrededor de la línea evita contar a quien se queda parado encima).
+    const need = L.dt < 0.5 ? 2 : 1;
+    for (const tr of L.T.tracks) {
+      const last = tr.boxes[tr.boxes.length - 1];
+      if (last.i !== tr.last) continue;
+      if (segDist(c.line, boxFoot(last.box)) < 0.12) tr.door = true;
+      const sd = lineSide(c.line, boxFoot(last.box), LINE_BAND);
+      if (!sd) continue;
+      // Si la persona vuelve, se descuenta: cada una suma a lo más una vez.
+      tr.hist = [...(tr.hist || []), sd].slice(-need);
+      if (tr.hist.length < need || tr.hist.some((x) => x !== sd)) continue;
+      if (tr.est && sd !== tr.est) {
+        if (sd === c.line.inside) { if (tr.dir === 'out') { liveEvent(c, t, 'out', -1); tr.dir = null; } else { liveEvent(c, t, 'in', 1); tr.dir = 'in'; } }
+        else if (tr.dir === 'in') { liveEvent(c, t, 'in', -1); tr.dir = null; } else { liveEvent(c, t, 'out', 1); tr.dir = 'out'; }
+      }
+      tr.est = sd;
+    }
+  }
   async function liveLoop() {
     if (LIVE.busy || !LIVE.on) return;
     LIVE.busy = true;
@@ -2492,34 +2740,14 @@
         if (!cams.length || document.hidden) { await nap(500); continue; }
         // Primero las puertas: son las que cuentan.
         cams.sort((x, y) => (/^puerta_/.test(y.tipo || '') ? 1 : 0) - (/^puerta_/.test(x.tipo || '') ? 1 : 0));
-        const c = cams[LIVE.rr++ % cams.length];
-        const t = c.video.currentTime;
-        const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [] });
-        if (Math.abs(t - L.t) < 0.04) { drawLive(c); await nap(120); continue; }
-        if (t < L.t || t - L.t > 2.5) L.T = makeTracker();
-        const dets = await yoloDetect(c.video, true);
-        if (!dets) { if (Y.failed) { liveNote(`No se pudo cargar el detector de personas (${Y.failed}).`); break; } await nap(250); continue; }
-        L.t = t;
-        L.dets = L.T.step(dets);
-        L.T.prune(40);
-        if (c.line) {
-          for (const tr of L.T.tracks) {
-            const last = tr.boxes[tr.boxes.length - 1];
-            if (last.i !== tr.last) continue;
-            if (segDist(c.line, boxFoot(last.box)) < 0.12) tr.door = true;
-            const sd = lineSide(c.line, boxFoot(last.box), LINE_BAND);
-            if (!sd) continue;
-            // El lado cuenta cuando se repite dos veces seguidas; si la persona vuelve, se descuenta: cada una
-            // suma a lo más una vez.
-            tr.hist = [...(tr.hist || []), sd].slice(-2);
-            if (tr.hist.length < 2 || tr.hist[0] !== tr.hist[1]) continue;
-            if (tr.est && sd !== tr.est) {
-              if (sd === c.line.inside) { if (tr.dir === 'out') { liveEvent(c, t, 'out', -1); tr.dir = null; } else { liveEvent(c, t, 'in', 1); tr.dir = 'in'; } }
-              else if (tr.dir === 'in') { liveEvent(c, t, 'in', -1); tr.dir = null; } else { liveEvent(c, t, 'out', 1); tr.dir = 'out'; }
-            }
-            tr.est = sd;
-          }
-        }
+        // Con tarjeta gráfica rápida, cada cámara con su imagen completa; sin ella, las visibles juntas en una pasada.
+        const many = cams.length > 1 && Y.sess && (Y.ep !== 'webgpu' || Y.ms > 120);
+        const pick = many ? cams.slice(0, 4) : [cams[LIVE.rr++ % cams.length]];
+        const ts = pick.map((c) => c.video.currentTime);
+        if (pick.every((c, k) => c.live && Math.abs(ts[k] - c.live.t) < 0.04)) { for (const x of cams) drawLive(x); await nap(120); continue; }
+        const got = many ? await yoloDetectMany(pick.map((c) => c.video)) : [await yoloDetect(pick[0].video, true)].filter(Boolean);
+        if (!got || got.length !== pick.length) { if (Y.failed) { liveNote(`No se pudo cargar el detector de personas (${Y.failed}).`); break; } await nap(250); continue; }
+        pick.forEach((c, k) => { if (!c.live || Math.abs(ts[k] - c.live.t) >= 0.04) liveFeed(c, ts[k], got[k]); });
         for (const x of cams) drawLive(x);
         await nap(Y.ep === 'webgpu' ? 30 : 60);
       }
@@ -2568,11 +2796,31 @@
     if (delta > 0) v.max[mk] = tr;
     if (!vivoTimer) vivoTimer = setTimeout(() => { vivoTimer = 0; save(); renderStops(); renderLiveCount(); }, 300);
   }
+  // Paraderos «en vivo»: lo que el detector ve cuando todavía no se sabe dónde paró el bus (el recorrido no se ha
+  // leído hasta ahí). Aparecen en la tabla al instante y pasan al paradero real cuando el recorrido llega a ese punto.
+  const PROV_GAP = 25;
+  const provAt = (tr) => (S.provs || []).find((p) => tr >= p.t0 - 4 && tr <= p.t1 + 2) || null;
+  const provDone = (p) => S.stops.some((s) => p.t1 >= s.t0 - 4 && p.t0 <= s.t1 + 2);
+  const provList = () => (S.provs || []).filter((p) => !provDone(p) && inRange(p) && !beforeStart(p) && vivoCounts(p));
+  function provFor(tr) {
+    S.provs = S.provs || [];
+    let p = S.provs.find((x) => tr >= x.t0 - PROV_GAP && tr <= x.t1 + PROV_GAP);
+    if (!p) { p = { t0: tr, t1: tr, prov: true, estado: 'vivo', personas: [], lat: null, lon: null }; S.provs.push(p); S.provs.sort((a, b) => a.t0 - b.t0); }
+    p.t0 = Math.min(p.t0, tr);
+    p.t1 = Math.max(p.t1, tr);
+    return p;
+  }
   function liveEvent(c, t, kind, delta) {
     const tr = t - c.off;
     const s = kind === 'pay' ? stopForPay(tr) : stopAtRef(tr);
-    // Si todavía no se sabe dónde paró el bus (el recorrido se sigue leyendo), se guarda y se anota al aparecer.
-    if (!s) { if (S.running) vivoPend.push({ key: c.key, tr, kind, delta }); return null; }
+    if (!s) {
+      if (tr < startT() - 0.01) return null;
+      // Se guarda para anotarlo en el paradero real cuando aparezca, y mientras tanto va a un paradero en vivo.
+      vivoPend.push({ key: c.key, tr, kind, delta });
+      const p = provFor(tr);
+      applyVivo(p, c.key, tr, kind, delta);
+      return p;
+    }
     if (beforeStart(s)) return null;
     applyVivo(s, c.key, tr, kind, delta);
     return s;
@@ -2582,7 +2830,8 @@
       const e = vivoPend[i];
       const s = e.kind === 'pay' ? stopForPay(e.tr) : stopAtRef(e.tr);
       if (s) { if (!beforeStart(s)) applyVivo(s, e.key, e.tr, e.kind, e.delta); vivoPend.splice(i, 1); }
-      else if (!S.running || S.frontier > e.tr + 30) vivoPend.splice(i, 1);
+      // El recorrido ya pasó por ahí y no hubo detención: queda solo en el paradero en vivo.
+      else if (S.frontier > e.tr + 30) vivoPend.splice(i, 1);
     }
   }
   // Recuadro bajo el video: el paradero actual (desde cero) y el total de la expedición.
@@ -2590,11 +2839,12 @@
     const box = $('#liveCount');
     if (!box) return;
     const m = mainCam();
-    if (!m || !S.stops.length) { box.hidden = true; return; }
-    const s = stopAtRef(tRef());
+    const provs = provList();
+    if (!m || (!S.stops.length && !provs.length)) { box.hidden = true; return; }
+    const s = stopAtRef(tRef()) || provAt(tRef());
     const T = { suben: 0, pagan: 0, evaden: 0, bajan: 0 };
     let anyVivo = false;
-    for (const x of S.stops) {
+    for (const x of [...S.stops, ...provs]) {
       if (!inRange(x) || beforeStart(x)) continue;
       if (x.estado === 'listo') { const c = counts(x); T.suben += c.suben; T.pagan += c.pagan + c.zp; T.evaden += c.evaden; T.bajan += c.bajan; continue; }
       const v = vivoCounts(x);
@@ -2608,8 +2858,8 @@
       const c = off ? counts(s) : vivoCounts(s) || { suben: 0, pagan: 0, bajan: 0, evaden: null };
       const ev = off ? c.evaden : c.evaden;
       const p = el('span');
-      const po = parOf(s);
-      p.append(el('b', null, `Paradero ${stopLabel(s)}${po && po.n ? ` · ${shortName(po.n)}` : ''}:`), ` suben ${c.suben} · `, el('span', 'lc-pay', `pagan ${off ? c.pagan + c.zp : c.pagan}`), ' · ', el('span', 'lc-evade', `evaden ${ev == null ? '—' : ev}`), ` · bajan ${c.bajan}`, el('small', null, off ? ' (conteo completo)' : ' (en vivo, parte de cero en cada paradero)'));
+      const po = s.prov ? null : parOf(s);
+      p.append(el('b', null, s.prov ? 'Paradero en curso:' : `Paradero ${stopLabel(s)}${po && po.n ? ` · ${shortName(po.n)}` : ''}:`), ` suben ${c.suben} · `, el('span', 'lc-pay', `pagan ${off ? c.pagan + c.zp : c.pagan}`), ' · ', el('span', 'lc-evade', `evaden ${ev == null ? '—' : ev}`), ` · bajan ${c.bajan}`, el('small', null, off ? ' (conteo completo)' : ' (en vivo, parte de cero en cada paradero)'));
       parts.push(p);
     } else parts.push(el('span', null, 'En ruta'));
     const t = el('span');
@@ -2937,7 +3187,8 @@
     // Puertas con línea de conteo: detección + seguimiento + línea. Si falla (sin cupo), esa puerta usa el método por IA.
     let lineRes = [];
     try {
-      await Promise.all(allDoors.filter((c) => !c.line).map((c) => autoLine(c, run).catch((e) => { if (e.badKey || e.claudeKey || e.stop) throw e; return null; })));
+      // Se espera la línea de la IA hasta un minuto; si no llega, se cuenta con la línea estándar.
+      await Promise.all(allDoors.filter((c) => !c.line || c.line.guess).map((c) => withTimeout(autoLine(c, run).catch((e) => { if (e.badKey || e.claudeKey || e.stop) throw e; return null; }), 60000, null)));
       if (run !== S.run) return false;
       lineRes = (await Promise.all(allDoors.filter((c) => c.line).map((c) => lineCount(s, c, run).catch((e) => { if (e.badKey || e.claudeKey || e.stop) throw e; return null; })))).filter(Boolean);
     } catch (e) {
@@ -3289,7 +3540,7 @@
     x = ((x % 86400) + 86400) % 86400;
     return `${pad(Math.floor(x / 3600))}:${pad(Math.floor((x % 3600) / 60))}:${pad(x % 60)}`;
   }
-  const stopLabel = (s) => `${S.stops.indexOf(s) + 1}`;
+  const stopLabel = (s) => (s.prov ? '●' : `${S.stops.indexOf(s) + 1}`);
   const personCam = (p) => { const c = camByKey(p.cam); return c ? camName(c) : ''; };
   const resText = (r) => (r === 'paga' ? 'Paga' : r === 'zp' ? 'Pagó en zona paga' : r === 'evade' ? 'Evade' : r === 'excluir' ? 'No contar (personal)' : 'Dudoso');
   const resTag = (r) => (r === 'paga' ? 'PAGA' : r === 'zp' ? 'ZONA PAGA' : r === 'evade' ? 'EVADE' : r === 'excluir' ? 'PERSONAL' : 'DUDOSO');
@@ -3901,7 +4152,8 @@
       tot(T.dudosos, 'Dudosos', 'doubt'),
     );
     const body = $('#stopRows');
-    const list = S.stops.filter((s) => (s.estado !== 'listo' && inRange(s) && !beforeStart(s)) || moving(s));
+    // Los paraderos en vivo (vistos por el detector antes de leer el recorrido) van en su lugar según la hora.
+    const list = [...S.stops.filter((s) => (s.estado !== 'listo' && inRange(s) && !beforeStart(s)) || moving(s)), ...provList()].sort((a, b) => a.t0 - b.t0);
     if (!list.length) {
       const tr = el('tr');
       const td = el('td', 'empty', S.stops.length ? 'En las detenciones analizadas no subió ni bajó nadie.' : 'Todavía no hay paraderos analizados.');
@@ -3912,6 +4164,23 @@
     }
     const rows = [];
     for (const s of list) {
+      if (s.prov) {
+        const v = vivoCounts(s);
+        const tr = el('tr', 'stop-row');
+        tr.append(
+          el('td', null, '●'),
+          el('td', null, horaAt(s.t0) || mmss(s.t0)),
+          el('td', 'hide-sm muted', 'Visto por YOLO · la ubicación aparece al leer el recorrido'),
+          (() => { const td = el('td', 'n', String(v.suben)); td.append(el('span', 'vivo-badge', '● en vivo')); return td; })(),
+          el('td', 'n pay', String(v.pagan)),
+          el('td', 'n evade', v.evaden != null ? String(v.evaden) : ''),
+          el('td', 'n doubt hide-sm', ''),
+          el('td', 'n hide-sm', String(v.bajan)),
+        );
+        tr.onclick = () => goTo(s.t0);
+        rows.push(tr);
+        continue;
+      }
       const c = counts(s);
       const tr = el('tr', `stop-row${S.curStop === s ? ' cur' : ''}`);
       const ready = s.estado === 'listo';
