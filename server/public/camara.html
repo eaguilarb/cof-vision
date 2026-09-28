@@ -3231,6 +3231,8 @@
     const times = await lineTimes(c, win, run, (await yolo()) ? 160 : 96, keep);
     if (run !== S.run) return null;
     // Luz del validador en esta detención (pagos), sin IA.
+    // Cámara en blanco y negro en este paradero (modo noche/infrarrojo): el pago se ve como destello.
+    if (keep.mot && keep.mot.green && keep.mot.green.length) c.mono = keep.mot.green.filter((g) => g.lum).length > keep.mot.green.length / 2;
     learnValZone(c, keep.mot);
     // Pagos: solo con el bus detenido (con un pequeño margen), así el pasto que pasa por el vidrio no suma.
     const greens = hasValidator(c) ? greenEvents(keep.mot, c.valz).filter((g) => g.t >= s.t0 - 2 && g.t <= s.t1 + 1) : [];
@@ -3563,7 +3565,8 @@
     });
     // Pagos con el bus ya en marcha: los verdes entre este paradero y el siguiente se asignan, en orden, a quienes
     // subieron aquí sin verde (primero por la puerta del validador, luego por las otras).
-    if (valKnown) {
+    // En blanco y negro no se cuentan pagos con el bus en marcha: la luz cambia mucho y el destello no es confiable.
+    if (valKnown && !valDoors.find((x) => x.c.valz && !x.c.valz.auto).c.mono) {
       const vc0 = valDoors.find((x) => x.c.valz && !x.c.valz.auto).c;
       const next = S.stops.filter((x) => x.t0 > s.t1).sort((a, b) => a.t0 - b.t0)[0];
       const lt0 = s.t1 + 1;
@@ -3598,7 +3601,8 @@
     }
     // Cada verde del validador es un pasajero que pagó: si el detector no siguió a esa persona (tapada por un
     // pasamanos o por otra persona), igual se cuenta, con la foto de ese momento.
-    if (valKnown) {
+    // En blanco y negro el destello solo confirma el pago de alguien que el detector vio subir: no crea pasajeros.
+    if (valKnown && !valDoors.find((x) => x.c.valz && !x.c.valz.auto).c.mono) {
       const vc = valDoors.find((x) => x.c.valz && !x.c.valz.auto).c;
       for (const g of greens.filter((x) => !x.used)) {
         const f = await frameOf(vc, g.t, 640);
