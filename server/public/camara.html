@@ -3017,7 +3017,8 @@
   const PROV_GAP = 25;
   const provAt = (tr) => (S.provs || []).find((p) => tr >= p.t0 - 4 && tr <= p.t1 + 2) || null;
   const provDone = (p) => S.stops.some((s) => p.t1 >= s.t0 - 4 && p.t0 <= s.t1 + 2);
-  const provList = () => (S.provs || []).filter((p) => !provDone(p) && inRange(p) && !beforeStart(p) && vivoCounts(p));
+  // Si el recorrido ya se leyó más allá y ahí el bus no paró, lo visto era gente moviéndose con el bus en marcha.
+  const provList = () => (S.provs || []).filter((p) => !provDone(p) && !(S.frontier > p.t1 + 30 && S.moments.some((m) => m.t >= p.t0 - 2 && m.t <= p.t1 + 2)) && inRange(p) && !beforeStart(p) && vivoCounts(p));
   function provFor(tr) {
     S.provs = S.provs || [];
     let p = S.provs.find((x) => tr >= x.t0 - PROV_GAP && tr <= x.t1 + PROV_GAP);
@@ -3028,7 +3029,9 @@
   }
   function liveEvent(c, t, kind, delta) {
     const tr = t - c.off;
-    // En blanco y negro no se cuentan pagos con el bus en marcha (solo en el paradero).
+    // Subidas y bajadas solo con el bus detenido (las puertas cerradas en marcha): lo que cruza la línea justo antes
+    // de llegar o después de partir es gente moviéndose adentro. En blanco y negro tampoco hay pagos en marcha.
+    if (kind !== 'pay' && !S.stops.some((x) => tr >= x.t0 - 1 && tr <= x.t1 + 1) && stopAtRef(tr)) return null;
     const s = kind === 'pay' ? (c.mono ? stopAtRef(tr) : stopForPay(tr)) : stopAtRef(tr);
     if (!s) {
       if (tr < startT() - 0.01) return null;
@@ -3328,11 +3331,16 @@
         specs.push({ near: true, fromOut: majority(ps, false) === -1 && tr.boxes.length >= 3, tr, at: dd[0].b.i, d: dd[0].d, box: dd[0].b.box, pick, where: pick.map((b) => ['en el umbral', 'adentro', 'afuera'][[0, 1, -1].indexOf(pos(b))] || 'en el umbral') });
         continue;
       }
+      // Con el bus en marcha las puertas están cerradas: un cruce fuera de la detención es gente moviéndose adentro.
+      const tx = frames[x.i] ? frames[x.i].t : s.t0;
+      if (tx < s.t0 - 1 || tx > s.t1 + 1) continue;
       if (x.dir === 'out') { bajan++; continue; }
       const k = tr.boxes.findIndex((b) => b.i === x.i);
       const pick = [tr.boxes[0], tr.boxes[Math.max(0, k - 1)], tr.boxes[k], tr.boxes[tr.boxes.length - 1]].filter((v, j, a) => v && a.indexOf(v) === j);
       specs.push({ near: false, tr, at: x.i, d: 0, box: tr.boxes[k].box, pick, where: pick.map((b) => (lineSide(c.line, boxFoot(b.box)) === c.line.inside ? 'adentro' : 'afuera')) });
     }
+    // Candidatos que llegan a la puerta con el bus en marcha (fuera de la detención): no suben, se descartan.
+    for (let k = specs.length - 1; k >= 0; k--) { const tt = frames[specs[k].at] ? frames[specs[k].at].t : s.t0; if (tt < s.t0 - 1 || tt > s.t1 + 1) specs.splice(k, 1); }
     // La misma persona seguida en dos tramos (se perdió un momento): el segundo tramo no se cuenta otra vez.
     const tOf = (i) => frames[i].t;
     const kept = [];
