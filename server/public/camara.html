@@ -3302,16 +3302,6 @@
     if (!times.length) return { c, quiet: true, boarders: [], bajan: 0, greens };
     // Detector YOLO en el computador; si no se pudo cargar, la IA rápida marca a las personas.
     let frames = (await yolo()) ? await yoloFrames(c, times, run, s) : null;
-    // Aglomeración (8 o más personas por foto en promedio, típico de zona paga en hora punta): se mira la puerta a
-    // 5 fotos por segundo con el bus detenido; con 2 por segundo la persona se pierde tras otras entre foto y foto.
-    if (frames && frames.length && frames.reduce((a, f) => a + f.dets.length, 0) / frames.length >= 8) {
-      const dense = [];
-      for (let t = Math.max(0, s.t0 - 1); t <= s.t1 + 1 + 1e-6; t += 0.2) dense.push(+t.toFixed(2));
-      const pickT = dense.length > 300 ? dense.filter((_, k) => k % Math.ceil(dense.length / 300) === 0) : dense;
-      const more = await yoloFrames(c, pickT, run, s);
-      if (run !== S.run) return null;
-      if (more && more.length > frames.length) { frames = more; c.crowd = true; }
-    }
     const how = frames ? `detector ${Y.name || 'YOLO'}` : 'IA';
     if (!frames && run === S.run) frames = await detectFrames(c, times, run);
     if (!frames) return null;
