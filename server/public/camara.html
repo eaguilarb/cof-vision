@@ -2149,7 +2149,10 @@
         const live = tracks.filter((tr) => i - tr.last <= 5);
         const pairs = [];
         for (const tr of live) {
-          const a = tr.boxes[tr.boxes.length - 1].box;
+          // Se predice dónde va (velocidad de las dos últimas fotos): así no se confunde con el vecino en una aglomeración.
+          const last = tr.boxes[tr.boxes.length - 1], prev = tr.boxes[tr.boxes.length - 2];
+          const gap = i - tr.last;
+          const a = prev && last.i - prev.i <= 2 ? last.box.map((v, k) => v + ((v - prev.box[k]) / (last.i - prev.i)) * gap * 0.7) : last.box;
           dets.forEach((d, j) => {
             const ov = iou(a, d.box);
             const [ax, ay] = boxC(a), [bx, by] = boxC(d.box);
@@ -2221,6 +2224,25 @@
     return dir === 'in'
       ? Math.min(...d) <= -CLEAR && s1 >= CLEAR && s1 - Math.min(s0, ...d.slice(0, 2)) >= TRAVEL
       : Math.max(...d) >= CLEAR && s1 <= -CLEAR && Math.max(s0, ...d.slice(0, 2)) - s1 >= TRAVEL;
+  }
+  // Aglomeraciones (zona paga): quien sube casi nunca se ve afuera; aparece ya en el umbral, tapado por otros. Cuenta
+  // como subida si su cabeza baja en la imagen (se acerca a la cámara, hacia adentro) al menos un 20 % desde la zona de
+  // la puerta y termina adentro; al revés es una bajada. No importa si justo cruzó la línea.
+  function headFlow(tr, line) {
+    if (tr.boxes.length < 4) return null;
+    const [ax, ay] = line.a, [bx, by] = line.b;
+    if (Math.abs(by - ay) > Math.abs(bx - ax) * 0.5) return null; // solo con la línea de través (adentro = abajo)
+    if (lineDist(line, [(ax + bx) / 2, Math.max(ay, by) + 0.2]) <= 0) return null;
+    const med = (a) => { const v = [...a].sort((p, q) => p - q); return v[v.length >> 1]; };
+    const hy = tr.boxes.map((b) => b.box[0]);
+    const h0 = med(hy.slice(0, 3)), h1 = med(hy.slice(-3));
+    const cx = (tr.boxes[0].box[1] + tr.boxes[0].box[3]) / 2, ex = (tr.boxes[tr.boxes.length - 1].box[1] + tr.boxes[tr.boxes.length - 1].box[3]) / 2;
+    const xa = Math.min(ax, bx) - 0.1, xb = Math.max(ax, bx) + 0.1;
+    const mid = (h0 + h1) / 2;
+    const at = tr.boxes.find((b) => (h1 > h0 ? b.box[0] >= mid : b.box[0] <= mid)) || tr.boxes[tr.boxes.length - 1];
+    if (h1 - h0 >= 0.2 && h1 >= 0.55 && h0 <= 0.5 && cx >= xa && cx <= xb) return { dir: 'in', i: at.i, flow: true };
+    if (h0 - h1 >= 0.2 && h0 >= 0.55 && h1 <= 0.5 && ex >= xa && ex <= xb) return { dir: 'out', i: at.i, flow: true };
+    return null;
   }
   function crossing(tr, line) {
     const sides = tr.boxes.map((b) => ({ i: b.i, s: lineSide(line, boxFoot(b.box), LINE_BAND) })).filter((x) => x.s);
@@ -3303,7 +3325,7 @@
     const sdist = (b) => { const [ax, ay] = c.line.a, [bx, by] = c.line.b, P = boxFoot(b.box); return (((bx - ax) * (P[1] - ay) - (by - ay) * (P[0] - ax)) / (Math.hypot(bx - ax, by - ay) || 1)) * c.line.inside; };
     const med = (a) => { const v = [...a].sort((p, q) => p - q); return v[v.length >> 1]; };
     for (const tr of tracks) {
-      const x = crossing(tr, c.line);
+      const x = crossing(tr, c.line) || headFlow(tr, c.line);
       if (x && x.still) continue;
       if (!x) {
         // No cruzó claramente (tapado por un pasamanos, pocas fotos): si llegó a la puerta, lo revisa la IA.
