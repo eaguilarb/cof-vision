@@ -427,7 +427,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 12;
+  const COUNT_V = 13;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -2092,7 +2092,8 @@
   // 2) Un seguidor une las detecciones de foto en foto (cada persona con su número, como ByteTrack).
   // 3) La línea de conteo de la puerta (LineZone): sube quien empieza afuera y termina adentro de la línea.
   // 4) La IA de conteo revisa a cada pasajero que subió: si es personal y si validó.
-  const LINE_STEP = 0.5;
+  // 4 fotos por segundo: en aglomeraciones (zona paga en hora punta) la persona se pierde tras otras entre foto y foto.
+  const LINE_STEP = 0.25;
   const boxC = (b) => [(b[1] + b[3]) / 2, (b[0] + b[2]) / 2];
   const boxFoot = (b) => [(b[1] + b[3]) / 2, b[2]];
   function iou(a, b) {
@@ -3267,7 +3268,7 @@
     const keep = {};
     // La puerta se abre mientras el bus frena y se cierra cuando ya parte: se mira desde 4 s antes hasta 2 s después.
     const win = { t0: Math.max(0, s.t0 - 4), t1: s.t1 + 2 };
-    const times = await lineTimes(c, win, run, (await yolo()) ? 160 : 96, keep);
+    const times = await lineTimes(c, win, run, (await yolo()) ? 240 : 96, keep);
     if (run !== S.run) return null;
     // Luz del validador en esta detención (pagos), sin IA.
     // Cámara en blanco y negro en este paradero (modo noche/infrarrojo): el pago se ve como destello.
