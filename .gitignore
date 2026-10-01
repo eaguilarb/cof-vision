@@ -25,3 +25,4 @@ dist-ssr
 
 # Copias personales con clave incorporada
 *.personal.html
+__pycache__/
