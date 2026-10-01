@@ -441,7 +441,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.09.29-7';
+  const VERSION = '2026.10.01-1';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -506,7 +506,7 @@
   }
   const save = () => store.set(S.id, {
     v: 3, step: S.step, moments: S.moments, stops: S.stops, range: S.range, startManual: S.startManual, meta: S.meta,
-    cams: Object.fromEntries(S.cams.map((c) => [c.key, { tipo: c.tipo, validador: c.validador, off: c.off, desc: c.desc, coords: c.coords, manual: c.manual, line: c.line || null, valz: c.valz || null }])),
+    cams: Object.fromEntries(S.cams.map((c) => [c.key, { tipo: c.tipo, validador: c.validador, off: c.off, desc: c.desc, coords: c.coords, manual: c.manual, line: c.line || null, valz: c.valz || null, excl: c.excl || null }])),
   });
   const mainCam = () => S.cams[S.main] || null;
   const refCam = () => S.cams[S.ref] || null;
@@ -718,8 +718,44 @@
       else if (!m.video.paused && c.video.paused) c.video.play().catch(() => {});
     }
   }
-  // Línea de conteo de una puerta (como LineZone de Supervision): dos clics marcan la línea en el umbral y un
-  // tercer clic marca el lado de ADENTRO del bus. Quien cruza la línea hacia adentro, sube.
+  // Dibuja las zonas de una puerta: AFUERA (rojo), la PUERTA en el umbral (naranja), ADENTRO (verde) y las zonas que
+  // no cuentan (gris). «X» y «Yp» pasan de 0..1 a pixeles; «u» es el tamaño de un pixel de pantalla.
+  function paintZones(g, line, excl, X, Yp, u) {
+    g.save();
+    if (line) {
+      const A = [X(line.a[0]), Yp(line.a[1])], B = [X(line.b[0]), Yp(line.b[1])];
+      const dx = B[0] - A[0], dy = B[1] - A[1], len = Math.hypot(dx, dy) || 1;
+      const n = [(-dy / len) * line.inside, (dx / len) * line.inside];
+      const H = Math.abs(Yp(1) - Yp(0)), bw = 0.04 * H, D = 0.2 * H;
+      const quad = (k0, k1) => [[A[0] + n[0] * k0, A[1] + n[1] * k0], [B[0] + n[0] * k0, B[1] + n[1] * k0], [B[0] + n[0] * k1, B[1] + n[1] * k1], [A[0] + n[0] * k1, A[1] + n[1] * k1]];
+      const fill = (q, col) => { g.fillStyle = col; g.beginPath(); q.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath(); g.fill(); };
+      fill(quad(-bw - D, -bw), 'rgba(239,68,68,.13)');
+      fill(quad(-bw, bw), 'rgba(245,163,0,.22)');
+      fill(quad(bw, bw + D), 'rgba(34,197,94,.13)');
+      g.font = `bold ${11 * u}px system-ui, sans-serif`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      const lab = (k, txt, col) => {
+        const x = (A[0] + B[0]) / 2 + n[0] * k, y = (A[1] + B[1]) / 2 + n[1] * k;
+        const w = g.measureText(txt).width + 8 * u;
+        g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(x - w / 2, y - 8 * u, w, 16 * u);
+        g.fillStyle = col; g.fillText(txt, x, y);
+      };
+      lab(-bw - D * 0.6, 'AFUERA', '#ff9b9b');
+      lab(bw + D * 0.6, 'ADENTRO ↓', '#86efac');
+    }
+    for (const z of excl || []) {
+      const x = X(z.x0), y = Yp(z.y0), w = X(z.x1) - x, h = Yp(z.y1) - y;
+      g.fillStyle = 'rgba(90,90,90,.45)'; g.fillRect(x, y, w, h);
+      g.setLineDash([5 * u, 4 * u]); g.lineWidth = 1.5 * u; g.strokeStyle = '#d0d0d0'; g.strokeRect(x, y, w, h); g.setLineDash([]);
+      g.font = `bold ${11 * u}px system-ui, sans-serif`; g.textAlign = 'left'; g.textBaseline = 'top';
+      g.fillStyle = '#eee'; g.fillText('NO CUENTA', x + 4 * u, y + 4 * u);
+    }
+    g.restore();
+  }
+  // Zonas de una puerta. La línea (como LineZone de Supervision): dos clics marcan la línea en el umbral y un tercer
+  // clic marca el lado de ADENTRO del bus; quien cruza la línea hacia adentro, sube. Con «Zona que no cuenta» se
+  // arrastra un recuadro sobre el conductor, asientos o reflejos: quien tenga los pies ahí no se cuenta.
   async function editLine(c) {
     const f = await frameOf(c, clamp(tRef(), 0, Math.max(0, c.dur - 1)), 960);
     if (!f) return status('No se pudo tomar una imagen de esa cámara en este momento. Mueve el video y reintenta.', null, true);
@@ -732,9 +768,14 @@
     const g = cv.getContext('2d');
     let pts = c.line ? [c.line.a, c.line.b] : [];
     let inside = c.line ? c.line.inside : 0;
+    let mode = 'line', drag = null;
+    const ex = (c.excl || []).map((z) => ({ ...z }));
     const P = (q) => [q[0] * cv.width, q[1] * cv.height];
+    const u = Math.max(1, cv.width / 640);
     const draw = () => {
       g.drawImage(f, 0, 0);
+      paintZones(g, pts.length === 2 && inside ? { a: pts[0], b: pts[1], inside } : null, drag ? [...ex, drag] : ex, (x) => x * cv.width, (y) => y * cv.height, u);
+      if (c.valz) { g.lineWidth = 2 * u; g.strokeStyle = '#22c55e'; g.strokeRect(c.valz.x0 * cv.width, c.valz.y0 * cv.height, (c.valz.x1 - c.valz.x0) * cv.width, (c.valz.y1 - c.valz.y0) * cv.height); g.fillStyle = '#22c55e'; g.font = `bold ${11 * u}px system-ui, sans-serif`; g.fillText('VALIDADOR', c.valz.x0 * cv.width, c.valz.y0 * cv.height - 4 * u); }
       g.lineWidth = 4;
       g.strokeStyle = '#f5a300';
       g.fillStyle = '#f5a300';
@@ -743,21 +784,21 @@
         const [x0, y0] = P(pts[0]);
         const [x1, y1] = P(pts[1]);
         g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-        if (inside) {
-          // Flecha hacia el lado de adentro.
-          const mx = (x0 + x1) / 2, my = (y0 + y1) / 2, len = Math.hypot(x1 - x0, y1 - y0) || 1;
-          const nx = (-(y1 - y0) / len) * inside, ny = ((x1 - x0) / len) * inside;
-          g.strokeStyle = '#1a7f37'; g.fillStyle = '#1a7f37';
-          g.beginPath(); g.moveTo(mx, my); g.lineTo(mx + nx * 60, my + ny * 60); g.stroke();
-          g.font = 'bold 20px sans-serif';
-          g.fillText('ADENTRO', mx + nx * 70 - 40, my + ny * 70 + 8);
-        }
       }
-      help.textContent = pts.length < 2 ? `${camName(c)}: haz clic en los DOS extremos de la línea, en el umbral de la puerta (el borde del escalón).` : !inside ? 'Ahora haz clic en cualquier punto del lado de ADENTRO del bus.' : c.line && c.line.auto && pts[0] === c.line.a ? 'Esta línea la marcó la IA (punteada en el video). Si no calza con el umbral de la puerta, haz clic para dibujarla de nuevo; si está bien, guárdala.' : 'Listo. Guarda, o haz clic de nuevo para rehacer.';
+      modeBtns.forEach(([b, m]) => b.classList.toggle('ghost', m !== mode));
+      help.textContent = mode === 'excl'
+        ? 'Arrastra un recuadro sobre lo que NO se debe contar (conductor, asientos junto a la puerta, reflejos en el vidrio). Clic derecho sobre un recuadro lo borra.'
+        : pts.length < 2 ? `${camName(c)}: haz clic en los DOS extremos de la línea, en el umbral de la puerta (el borde del escalón).` : !inside ? 'Ahora haz clic en cualquier punto del lado de ADENTRO del bus.' : c.line && c.line.auto && pts[0] === c.line.a ? 'Esta línea la marcó el programa (punteada en el video). Rojo = AFUERA, naranja = la puerta, verde = ADENTRO. Si no calza con el umbral, haz clic para dibujarla de nuevo; si está bien, guarda.' : 'Rojo = AFUERA, naranja = la puerta (quien se queda parado ahí no cuenta), verde = ADENTRO. Guarda, o haz clic de nuevo para rehacer.';
     };
+    const at = (e) => { const r = cv.getBoundingClientRect(); return [clamp((e.clientX - r.left) / r.width, 0, 1), clamp((e.clientY - r.top) / r.height, 0, 1)]; };
+    cv.onmousedown = (e) => { if (mode !== 'excl' || e.button !== 0) return; const q = at(e); drag = { x0: q[0], y0: q[1], x1: q[0], y1: q[1], s: q }; };
+    cv.onmousemove = (e) => { if (!drag) return; const q = at(e); Object.assign(drag, { x0: Math.min(drag.s[0], q[0]), y0: Math.min(drag.s[1], q[1]), x1: Math.max(drag.s[0], q[0]), y1: Math.max(drag.s[1], q[1]) }); draw(); };
+    const up = () => { if (!drag) return; const z = drag; drag = null; if (z.x1 - z.x0 > 0.02 && z.y1 - z.y0 > 0.02) ex.push({ x0: +z.x0.toFixed(4), y0: +z.y0.toFixed(4), x1: +z.x1.toFixed(4), y1: +z.y1.toFixed(4) }); draw(); };
+    window.addEventListener('mouseup', up);
+    cv.oncontextmenu = (e) => { e.preventDefault(); const q = at(e); const k = ex.findIndex((z) => inRect(z, q)); if (k >= 0) ex.splice(k, 1); draw(); };
     cv.onclick = (e) => {
-      const r = cv.getBoundingClientRect();
-      const q = [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+      if (mode !== 'line') return;
+      const q = at(e);
       if (pts.length === 2 && inside) { pts = [q]; inside = 0; }
       else if (pts.length < 2) pts.push(q);
       else {
@@ -767,25 +808,35 @@
       draw();
     };
     const bar = el('div', 'line-bar');
-    const ok = el('button', 'btn small', 'Guardar línea');
+    const mLine = el('button', 'btn small', '✏ Línea de la puerta');
+    const mEx = el('button', 'btn small ghost', '⛔ Zona que no cuenta');
+    const modeBtns = [[mLine, 'line'], [mEx, 'excl']];
+    mLine.onclick = () => { mode = 'line'; draw(); };
+    mEx.onclick = () => { mode = 'excl'; draw(); };
+    const ok = el('button', 'btn small', 'Guardar zonas');
     const del = el('button', 'btn small ghost', 'Usar la línea automática');
     const cancel = el('button', 'btn small ghost', 'Cancelar');
-    [ok, del, cancel].forEach((b) => { b.type = 'button'; });
-    const close = () => box.remove();
+    [mLine, mEx, ok, del, cancel].forEach((b) => { b.type = 'button'; });
+    const close = () => { window.removeEventListener('mouseup', up); box.remove(); };
+    const saveEx = () => { c.excl = ex.length ? ex : null; rememberExcl(c); if (c.live) c.live.T = makeTracker(); };
     ok.onclick = () => {
-      if (pts.length < 2 || !inside) return (help.textContent = 'Faltan puntos: dos para la línea y uno del lado de adentro.');
-      c.line = { a: pts[0], b: pts[1], inside };
-      c.linePr = null;
-      rememberLine(c);
-      if (c.live) { c.live.cin = 0; c.live.cout = 0; }
+      const full = pts.length === 2 && !!inside;
+      if (pts.length && !full) return (help.textContent = 'Faltan puntos de la línea: dos en el umbral y uno del lado de adentro.');
+      saveEx();
+      if (full) {
+        c.line = { a: pts[0], b: pts[1], inside };
+        c.linePr = null;
+        rememberLine(c);
+        if (c.live) { c.live.cin = 0; c.live.cout = 0; }
+      }
       save();
       renderCams();
       close();
-      status(`Línea de conteo guardada para ${camName(c)}. Los paraderos se cuentan con esa línea desde ahora (usa «Volver a contar» para los ya contados).`, null);
+      status(`Zonas guardadas para ${camName(c)}${ex.length ? ` (${ex.length} que no cuentan)` : ''}. Los paraderos se cuentan con ellas desde ahora (usa «Volver a contar» para los ya contados).`, null);
     };
-    del.onclick = () => { c.line = null; c.linePr = null; rememberLine(c); save(); renderCams(); close(); autoLine(c, S.run).catch(() => {}); };
+    del.onclick = () => { saveEx(); c.line = null; c.linePr = null; rememberLine(c); save(); renderCams(); close(); autoLine(c, S.run).catch(() => {}); };
     cancel.onclick = close;
-    bar.append(ok, del, cancel);
+    bar.append(mLine, mEx, ok, del, cancel);
     inner.append(help, cv, bar);
     box.append(inner);
     document.body.append(box);
@@ -797,7 +848,7 @@
     const door = /^puerta_/.test(c.tipo || '') && !c.bad;
     c.lineBtn.hidden = !door;
     c.lineBtn.classList.toggle('warn', door && (!c.line || !!c.line.auto));
-    c.lineBtn.textContent = !c.line ? '✏ Dibujar la línea de esta puerta' : c.line.guess === 'yolo' ? '✏ Línea aprendida por YOLO: revísala' : c.line.auto ? '✏ Línea automática: revísala' : '✏ Línea de conteo';
+    c.lineBtn.textContent = !c.line ? '✏ Marcar las zonas de esta puerta' : c.line.guess === 'yolo' ? '✏ Zonas aprendidas por YOLO: revísalas' : c.line.auto ? '✏ Zonas automáticas: revísalas' : `✏ Zonas de la puerta ✓${c.excl && c.excl.length ? ` · ${c.excl.length} no cuentan` : ''}`;
     if (c.valBtn) {
       const v = door && hasValidator(c);
       c.valBtn.hidden = !v;
@@ -846,9 +897,9 @@
       sel.onchange = () => changed(true);
       val.onchange = () => changed(true);
       off.onchange = () => changed(true);
-      const lineBtn = el('button', `btn small ${c.line ? '' : 'ghost'}`, c.line ? (c.line.auto ? '✏ Línea automática · revisar' : '✏ Línea de conteo ✓') : '✏ Dibujar línea de conteo');
+      const lineBtn = el('button', `btn small ${c.line ? '' : 'ghost'}`, c.line ? (c.line.auto ? '✏ Zonas automáticas · revisar' : '✏ Zonas de la puerta ✓') : '✏ Marcar zonas de la puerta');
       lineBtn.type = 'button';
-      lineBtn.title = 'La línea en el umbral de la puerta: quien la cruza hacia adentro, sube';
+      lineBtn.title = 'Afuera, la puerta (umbral), adentro y lo que no cuenta (conductor, asientos): quien cruza el umbral hacia adentro, sube';
       lineBtn.hidden = !/^puerta_/.test(c.tipo || '');
       lineBtn.onclick = () => editLine(c);
       const valBtn = el('button', `btn small ${c.valz && !c.valz.auto ? '' : 'ghost'}`, c.valz ? (c.valz.auto ? '💡 Validador (automático)' : '💡 Validador ✓') : '💡 Marcar validador');
@@ -1144,7 +1195,7 @@
       // La línea de cada puerta se busca de inmediato (una foto por puerta): así el conteo en vivo parte al tiro.
       for (const c of doorCams()) if (!c.line || c.line.guess) { guessLine(c); autoLine(c, run).catch(() => {}); }
       // La patente (para recordar las líneas y el validador de este bus) se lee en paralelo con el recorrido.
-      const meta = readMeta(run).then((ok) => { if (ok && run === S.run) { recallLines(); recallVals(); } return ok; });
+      const meta = readMeta(run).then((ok) => { if (ok && run === S.run) { recallLines(); recallVals(); recallExcl(); } return ok; });
       meta.catch(() => {});
       S.step = S.D <= 120 ? 2 : S.D <= 1200 ? 3 : 4;
       const m = mainCam();
@@ -2772,6 +2823,29 @@
     const m = store.get(LINE_MEM, {}) || {};
     for (const c of S.cams) { const k = VAL_MEM(c); if (k && m[k] && (!c.valz || c.valz.auto)) c.valz = m[k]; }
   }
+  // ---------------------------------------------------------------- zonas de cada puerta
+  // Cada cámara de puerta tiene sus zonas: AFUERA (calle o andén) y ADENTRO (pasillo), separadas por la línea del
+  // umbral; la PUERTA (la franja junto a la línea: quien se queda parado ahí no cuenta); el VALIDADOR; y las zonas que
+  // NO CUENTAN (conductor, asientos, reflejos en el vidrio), que se marcan a mano y se recuerdan por bus.
+  const EXCL_MEM = (c) => { const k = lineKey(c); return k ? `${k}|excluir` : null; };
+  function rememberExcl(c) {
+    const k = EXCL_MEM(c);
+    if (!k) return;
+    const m = store.get(LINE_MEM, {}) || {};
+    if (c.excl && c.excl.length) m[k] = c.excl; else delete m[k];
+    store.set(LINE_MEM, m);
+  }
+  function recallExcl() {
+    const m = store.get(LINE_MEM, {}) || {};
+    for (const c of S.cams) { const k = EXCL_MEM(c); if (k && m[k] && !(c.excl && c.excl.length)) c.excl = m[k]; }
+  }
+  const inRect = (z, P) => P[0] >= z.x0 && P[0] <= z.x1 && P[1] >= z.y0 && P[1] <= z.y1;
+  // Quita a quien tiene los pies dentro de una zona marcada como «no cuenta» (conductor, asientos, reflejos).
+  // (Descartar solo a quien pasa mucho rato quieto empeoró el conteo: el agente junto al validador tapa a los que pagan.)
+  function zoneFilter(c, dets) {
+    const ex = /^puerta_/.test(c.tipo || '') && c.excl;
+    return ex && ex.length ? dets.filter((d) => !ex.some((z) => inRect(z, boxFoot(d.box)))) : dets;
+  }
   // Marcar a mano la luz del validador: un clic sobre la pantalla del validador.
   async function editVal(c) {
     const f = await frameOf(c, clamp(tRef(), 0, Math.max(0, c.dur - 1)), 960);
@@ -2853,6 +2927,7 @@
     const L = c.live;
     // Sin tarjeta gráfica las fotos llegan cada un segundo o algo más: los recuadros se muestran hasta la siguiente.
     const fresh = L && Math.abs(c.video.currentTime - L.t) < Math.max(1.2, L.dt * 1.8);
+    if (/^puerta_/.test(c.tipo || '')) paintZones(g, c.line, c.excl, X, Yp, dpr);
     if (c.line) {
       const { a, b } = c.line;
       g.lineWidth = 3 * dpr;
@@ -2936,7 +3011,7 @@
     else L.dt = L.dt * 0.7 + (t - L.t) * 0.3;
     L.T.reach = clamp(0.1 + 0.15 * L.dt, 0.1, 0.3);
     L.t = t;
-    L.dets = L.T.step(dets);
+    L.dets = L.T.step(zoneFilter(c, dets));
     L.near = [...(L.near || []).filter((q) => Math.abs(t - q.t) <= 4), { t, boxes: L.dets.map((d) => d.box) }];
     // Recorridos terminados: sirven para aprender dónde está el umbral de la puerta.
     for (const tr of L.T.tracks) if (!tr.rec && L.T.now() - tr.last > 5 && tr.boxes.length >= 3) { tr.rec = true; addFlow(c, tr.boxes); }
@@ -3308,6 +3383,8 @@
     // Hubo movimiento pero el detector no vio a nadie en ninguna foto (noche, cámara empañada): esa puerta se
     // cuenta con el método por IA en vez de dar cero.
     if (frames.length >= 4 && !frames.some((f) => f.dets.length)) return null;
+    // Zonas que no cuentan (conductor, asientos, reflejos): fuera del conteo.
+    for (const f of frames) f.dets = zoneFilter(c, f.dets);
     // En blanco y negro, un destello solo es pago si el detector ve a alguien junto al validador en ese momento.
     if (c.mono && c.valz && greens.length) {
       const z = c.valz, m = 0.08;
