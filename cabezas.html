@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COF Vision · Marcar cabezas</title>
+<style>
+  :root { --bg: #11181f; --panel: #1b2530; --line: #2c3a47; --txt: #e7edf2; --muted: #9fb0bf; --acc: #f5a300; --ok: #22c55e; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--txt); font: 15px system-ui, sans-serif; }
+  header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  h1 { font-size: 18px; margin: 0 12px 0 0; }
+  .btn { background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px; font: 600 14px system-ui, sans-serif; cursor: pointer; }
+  .btn.acc { background: var(--acc); color: #1b1300; border-color: var(--acc); }
+  .btn:disabled { opacity: .45; cursor: default; }
+  label { color: var(--muted); font-size: 13px; display: inline-flex; gap: 6px; align-items: center; }
+  input[type=number], input[type=text] { width: 80px; background: var(--panel); color: var(--txt); border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; }
+  main { padding: 12px 16px; }
+  .help { color: var(--muted); font-size: 14px; line-height: 1.5; max-width: 980px; }
+  .help b { color: var(--txt); }
+  #wrap { position: relative; display: inline-block; margin-top: 10px; max-width: 100%; }
+  #cv { max-width: 100%; height: auto; cursor: crosshair; border: 1px solid var(--line); border-radius: 6px; display: block; }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
+  .stat { color: var(--muted); font-size: 14px; }
+  .stat b { color: var(--txt); }
+  video { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Marcar cabezas</h1>
+  <button class="btn acc" id="pick">Elegir video</button>
+  <input type="file" id="file" accept="video/*" hidden>
+  <label>Desde (mm:ss) <input type="text" id="from" value="00:00"></label>
+  <label>Hasta (mm:ss) <input type="text" id="to" value=""></label>
+  <label>Una foto cada <input type="number" id="every" value="2" min="0.5" step="0.5"> s</label>
+  <button class="btn" id="go" disabled>Preparar fotos</button>
+  <span class="stat" id="name"></span>
+</header>
+<main>
+  <div class="help">
+    Sirve para enseñarle al detector a ver <b>cabezas</b> en aglomeraciones (zona paga). Elige el video de una puerta,
+    pon el tramo del paradero y toca «Preparar fotos». En cada foto, <b>haz clic en el centro de cada cabeza</b> que se vea,
+    también las tapadas a medias y las de afuera de la puerta. <b>Clic derecho</b> (o Ctrl + clic) borra la más cercana.
+    Con 100 a 200 fotos de zonas pagas ya se nota la mejora. Al final toca «Descargar marcas» y sube el archivo a la carpeta de Drive.
+  </div>
+  <div class="bar">
+    <button class="btn" id="prev" disabled>◀ Anterior</button>
+    <button class="btn" id="next" disabled>Siguiente ▶</button>
+    <button class="btn" id="undo" disabled>Deshacer</button>
+    <button class="btn" id="none" disabled>Sin cabezas en esta foto</button>
+    <span class="stat" id="pos"></span>
+    <span class="stat" id="tot"></span>
+    <button class="btn acc" id="save" disabled>Descargar marcas</button>
+  </div>
+  <div id="wrap"><canvas id="cv" width="960" height="540"></canvas></div>
+  <video id="v" muted playsinline></video>
+</main>
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const v = $('#v'), cv = $('#cv'), g = cv.getContext('2d');
+  // Cada foto: tiempo, imagen (JPEG) y las cabezas marcadas (centro x, y y tamaño, de 0 a 1).
+  const S = { name: '', frames: [], k: 0, img: null };
+  const parse = (s) => { const p = String(s || '').trim().split(':').map(Number); if (p.some((x) => !Number.isFinite(x))) return null; return p.reduce((a, x) => a * 60 + x, 0); };
+  const mmss = (t) => `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+  const seek = (t) => new Promise((ok) => { const f = () => { v.removeEventListener('seeked', f); requestAnimationFrame(() => ok()); }; v.addEventListener('seeked', f); v.currentTime = t; });
+  $('#pick').onclick = () => $('#file').click();
+  $('#file').onchange = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    S.name = f.name;
+    v.src = URL.createObjectURL(f);
+    await new Promise((ok) => { v.onloadedmetadata = ok; });
+    $('#name').textContent = `${f.name} · ${mmss(v.duration)}`;
+    $('#to').value = mmss(Math.min(v.duration, 60));
+    $('#go').disabled = false;
+  };
+  $('#go').onclick = async () => {
+    const a = parse($('#from').value), b = parse($('#to').value), ev = Math.max(0.5, +$('#every').value || 2);
+    if (a == null || b == null || b <= a) return alert('Revisa «Desde» y «Hasta».');
+    $('#go').disabled = true;
+    const W = Math.min(1280, v.videoWidth), H = Math.round((v.videoHeight * W) / v.videoWidth);
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const cg = c.getContext('2d');
+    for (let t = a; t <= Math.min(b, v.duration - 0.1); t += ev) {
+      await seek(t);
+      cg.drawImage(v, 0, 0, W, H);
+      S.frames.push({ t: +t.toFixed(2), jpg: c.toDataURL('image/jpeg', 0.9), heads: [], done: false });
+      $('#tot').textContent = `Preparando… ${S.frames.length} fotos`;
+    }
+    $('#go').disabled = false;
+    show(Math.max(0, S.frames.findIndex((f) => !f.done)));
+  };
+  async function show(k) {
+    S.k = Math.max(0, Math.min(S.frames.length - 1, k));
+    const f = S.frames[S.k];
+    if (!f) return;
+    const im = new Image(); im.src = f.jpg; await im.decode();
+    S.img = im; cv.width = im.naturalWidth; cv.height = im.naturalHeight;
+    draw();
+    ['#prev', '#next', '#undo', '#none', '#save'].forEach((s) => { $(s).disabled = false; });
+  }
+  // Tamaño de cabeza por defecto según la altura en la imagen (más cerca de la cámara, más grande).
+  const sizeAt = (y) => 0.045 + 0.06 * y;
+  function draw() {
+    const f = S.frames[S.k];
+    g.drawImage(S.img, 0, 0);
+    g.lineWidth = Math.max(2, cv.width / 400);
+    for (const h of f.heads) {
+      const r = (h.s * cv.width) / 2;
+      g.strokeStyle = '#ffd400';
+      g.strokeRect(h.x * cv.width - r, h.y * cv.height - r * 1.1, 2 * r, 2.2 * r);
+      g.fillStyle = '#ffd400';
+      g.beginPath(); g.arc(h.x * cv.width, h.y * cv.height, Math.max(2, r / 6), 0, 7); g.fill();
+    }
+    $('#pos').innerHTML = `Foto <b>${S.k + 1}</b> de ${S.frames.length} · ${mmss(f.t)} · <b>${f.heads.length}</b> cabezas`;
+    const done = S.frames.filter((x) => x.done).length, n = S.frames.reduce((a, x) => a + x.heads.length, 0);
+    $('#tot').innerHTML = `Listas: <b>${done}</b> fotos · <b>${n}</b> cabezas marcadas`;
+  }
+  const at = (e) => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]; };
+  function removeNear(x, y) {
+    const f = S.frames[S.k];
+    let best = -1, bd = 1e9;
+    f.heads.forEach((h, i) => { const d = Math.hypot(h.x - x, (h.y - y) * (cv.height / cv.width)); if (d < bd) { bd = d; best = i; } });
+    if (best >= 0 && bd < 0.06) f.heads.splice(best, 1);
+  }
+  cv.addEventListener('contextmenu', (e) => { e.preventDefault(); const [x, y] = at(e); removeNear(x, y); draw(); });
+  cv.addEventListener('click', (e) => {
+    const [x, y] = at(e);
+    const f = S.frames[S.k];
+    if (e.ctrlKey || e.metaKey) removeNear(x, y);
+    else { f.heads.push({ x: +x.toFixed(4), y: +y.toFixed(4), s: +sizeAt(y).toFixed(4) }); f.done = true; }
+    draw();
+  });
+  $('#undo').onclick = () => { S.frames[S.k].heads.pop(); draw(); };
+  $('#none').onclick = () => { S.frames[S.k].heads = []; S.frames[S.k].done = true; show(S.k + 1); };
+  $('#prev').onclick = () => show(S.k - 1);
+  $('#next').onclick = () => { S.frames[S.k].done = true; show(S.k + 1); };
+  document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); $('#next').click(); }
+    if (e.key === 'ArrowLeft') $('#prev').click();
+    if (e.key.toLowerCase() === 'z' && (e.ctrlKey || e.metaKey)) $('#undo').click();
+  });
+  $('#save').onclick = () => {
+    const done = S.frames.filter((f) => f.done);
+    if (!done.length) return alert('Todavía no hay fotos marcadas.');
+    const blob = new Blob([JSON.stringify({ video: S.name, every: +$('#every').value, frames: done })], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `cabezas_${S.name.replace(/\.[^.]+$/, '')}_${done.length}fotos.json`;
+    a.click();
+  };
+  window.addEventListener('beforeunload', (e) => { if (S.frames.some((f) => f.heads.length)) { e.preventDefault(); e.returnValue = ''; } });
+})();
+</script>
+</body>
+</html>
