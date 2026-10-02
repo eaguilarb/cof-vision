@@ -446,7 +446,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.02-3';
+  const VERSION = '2026.10.02-4';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -498,7 +498,7 @@
     tope: store.get('cofsimple:tope', 1),
     spend: store.get('cofsimple:gasto', null),
     staff: store.get('cofsimple:staff2', 'Agentes de la empresa con uniforme negro (chaqueta y pantalón negros con franjas reflectantes, a menudo gorro negro), que suben al bus en el terminal antes de iniciar el recorrido o se paran en las puertas mientras el bus está detenido'),
-    auto: store.get('cofsimple:auto', true), iaRev: store.get('cofsimple:iarev', false), userPaused: false, autoPausing: false, waiting: false, rate: 1,
+    auto: store.get('cofsimple:auto', true), iaRev: store.get('cofsimple:iarev2', true), userPaused: false, autoPausing: false, waiting: false, rate: 1,
   };
   // La primera vez que se abre una copia con clave de Claude, se cuenta con Claude Haiku aunque antes se usara otra IA.
   // Una copia con una clave de Claude nueva la adopta (aunque el navegador tuviera guardada otra, por ejemplo una
@@ -1418,7 +1418,7 @@
   $('#iaRev').checked = S.iaRev;
   $('#iaRev').onchange = (e) => {
     S.iaRev = e.target.checked;
-    store.set('cofsimple:iarev', S.iaRev);
+    store.set('cofsimple:iarev2', S.iaRev);
     status(S.iaRev ? 'La IA revisará a cada pasajero en los próximos paraderos que se cuenten (tiene costo).' : 'Conteo sin IA: detector de personas y luz del validador (gratis).', null);
   };
   $('#ckeyInput').value = S.ckey ? '••••••••' : '';
@@ -2754,7 +2754,7 @@
     }
     return cv;
   }
-  const AUTO_V = 3;
+  const AUTO_V = 4;
   // Línea aprendida por YOLO: la mejor línea para contar es la altura que cruza la mayor cantidad de gente que
   // camina en esa puerta (los sentados o parados no cruzan nada). El ancho es por donde pasan. Reemplaza a la
   // línea estándar; la de la IA o la dibujada a mano mandan sobre ella.
@@ -2811,20 +2811,24 @@
       const s = S.stops.find((x) => x.t1 + c.off <= c.dur) || null;
       const f = await frameOf(c, s ? (s.t0 + s.t1) / 2 : clamp(c.dur * 0.2, 0, Math.max(0, c.dur - 1)), 800);
       if (!f || run !== S.run) return null;
+      // La IA marca con recuadros el vano de la puerta y el escalón (Qwen ubica muy bien objetos con recuadros; leer
+      // una regla le salía mal). El umbral es el borde lejano del escalón: donde se pasa de la calle al piso del bus.
       const parts = [{ text: [
-        'Imagen de una cámara de techo DENTRO de un bus, que mira hacia una puerta de pasajeros. La imagen tiene una regla amarilla: a la IZQUIERDA la altura (0 = arriba, 100 = abajo) y ARRIBA el ancho (0 = izquierda, 100 = derecha).',
-        'Busca el UMBRAL de la puerta: el borde del piso del bus donde se pisa al entrar desde la calle (el borde del escalón o la parte de abajo de las hojas de la puerta), de un lado al otro del vano. Quien cruza esa línea hacia adentro está subiendo. No es el marco de arriba de la puerta ni una ventana, y no está en las franjas de texto (fecha arriba, coordenadas abajo).',
-        'Indica con la regla: "y_izq" y "y_der" = altura del umbral en su extremo izquierdo y derecho; "x_desde" y "x_hasta" = dónde empieza y termina el vano de la puerta; "adentro" = hacia qué lado de esa línea queda el interior del bus ("abajo", "arriba", "izquierda" o "derecha").',
-        'Responde SOLO JSON con lo que mides en la regla (números de 0 a 100): {"puerta_visible":true,"y_izq":número,"y_der":número,"x_desde":número,"x_hasta":número,"adentro":"abajo"}',
-      ].join('\n') }, img(rulerImage(f), 0.85)];
-      let r = null;
-      try { r = await gemini(parts, run, 'quick'); } catch (e) { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; }
+        'Imagen de una cámara de techo DENTRO de un bus que mira hacia una puerta de pasajeros. Ubica el VANO de la puerta: la abertura por donde la gente sube desde la calle (entre las hojas de la puerta, desde el marco de arriba hasta el piso del bus donde está el escalón). No marques ventanas, asientos ni el pasillo.',
+        'Responde SOLO JSON: {"puerta":{"bbox_2d":[x1,y1,x2,y2]},"escalon":{"bbox_2d":[x1,y1,x2,y2]}} con coordenadas de 0 a 1000 medidas en la imagen; "escalon" es el piso del escalón de la puerta (null si no se ve).',
+      ].join('\n') }, img(f, 0.85)];
+      let txt = '';
+      try { txt = String((await gemini(parts, run, 'quick', { raw: true })) || ''); } catch (e) { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; }
       if (run !== S.run) return null;
-      const n = (v) => (Number.isFinite(+v) ? clamp(+v / 100, 0, 1) : null);
-      let y0 = r && n(r.y_izq), y1 = r && n(r.y_der), x0 = r && n(r.x_desde), x1 = r && n(r.x_hasta);
-      if (y1 == null) y1 = y0;
-      if (y0 == null) y0 = y1;
-      const bad = y0 == null || x0 == null || x1 == null || Math.min(y0, y1) < 0.15 || Math.max(y0, y1) > 0.9 || Math.abs(x1 - x0) < 0.08;
+      const boxOf = (k) => { const m = txt.match(new RegExp(`${k}[^\\[]{0,40}\\[\\s*(\\d+(?:\\.\\d+)?)\\s*,\\s*(\\d+(?:\\.\\d+)?)\\s*,\\s*(\\d+(?:\\.\\d+)?)\\s*,\\s*(\\d+(?:\\.\\d+)?)`)); return m ? m.slice(1, 5).map((v) => clamp(+v / 1000, 0, 1)) : null; };
+      const door = boxOf('puerta'), step = boxOf('escalon');
+      const r = { adentro: 'abajo' };
+      let y0 = null, x0 = null, x1 = null;
+      if (step && step[3] > step[1]) { y0 = step[1]; x0 = step[0]; x1 = step[2]; }
+      else if (door && door[3] > door[1]) { y0 = door[3] - 0.15 * (door[3] - door[1]); x0 = door[0]; x1 = door[2]; }
+      if (door && x0 != null) { x0 = Math.max(x0, door[0]); x1 = Math.min(x1, door[2]); }
+      let y1 = y0;
+      const bad = y0 == null || x0 == null || x1 == null || y0 < 0.15 || y0 > 0.9 || Math.abs(x1 - x0) < 0.08;
       if (bad) { y0 = y1 = 0.65; x0 = 0.25; x1 = 0.75; }
       if (x1 < x0) { [x0, x1] = [x1, x0]; [y0, y1] = [y1, y0]; }
       let a = [x0, y0], b = [x1, y1];
@@ -3806,12 +3810,6 @@
     // Se revisan quienes cruzaron la línea y, además, quienes llegaron a la puerta sin que se viera el cruce.
     const crossed = lineRes.flatMap((x) => x.boarders);
     const boarders = [...crossed, ...lineRes.flatMap((x) => x.near || []).sort((p, q) => p.d - q.d).slice(0, Math.max(0, 12 - crossed.length))];
-    let ver = null;
-    if (boarders.length && S.iaRev) {
-      const valCams = allDoors.filter((c) => hasValidator(c) && lineRes.some((x) => x.c === c));
-      try { ver = await verifyBoarders(s, boarders, boarders.some((b) => !hasValidator(b.c)) ? valCams : [], run); } catch (e) { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; ver = null; }
-      if (run !== S.run) return false;
-    }
     if (!results.some((x) => x.meta.length || x.quiet) && !lineRes.length) { s.estado = 'error'; s.resumen = 'Ninguna cámara de puerta grabó este momento.'; S.counting = null; save(); rebuild(); return true; }
     // Pagos según la luz verde del validador: cada verde se asigna a quien subió por la puerta delantera más cerca
     // de ese momento; los verdes que sobran, a quienes subieron por otra puerta y fueron a validar. Quien sube
@@ -3836,6 +3834,18 @@
       // Sin verde = posible evasión (con su foto, para que el fiscalizador lo confirme).
       for (const b of front) if (!payOf.has(b)) payOf.set(b, false);
     }
+    // Revisión con IA (Qwen) solo de quienes cruzaron la línea y NO tienen un pago medido: son los que quedarían como
+    // evasión. La IA mira las fotos y dice si de verdad subió, si es personal y si se ve la luz verde. A quienes solo
+    // llegaron a la puerta no se los manda (la IA tiende a «confirmarlos» y sumaba gente que no subió).
+    const checkList = crossed.filter((b) => payOf.get(b) !== true);
+    const checked = new Set(checkList);
+    let ver = null;
+    if (checkList.length && S.iaRev) {
+      const valCams = allDoors.filter((c) => hasValidator(c) && lineRes.some((x) => x.c === c));
+      try { ver = await verifyBoarders(s, checkList, checkList.some((b) => !hasValidator(b.c)) ? valCams : [], run); } catch (e) { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; ver = null; }
+      if (run !== S.run) return false;
+    }
+    if (!ver) checked.clear();
     // Unir las puertas: cada imagen de cada puerta queda numerada en una sola lista (para las fotos del detalle).
     const allMeta = [];
     const personas = [];
@@ -3880,7 +3890,8 @@
     const vp = ver && Array.isArray(ver.personas) ? ver.personas : [];
     boarders.forEach((b, k) => {
       const nOf = (x, f) => Math.round(num(x && x[f]) || 0);
-      const q = vp.find((x) => nOf(x, 'id') === b.tr.id) || vp.find((x) => nOf(x, 'n') === k + 1 && !(x.id != null && nOf(x, 'id') !== b.tr.id)) || vp.find((x) => x.id == null && nOf(x, 'n') === b.tr.id) || (vp.length === boarders.length ? vp[k] : null) || {};
+      const kk = checkList.indexOf(b);
+      const q = !checked.has(b) ? {} : vp.find((x) => nOf(x, 'id') === b.tr.id) || vp.find((x) => nOf(x, 'n') === kk + 1 && !(x.id != null && nOf(x, 'id') !== b.tr.id)) || vp.find((x) => x.id == null && nOf(x, 'n') === b.tr.id) || (vp.length === checkList.length ? vp[kk] : null) || {};
       const val = hasValidator(b.c);
       const luz = String(q.luz || '').toLowerCase();
       const verde = /verde|green/.test(luz);
@@ -3897,10 +3908,17 @@
       if (monoNo) pay = null;
       // Quien llegó desde afuera hasta la puerta y no volvió a salir se cuenta (sin IA): si no hay luz verde es la
       // posible evasión que se busca. Si solo se asomó al umbral, se cuenta si pagó o si la IA ve que sube.
-      if (b.near && pay !== true && !(ver ? sube === true : b.fromOut)) return;
-      const noSube = (!b.near && sube === false) || b.onboard;
-      // La luz del validador manda sobre lo que diga la IA (se ve directo en la imagen).
+      if (b.near && pay !== true && !(checked.has(b) ? sube === true : b.fromOut)) return;
+      // Quien pagó en el validador (luz verde medida con esa persona) subió y es pasajero, aunque la IA crea que no subió
+      // o que es personal: la luz se ve directo en la imagen.
+      const paid = payOf.has(b) && payOf.get(b) === true;
+      const noSube = !paid && ((!b.near && sube === false) || b.onboard);
+      // La luz del validador manda sobre lo que diga la IA (se ve directo en la imagen). Pero si el validador no marcó
+      // verde y la IA que revisa las fotos sí ve la luz verde (o que validó), no se da por evasión: la persona pagó y el
+      // destello no se alcanzó a medir (tapado por el cuerpo o la mano), o queda dudosa para revisar.
+      if (pay === false && ver && (verde || v === true)) { pay = verde ? true : null; }
       if (pay !== null) v = pay;
+      else if (ver && v === false && !verde && !truthy(q.sin_validar_visto)) v = null;
       const how = b.onboard ? 'ya iba a bordo antes del paradero (agente, o alguien que bajó y volvió a subir): no se cuenta' : noSube ? 'cruzó la línea, pero la IA revisó y NO subió (ya estaba adentro o se bajó)' : b.near ? `llegó desde afuera hasta la puerta${pay ? ' y pagó' : sube ? ' y la IA vio que sube' : ''}` : 'cruzó la línea';
       const light = pay === true ? (b.c.mono ? ' · destello en el validador (cámara en blanco y negro)' : ' · luz verde en el validador') : pay === false ? ' · NO se vio luz verde en el validador' : monoNo ? ' · cámara en blanco y negro: no se vio el destello del validador, revisar' : '';
       allMeta.push({ cam: b.c.key, t: b.t, thumb: b.thumb });
@@ -3909,10 +3927,10 @@
         luz: pay === true || verde ? 'verde' : roja ? 'roja' : null,
         // Por una puerta sin validador, quien fue a validar adelante (verde que sobró) queda como pagado.
         valida: val ? v : pay === true ? true : null, sinValidador: !val, fueraZona: false, desdeAfuera: true,
-        staff: noSube || truthy(q.es_personal) || STAFF_RE.test(desc),
+        staff: noSube || (!paid && (truthy(q.es_personal) || STAFF_RE.test(desc))),
         img: allMeta.length - 1, box: null, linea: true,
         // Sin validador confirmado no se sabe si pagó (ni adelante ni atrás): queda para revisar.
-        revisar: monoNo || (pay === null && (S.iaRev ? !ver || (b.near && sube !== true) : !valKnown)),
+        revisar: monoNo || (pay === null && (checked.has(b) ? false : !valKnown)),
         res: v === true ? 'paga' : v === false ? 'evade' : val ? 'dudoso' : 'evade',
       });
     });
@@ -4005,7 +4023,7 @@
       porCamara.push(`${camName(x.c)}: ${x.quiet ? `sin movimiento, nadie sube${luces}` : `línea de conteo${x.c.line && x.c.line.auto ? ' automática' : ''} (${x.how}): cruzan hacia adentro ${x.boarders.length}, hacia afuera ${x.bajan}${(x.near || []).length ? `, ${x.near.length} más llegaron a la puerta` : ''} · ${x.tracks} personas seguidas en ${x.frames} fotos${cab}${luces}`}`);
       bajan += x.bajan;
     }
-    if (boarders.length && S.iaRev && !ver) porCamara.push('No se pudo revisar con IA si los pasajeros contados son personal: quedan para revisar.');
+    if (checkList.length && S.iaRev && !ver) porCamara.push('No se pudo revisar con IA si los pasajeros contados son personal: quedan para revisar.');
     // Quienes subieron por una puerta sin validador y validaron adelante: se marcan como pagados, en orden.
     for (const p of personas.filter((x) => x.sinValidador && !x.staff).sort((a, b) => a.t - b.t)) {
       if (fromInside <= 0) break;
