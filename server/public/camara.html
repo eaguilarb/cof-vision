@@ -12,7 +12,7 @@
       if (c) localStorage.setItem('cofsimple:ckey', JSON.stringify(decodeURIComponent(c[1])));
       if (q) { localStorage.setItem('cofsimple:qkey', JSON.stringify(decodeURIComponent(q[1]))); localStorage.setItem('cofsimple:ai', JSON.stringify('qwen')); }
     } catch (e) {}
-    if (g || c) history.replaceState(null, '', location.pathname + location.search);
+    if (g || c || q) history.replaceState(null, '', location.pathname + location.search);
     // Todos los núcleos del procesador para el detector: el ayudante coi-sw.js aísla la página (una sola recarga).
     if (!window.crossOriginIsolated && window.isSecureContext && location.protocol === 'https:' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('coi-sw.js').then(function (r) {
@@ -304,7 +304,7 @@
       <div class="cam-rows" id="camRows"></div>
     </details>
     <form class="key-box" id="keyBox" hidden>
-      <input id="keyInput" type="password" placeholder="Pega tu clave de Qwen (Alibaba, sk-…) o la de Gemini" autocomplete="off">
+      <input id="keyInput" type="password" placeholder="Pega tu clave de Qwen (Alibaba Cloud Model Studio, empieza con sk-)" autocomplete="off">
       <button class="btn small" type="submit">Guardar clave</button>
     </form>
   </section>
@@ -356,10 +356,10 @@
       <button class="btn small ghost" id="btnStaffRefDel" type="button" hidden>Quitar</button>
     </div>
     <div class="staff-row">
-      <label>IA para contar <select id="aiModel" class="svc-sel"><option value="qwen">Qwen, IA china de bajo costo (clave de Alibaba · ~US$ 0,05 por expedición)</option><option value="gratis">Gratis: rota entre los modelos gratuitos de Google (Flash y Gemma)</option><option value="flash">Gemini Flash de pago (~US$ 1 por expedición)</option><option value="pro">Gemini Pro de pago (más preciso · ~US$ 2,5 por expedición)</option><option value="haiku">Claude Haiku (clave de Claude · ~US$ 0,7 por expedición)</option><option value="sonnet">Claude Sonnet (clave de Claude · ~US$ 1,4 por expedición)</option></select></label>
+      <label>IA <select id="aiModel" class="svc-sel"><option value="qwen">Qwen, IA china de bajo costo (Alibaba · ~US$ 0,05 por expedición)</option></select></label>
       <label class="iarev" title="Sin marcar, el conteo usa solo el detector de personas y la luz del validador (gratis). Marcado, además una IA revisa a cada pasajero (si es agente, si subió), lo que cuesta."><input type="checkbox" id="iaRev"> Revisar cada pasajero con IA (cuesta)</label>
-      <span id="qwenKey" hidden><input id="qkeyInput" type="password" autocomplete="off" placeholder="Clave de Qwen (sk-…)" style="width:220px"> <button class="btn small" id="btnQkey" type="button">Guardar</button></span>
-      <span id="claudeKey" hidden><input id="ckeyInput" type="password" autocomplete="off" placeholder="Clave de Claude (sk-ant-…)" style="width:220px"> <button class="btn small" id="btnCkey" type="button">Guardar</button> <label title="Al llegar a este gasto en el día, el conteo se detiene">Tope diario US$ <input id="topeInput" type="number" min="0" step="0.5" style="width:64px;min-width:0;flex:none"></label></span>
+      <span id="qwenKey" hidden><input id="qkeyInput" type="password" autocomplete="off" placeholder="Clave de Qwen (sk-…)" style="width:220px"> <button class="btn small" id="btnQkey" type="button">Guardar</button> <label title="Al llegar a este gasto en el día, el conteo se detiene">Tope diario US$ <input id="topeInput" type="number" min="0" step="0.5" style="width:64px;min-width:0;flex:none"></label></span>
+      <span id="claudeKey" hidden><input id="ckeyInput" type="password" autocomplete="off" hidden> <button class="btn small" id="btnCkey" type="button" hidden>Guardar</button></span>
       <span class="muted" id="costInfo"></span>
     </div>
     <div class="exports" id="modelNote" hidden></div>
@@ -446,7 +446,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.02-2';
+  const VERSION = '2026.10.02-3';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -503,7 +503,9 @@
   // La primera vez que se abre una copia con clave de Claude, se cuenta con Claude Haiku aunque antes se usara otra IA.
   // Una copia con una clave de Claude nueva la adopta (aunque el navegador tuviera guardada otra, por ejemplo una
   // que ya se borró) y cuenta con Claude Haiku. Si después se pega otra clave en la página, esa se respeta.
-  if (!EMBED_CKEY.startsWith('__') && store.get('cofsimple:ckeyemb', '') !== EMBED_CKEY) {
+  // La IA es siempre Qwen (Alibaba): se sacaron Gemini y Claude.
+  S.ai = 'qwen';
+  if (false) {
     S.ckey = EMBED_CKEY;
     store.set('cofsimple:ckey', EMBED_CKEY);
     store.set('cofsimple:ckeyemb', EMBED_CKEY);
@@ -1029,9 +1031,9 @@
   }
   function renderSpend() {
     const sp = S.spend && S.spend.dia === today() ? S.spend : null;
-    $('#claudeKey').hidden = !isClaude(S.ai);
-    $('#qwenKey').hidden = S.ai !== 'qwen';
-    $('#costInfo').textContent = S.ai === 'qwen' && !S.qkey ? 'Pega tu clave de Qwen (Alibaba Cloud Model Studio, empieza con sk-) y presiona Guardar.' : isClaude(S.ai) && !S.ckey ? 'Pega tu clave de Claude (empieza con sk-ant-) y presiona Guardar.' : S.ai === 'gratis' ? 'Sin costo: usa los cupos diarios gratuitos de Google (se renuevan cada noche).' : sp ? `Gasto estimado hoy: US$ ${sp.usd.toFixed(2)} en ${sp.n} consultas${isClaude(S.ai) ? ' (se descuenta de tu crédito de Claude)' : ' (solo se cobra si tu clave tiene facturación activa)'}.` : '';
+    $('#claudeKey').hidden = true;
+    $('#qwenKey').hidden = false;
+    $('#costInfo').textContent = !S.qkey ? 'Pega tu clave de Qwen (Alibaba Cloud Model Studio, empieza con sk-) y presiona Guardar.' : isClaude(S.ai) && !S.ckey ? 'Pega tu clave de Claude (empieza con sk-ant-) y presiona Guardar.' : S.ai === 'gratis' ? 'Sin costo: usa los cupos diarios gratuitos de Google (se renuevan cada noche).' : sp ? `Gasto estimado hoy: US$ ${sp.usd.toFixed(2)} en ${sp.n} consultas${isClaude(S.ai) ? ' (se descuenta de tu crédito de Claude)' : ' (solo se cobra si tu clave tiene facturación activa)'}.` : '';
   }
   // Saca el JSON de la respuesta. Algunos modelos (Gemma) escriben antes su razonamiento: se prueba el
   // último bloque ```json y, si no, desde cada «{» o «[» hasta el final, quedándose con el primero que es JSON completo.
@@ -1165,8 +1167,9 @@
   }
   const GFAIL = { until: 0 };
   async function gemini(parts, run, tier, opts) {
-    // Con Qwen elegido, todas las lecturas van a Qwen (no se usa el cupo de Google).
-    if (S.ai === 'qwen' && S.qkey) return qwen(parts, run, tier === 'main' ? QWEN.main : QWEN.quick, opts);
+    // Todas las lecturas van a Qwen (Gemini y Claude ya no se usan).
+    if (S.qkey) return qwen(parts, run, tier === 'main' ? QWEN.main : QWEN.quick, opts);
+    { const err = new Error('Falta la clave de Qwen: pégala en la caja de arriba (Alibaba Cloud Model Studio, empieza con sk-).'); err.qwenKey = true; throw err; }
     if (tier === 'main' && isClaude(S.ai) && S.ckey) return claude(parts, run);
     const list = MODELS[tier];
     // Con clave de Claude, las lecturas rápidas no esperan a Google saturado: tras 2 fallas seguidas pasan a
@@ -1244,9 +1247,9 @@
 
   // ---------------------------------------------------------------- análisis
   async function analyze(run) {
-    if (!S.key && !(S.ai === 'qwen' && S.qkey)) {
+    if (!S.qkey) {
       $('#keyBox').hidden = false;
-      status('Falta la clave de la IA (Qwen o Gemini) para analizar el video.', null, true);
+      status('Falta la clave de Qwen para analizar el video (Alibaba Cloud Model Studio, empieza con sk-).', null, true);
       return;
     }
     if (!S.D) return status('No se pudo leer la duración del video.', null, true);
@@ -1287,7 +1290,7 @@
       await addresses(run);
     } catch (e) {
       if (e.claudeKey) { $('#ckeyInput').value = ''; return status(e.message, null, true); }
-      if (e.qwenKey) { $('#qkeyInput').value = ''; return status(e.message, null, true); }
+      if (e.qwenKey) { $('#qkeyInput').value = ''; $('#keyBox').hidden = false; return status(e.message, null, true); }
       // Tope de gasto: se detiene todo (también lo que corre en segundo plano) para que el aviso quede a la vista.
       if (e.stop) { S.run++; S.running = false; S.paused = true; renderControls(); return status(e.message, null, true); }
       if (e.badKey) {
@@ -2633,53 +2636,75 @@
     }
     return frames;
   }
-  // Cada cabeza seguida que avanza hacia adentro al menos un 8 % de la imagen, desde la puerta, cuenta una vez como
-  // subida (aunque aparezca recién pasando el pasamanos, tapada antes por los de adelante); al revés es una bajada.
-  // Quien se queda quieto (el agente en la puerta) no cuenta, ni quien ya iba adentro y se reacomoda en un bus lleno
-  // (la cabeza tiene que aparecer antes de pasar la línea). Las cabezas se ven más arriba que los pies: la zona parte
-  // un 35 % de la imagen antes de la línea del umbral. Con estos valores, en la zona paga de PGRZ-85 cuenta 23 de ~25.
-  const HEAD_FROM = -0.35, HEAD_T = 0.08, HEAD_LIM = 0.05, HEAD_MIN = 0.15;
-  function headEvents(frames, line) {
-    const xa = Math.min(line.a[0], line.b[0]) - 0.15, xb = Math.max(line.a[0], line.b[0]) + 0.15;
+  // Cada cabeza seguida que avanza hacia adentro (hacia abajo en la cámara, que está en el techo mirando a la puerta) al
+  // menos un 12 % de la imagen, en el ancho de la puerta, cuenta una vez como subida; al revés es una bajada. No depende
+  // de la línea del umbral (la IA la ubica distinto en cada cámara). Quien se queda quieto (el agente) no cuenta.
+  // Cada cabeza se une con la de la foto anterior por la asignación óptima (método húngaro), no por cercanía de a una:
+  // en el apretón la más cercana suele ser la del vecino. Con conteos reales: PGRZ-85 da 22 de 28 y PGBY-37 32 de 31.
+  const HEAD_T = 0.12, HEAD_X0 = 0.2, HEAD_X1 = 0.95, HEAD_MIN = 0.15, HEAD_R = 0.12;
+  // Asignación de costo mínimo (Kuhn-Munkres) en una matriz de n filas × m columnas; devuelve la columna de cada fila.
+  function hungarian(C) {
+    const n = C.length, m = n ? C[0].length : 0, N = Math.max(n, m), BIG = 1e6;
+    const a = Array.from({ length: N + 1 }, (_, i) => Array.from({ length: N + 1 }, (_, j) => (i && j && i <= n && j <= m ? C[i - 1][j - 1] : i && j ? BIG : 0)));
+    const u = new Array(N + 1).fill(0), v = new Array(N + 1).fill(0), p = new Array(N + 1).fill(0), way = new Array(N + 1).fill(0);
+    for (let i = 1; i <= N; i++) {
+      p[0] = i;
+      let j0 = 0;
+      const minv = new Array(N + 1).fill(Infinity), used = new Array(N + 1).fill(false);
+      do {
+        used[j0] = true;
+        const i0 = p[j0];
+        let delta = Infinity, j1 = 0;
+        for (let j = 1; j <= N; j++) {
+          if (used[j]) continue;
+          const cur = a[i0][j] - u[i0] - v[j];
+          if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+          if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+        }
+        for (let j = 0; j <= N; j++) { if (used[j]) { u[p[j]] += delta; v[j] -= delta; } else minv[j] -= delta; }
+        j0 = j1;
+      } while (p[j0] !== 0);
+      do { const j1 = way[j0]; p[j0] = p[j1]; j0 = j1; } while (j0);
+    }
+    const res = new Array(n).fill(-1);
+    for (let j = 1; j <= N; j++) if (p[j] && p[j] <= n && j <= m) res[p[j] - 1] = j - 1;
+    return res;
+  }
+  function headEvents(frames) {
     const tracks = [];
     frames.forEach((fr, i) => {
-      const pts = fr.dets.map((d) => [(d.box[1] + d.box[3]) / 2, (d.box[0] + d.box[2]) / 2]).filter((p) => p[0] >= xa && p[0] <= xb);
+      const pts = fr.dets.map((d) => [(d.box[1] + d.box[3]) / 2, (d.box[0] + d.box[2]) / 2]).filter((p) => p[0] >= HEAD_X0 && p[0] <= HEAD_X1);
       const live = tracks.filter((tr) => i - tr.f <= 2);
-      const pairs = [];
-      live.forEach((tr, a) => pts.forEach((p, b) => {
-        const n = i - tr.f, d = Math.hypot(p[0] - (tr.x + tr.vx * n), p[1] - (tr.y + tr.vy * n));
-        if (d <= 0.12) pairs.push([d, a, b]);
-      }));
-      pairs.sort((p, q) => p[0] - q[0]);
-      const ua = new Set(), ub = new Set();
-      for (const [, a, b] of pairs) {
-        if (ua.has(a) || ub.has(b)) continue;
-        ua.add(a); ub.add(b);
+      const ub = new Set();
+      const C = live.map((tr) => pts.map((p) => { const n = i - tr.f; return Math.hypot(p[0] - (tr.x + tr.vx * n), p[1] - (tr.y + tr.vy * n)); }));
+      const asg = live.length && pts.length ? hungarian(C) : [];
+      asg.forEach((b, a) => {
+        if (b < 0 || C[a][b] > HEAD_R) return;
+        ub.add(b);
         const tr = live[a], p = pts[b], n = i - tr.f;
         tr.vx = ((p[0] - tr.x) / n + tr.vx) / 2; tr.vy = ((p[1] - tr.y) / n + tr.vy) / 2;
         tr.x = p[0]; tr.y = p[1]; tr.f = i;
-        tr.d.push({ i, v: lineDist(line, p) });
-      }
-      pts.forEach((p, b) => { if (!ub.has(b)) tracks.push({ x: p[0], y: p[1], vx: 0, vy: 0, f: i, d: [{ i, v: lineDist(line, p) }] }); });
+        tr.d.push({ i, v: p[1] });
+      });
+      pts.forEach((p, b) => { if (!ub.has(b)) tracks.push({ x: p[0], y: p[1], vx: 0, vy: 0, f: i, d: [{ i, v: p[1] }] }); });
     });
     const ins = [], outs = [];
     for (const tr of tracks) {
-      const ds = tr.d.filter((q) => q.v >= HEAD_FROM);
-      if (ds.length < 2) continue;
-      const v0 = ds[0].v, vs = ds.map((q) => q.v), last = vs[vs.length - 1];
-      if (Math.max(...vs) - v0 >= HEAD_T && last - v0 >= HEAD_T * 0.8 && v0 < HEAD_LIM) ins.push(ds.find((q) => q.v - v0 >= HEAD_T).i);
-      else if (v0 - Math.min(...vs) >= HEAD_T && v0 - last >= HEAD_T * 0.8 && last < HEAD_LIM) outs.push(ds.find((q) => v0 - q.v >= HEAD_T).i);
+      if (tr.d.length < 2) continue;
+      const vs = tr.d.map((q) => q.v), v0 = vs[0], last = vs[vs.length - 1];
+      if (Math.max(...vs) - v0 >= HEAD_T && last - v0 >= HEAD_T * 0.8) ins.push(tr.d.find((q) => q.v - v0 >= HEAD_T).i);
+      else if (v0 - Math.min(...vs) >= HEAD_T && v0 - last >= HEAD_T * 0.8) outs.push(tr.d.find((q) => v0 - q.v >= HEAD_T).i);
     }
     return { ins, outs };
   }
   // Conteo por cabezas de una puerta en una detención (solo con aglomeración o zona paga: mira 5 fotos por segundo).
   async function headCount(s, c, run) {
-    if (!c.line) return null;
     const times = [];
     for (let t = Math.max(0, s.t0 - 2); t <= s.t1 + 2 + 1e-6; t += HEAD_STEP) times.push(+t.toFixed(2));
     const frames = await headFrames(c, times, run, s);
     if (!frames || run !== S.run) return null;
-    const ev = headEvents(frames, c.line);
+    if (window.__cofDebug) (window.__cofDebug.heads = window.__cofDebug.heads || []).push({ cam: c.label, frames: frames.map((f) => f.dets.map((d) => d.box.map((v) => +v.toFixed(4)))) }); // solo para pruebas
+    const ev = headEvents(frames);
     return { ins: ev.ins.map((i) => frames[i].t), outs: ev.outs.map((i) => frames[i].t), frames: frames.length };
   }
   // Fotos de evidencia de una puerta (copias propias, porque el lector reutiliza sus imágenes).
@@ -3646,7 +3671,7 @@
       where: x.pick.filter((b) => frames[b.i].f).map((b) => x.where[x.pick.indexOf(b)]),
     }));
     // Aglomeración en la puerta (o zona paga): además se cuenta por cabezas, que se ven aunque los cuerpos se tapen.
-    const crowd = frames.some((f) => f.dets.filter((d) => segDist(c.line, boxFoot(d.box)) < 0.2).length >= 4);
+    const crowd = frames.some((f) => f.dets.length >= 6);
     const heads = crowd || zpOf(s) ? await headCount(s, c, run).catch(() => null) : null;
     if (run !== S.run) return null;
     return { c, boarders: out.filter((x) => !x.near), near: out.filter((x) => x.near), bajan, frames: frames.length, tracks: tracks.length, how, greens, heads };
@@ -3957,7 +3982,8 @@
       const missing = x.heads.ins.length - mine.length;
       if (missing < 3) continue;
       const free = x.heads.ins.filter((t) => !mine.some((p) => Math.abs(p.t - t) < 0.8));
-      for (const t of free.slice(0, Math.max(0, missing))) {
+      const pick = [...free, ...x.heads.ins.filter((t) => !free.includes(t))].slice(0, missing);
+      for (const t of pick) {
         const f = await frameOf(x.c, t, 640);
         if (run !== S.run) return false;
         if (!f) continue;
@@ -5590,13 +5616,9 @@
     e.preventDefault();
     const k = $('#keyInput').value.trim();
     if (k.length < 20) return;
-    if (/^sk-/.test(k) && !/^sk-ant-/.test(k)) {
-      S.qkey = k; store.set('cofsimple:qkey', k);
-      S.ai = 'qwen'; store.set('cofsimple:ai', 'qwen'); $('#aiModel').value = 'qwen'; $('#qkeyInput').value = '••••••••'; renderSpend();
-    } else {
-      S.key = k;
-      store.set('cofsimple:key', k);
-    }
+    if (!/^sk-/.test(k) || /^sk-ant-/.test(k)) return status('Esa no parece una clave de Qwen: se crea en Alibaba Cloud Model Studio (región Singapur) y empieza con sk-.', null, true);
+    S.qkey = k; store.set('cofsimple:qkey', k);
+    $('#qkeyInput').value = '••••••••'; renderSpend();
     $('#keyInput').value = '';
     $('#keyBox').hidden = true;
     if (S.cams.length) { S.run++; analyze(S.run); } else status('', null);
@@ -5605,7 +5627,7 @@
   initMap();
   applyService();
   renderStops();
-  if (!S.key && !S.qkey) $('#keyBox').hidden = false;
+  if (!S.qkey) $('#keyBox').hidden = false;
   $('#btnOut').hidden = !SERVER;
 })();
 </script>
