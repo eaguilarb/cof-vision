@@ -423,8 +423,8 @@
   const CLAUDE = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5' };
   const isClaude = (ai) => !!CLAUDE[ai];
   // Qwen (Alibaba Cloud, IA china de bajo costo): lee el recorrido, los paraderos y los detalles con la clave de la persona.
-  // Flash para las lecturas rápidas y Plus para las revisiones de cada paradero.
-  const QWEN = { quick: 'qwen3-vl-flash', main: 'qwen3-vl-plus', url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions' };
+  // Plus para todo: Flash lee mal el texto chico de la cámara (patente, velocidad), y Plus sigue siendo muy barato.
+  const QWEN = { quick: 'qwen3-vl-plus', main: 'qwen3-vl-plus', url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions' };
   // Tarifas en US$ por millón de tokens (entrada, salida), para estimar el gasto.
   const PRICE = (m) => (/qwen3-vl-plus/.test(m) ? [0.2, 1.6] : /qwen/.test(m) ? [0.05, 0.4] : /haiku/.test(m) ? [1, 5] : /sonnet/.test(m) ? [2, 10] : /gemma/.test(m) ? [0, 0] : /pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
   // En Railway la página la entrega el servidor, que agrega la clave: el navegador nunca la ve.
@@ -446,7 +446,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.02-1';
+  const VERSION = '2026.10.02-2';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1541,7 +1541,7 @@
     const f = ref && (await frameOf(ref, clamp(Math.min(20, S.D * 0.1), 0, Math.max(0, S.D - 0.5)), 1024));
     if (!f || run !== S.run) return run === S.run;
     try {
-      const r = await gemini([{ text: 'Lee el texto sobreimpreso en esta imagen de una cámara de bus. Responde SOLO JSON: {"patente":"PGBY-46","fecha":"DD/MM/AAAA"}. La patente es la placa del bus (4 letras, guion y 2 números). Si algo no se ve, pon null.' }, img(f)], run, 'quick');
+      const r = await gemini([{ text: 'Lee el texto sobreimpreso en esta imagen de una cámara de bus. Responde SOLO JSON: {"patente":"LLLL-NN","fecha":"DD/MM/AAAA"} con lo que dice la imagen (LLLL-NN es solo el formato: 4 letras, guion y 2 números). Copia los caracteres exactos; si algo no se ve, pon null.' }, img(f)], run, 'quick');
       if (!r || run !== S.run) return false;
       if (!S.meta.patente && r.patente) S.meta.patente = String(r.patente).toUpperCase().trim();
       if (!S.meta.fecha && r.fecha && /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(r.fecha)) S.meta.fecha = String(r.fecha).trim();
@@ -1841,9 +1841,9 @@
     return true;
     async function readChunk(chunk, rows, used) {
       const parts = [{ text: [
-        `Te envío ${Math.ceil(rows.length / OSD_ROWS)} imagen(es) con filas numeradas del #1 al #${rows.length}. Cada fila son dos franjas del texto sobreimpreso de la cámara de un bus en un momento distinto: arriba la patente, la fecha, la hora y la velocidad (por ejemplo "16KM/H"); abajo las coordenadas (por ejemplo "33.25.30640S 70.42.12900W", que es grados.minutos.decimales de minuto y hemisferio).`,
+        `Te envío ${Math.ceil(rows.length / OSD_ROWS)} imagen(es) con filas numeradas del #1 al #${rows.length}. Cada fila son dos franjas del texto sobreimpreso de la cámara de un bus en un momento distinto: arriba la patente, la fecha, la hora y la velocidad (con el formato "nnKM/H"); abajo las coordenadas (con el formato "GG.MM.mmmmmS GG.MM.mmmmmW", que es grados.minutos.decimales de minuto y hemisferio).`,
         'Para cada fila devuelve "n", "hora" (HH:MM:SS), "velocidad" (solo el número de km/h), "coord_texto" (copia exacta de las coordenadas) y "lat" y "lon" en grados decimales con signo (S y W negativos). Copia los dígitos con cuidado. Si algo no se lee, pon null. No inventes.',
-        'Responde SOLO con un JSON array, una entrada por fila: [{"n":1,"hora":"17:04:44","velocidad":0,"coord_texto":"33.23.29100S 70.37.15500W","lat":-33.3882,"lon":-70.6193}]',
+        'Responde SOLO con un JSON array, una entrada por fila, con los valores que se leen en cada fila (el formato: [{"n":1,"hora":"HH:MM:SS","velocidad":número,"coord_texto":"GG.MM.mmmmmS GG.MM.mmmmmW","lat":-GG.gggg,"lon":-GG.gggg}]).',
       ].join('\n') }];
       for (let k = 0; k < rows.length; k += OSD_ROWS) parts.push(img(stackRows(rows.slice(k, k + OSD_ROWS)), 0.85));
       window.__cofDebug = { ...(window.__cofDebug || {}), osdTimes: used, stops: () => S.stops.map((x) => [x.t0, x.estado, inRange(x), beforeStart(x)]), running: () => [S.running, S.run, S.frontier] }; // solo para pruebas automáticas
@@ -1934,9 +1934,15 @@
   function findStops() {
     const pts = S.moments.filter((m) => m.vel != null || m.lat != null);
     // Sin velocidad escrita, se estima con el avance entre lecturas.
+    // Una velocidad leída que contradice las coordenadas (exactamente las mismas antes y después, por 4 s o más) es una
+    // mala lectura de la IA (a veces confunde los números): el bus está detenido.
+    const frozen = (i) => {
+      const m = pts[i], a = pts[i - 1], b = pts[i + 1];
+      return !!(a && b && m.lat != null && a.lat === m.lat && b.lat === m.lat && a.lon === m.lon && b.lon === m.lon && b.t - a.t >= 4);
+    };
     const speedAt = (i) => {
       const m = pts[i];
-      if (m.vel != null) return m.vel;
+      if (m.vel != null) return m.vel > 3 && frozen(i) ? 0 : m.vel;
       const a = pts[i - 1], b = pts[i + 1];
       if (!a || !b || a.lat == null || b.lat == null || m.lat == null) return m.detenido ? 0 : null;
       return (distKm(a, b) / Math.max(1, b.t - a.t)) * 3600;
@@ -2482,7 +2488,7 @@
     } finally { YQ.busy = false; }
   }
   // Una pasada del detector sobre la imagen de 640×640 que arma «paint»; devuelve las personas en píxeles.
-  async function yoloRaw(paint, live, model) {
+  async function yoloRaw(paint, live, model, minS = 0.2) {
     const sess = model || Y.sess || (await yolo());
     if (!sess) return null;
     // La vista en vivo no se acumula: si ya hay una pasada en vivo esperando, esta se salta.
@@ -2501,7 +2507,7 @@
     const res = [];
     for (let k = 0; k < o.dims[1]; k++) {
       const [x0, y0, x1, y1, s, cls] = o.data.slice(k * 6, k * 6 + 6);
-      if (cls === 0 && s >= 0.2) res.push({ x0, y0, x1, y1, s });
+      if (cls === 0 && s >= minS) res.push({ x0, y0, x1, y1, s });
     }
     return res;
   }
@@ -2620,7 +2626,7 @@
       if (run !== S.run) return null;
       if (!f) { frames.push({ t, dets: [] }); continue; }
       const sc = YOLO_IN / Math.max(f.width, f.height);
-      const raw = await yoloRaw((g) => g.drawImage(f, 0, 0, f.width * sc, f.height * sc), false, sess);
+      const raw = await yoloRaw((g) => g.drawImage(f, 0, 0, f.width * sc, f.height * sc), false, sess, HEAD_MIN);
       if (!raw) return null;
       frames.push({ t, dets: boxesIn(raw, 0, 0, f.width * sc, f.height * sc) });
       beat(s);
@@ -2629,9 +2635,10 @@
   }
   // Cada cabeza seguida que avanza hacia adentro al menos un 8 % de la imagen, desde la puerta, cuenta una vez como
   // subida (aunque aparezca recién pasando el pasamanos, tapada antes por los de adelante); al revés es una bajada.
-  // Quien se queda quieto (el agente en la puerta) no cuenta. Las cabezas se ven más arriba que los pies: la zona
-  // parte un 35 % de la imagen antes de la línea del umbral.
-  const HEAD_FROM = -0.35, HEAD_T = 0.08;
+  // Quien se queda quieto (el agente en la puerta) no cuenta, ni quien ya iba adentro y se reacomoda en un bus lleno
+  // (la cabeza tiene que aparecer antes de pasar la línea). Las cabezas se ven más arriba que los pies: la zona parte
+  // un 35 % de la imagen antes de la línea del umbral. Con estos valores, en la zona paga de PGRZ-85 cuenta 23 de ~25.
+  const HEAD_FROM = -0.35, HEAD_T = 0.08, HEAD_LIM = 0.05, HEAD_MIN = 0.15;
   function headEvents(frames, line) {
     const xa = Math.min(line.a[0], line.b[0]) - 0.15, xb = Math.max(line.a[0], line.b[0]) + 0.15;
     const tracks = [];
@@ -2660,8 +2667,8 @@
       const ds = tr.d.filter((q) => q.v >= HEAD_FROM);
       if (ds.length < 2) continue;
       const v0 = ds[0].v, vs = ds.map((q) => q.v), last = vs[vs.length - 1];
-      if (Math.max(...vs) - v0 >= HEAD_T && last - v0 >= HEAD_T * 0.8) ins.push(ds.find((q) => q.v - v0 >= HEAD_T).i);
-      else if (v0 - Math.min(...vs) >= HEAD_T && v0 - last >= HEAD_T * 0.8) outs.push(ds.find((q) => v0 - q.v >= HEAD_T).i);
+      if (Math.max(...vs) - v0 >= HEAD_T && last - v0 >= HEAD_T * 0.8 && v0 < HEAD_LIM) ins.push(ds.find((q) => q.v - v0 >= HEAD_T).i);
+      else if (v0 - Math.min(...vs) >= HEAD_T && v0 - last >= HEAD_T * 0.8 && last < HEAD_LIM) outs.push(ds.find((q) => v0 - q.v >= HEAD_T).i);
     }
     return { ins, outs };
   }
@@ -2783,7 +2790,7 @@
         'Imagen de una cámara de techo DENTRO de un bus, que mira hacia una puerta de pasajeros. La imagen tiene una regla amarilla: a la IZQUIERDA la altura (0 = arriba, 100 = abajo) y ARRIBA el ancho (0 = izquierda, 100 = derecha).',
         'Busca el UMBRAL de la puerta: el borde del piso del bus donde se pisa al entrar desde la calle (el borde del escalón o la parte de abajo de las hojas de la puerta), de un lado al otro del vano. Quien cruza esa línea hacia adentro está subiendo. No es el marco de arriba de la puerta ni una ventana, y no está en las franjas de texto (fecha arriba, coordenadas abajo).',
         'Indica con la regla: "y_izq" y "y_der" = altura del umbral en su extremo izquierdo y derecho; "x_desde" y "x_hasta" = dónde empieza y termina el vano de la puerta; "adentro" = hacia qué lado de esa línea queda el interior del bus ("abajo", "arriba", "izquierda" o "derecha").',
-        'Responde SOLO JSON: {"puerta_visible":true,"y_izq":62,"y_der":64,"x_desde":30,"x_hasta":72,"adentro":"abajo"}',
+        'Responde SOLO JSON con lo que mides en la regla (números de 0 a 100): {"puerta_visible":true,"y_izq":número,"y_der":número,"x_desde":número,"x_hasta":número,"adentro":"abajo"}',
       ].join('\n') }, img(rulerImage(f), 0.85)];
       let r = null;
       try { r = await gemini(parts, run, 'quick'); } catch (e) { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; }
@@ -3946,7 +3953,9 @@
     for (const x of lineRes) {
       if (!x.heads) continue;
       const mine = personas.filter((p) => p.cam === x.c.key && !p.staff);
+      // Solo con una diferencia clara (3 o más): diferencias chicas son ruido de una puerta concurrida, no aglomeración.
       const missing = x.heads.ins.length - mine.length;
+      if (missing < 3) continue;
       const free = x.heads.ins.filter((t) => !mine.some((p) => Math.abs(p.t - t) < 0.8));
       for (const t of free.slice(0, Math.max(0, missing))) {
         const f = await frameOf(x.c, t, 640);
@@ -3959,7 +3968,6 @@
           img: allMeta.length - 1, box: null, linea: true, revisar: !zpOf(s), res: hasValidator(x.c) ? 'dudoso' : 'evade', cabeza: true,
         });
       }
-      x.bajan = Math.max(x.bajan, x.heads.outs.length);
     }
     if (ver) fromInside += Math.max(0, Math.round(num(ver.validan_desde_adentro) || 0));
     for (const x of lineRes) {
