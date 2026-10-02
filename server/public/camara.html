@@ -6,10 +6,11 @@
   // Claves que trae el acceso directo personal (tras el #, no se envían a ningún servidor): se guardan en este
   // navegador y se borran de la barra de direcciones.
   (function () {
-    var h = location.hash, g = h.match(/[#&]k=([^&]+)/), c = h.match(/[#&]ck=([^&]+)/);
+    var h = location.hash, g = h.match(/[#&]k=([^&]+)/), c = h.match(/[#&]ck=([^&]+)/), q = h.match(/[#&]qk=([^&]+)/);
     try {
       if (g) localStorage.setItem('cofsimple:key', JSON.stringify(decodeURIComponent(g[1])));
       if (c) localStorage.setItem('cofsimple:ckey', JSON.stringify(decodeURIComponent(c[1])));
+      if (q) { localStorage.setItem('cofsimple:qkey', JSON.stringify(decodeURIComponent(q[1]))); localStorage.setItem('cofsimple:ai', JSON.stringify('qwen')); }
     } catch (e) {}
     if (g || c) history.replaceState(null, '', location.pathname + location.search);
     // Todos los núcleos del procesador para el detector: el ayudante coi-sw.js aísla la página (una sola recarga).
@@ -303,7 +304,7 @@
       <div class="cam-rows" id="camRows"></div>
     </details>
     <form class="key-box" id="keyBox" hidden>
-      <input id="keyInput" type="password" placeholder="Pega tu clave gratuita de Gemini (aistudio.google.com/apikey)" autocomplete="off">
+      <input id="keyInput" type="password" placeholder="Pega tu clave de Qwen (Alibaba, sk-…) o la de Gemini" autocomplete="off">
       <button class="btn small" type="submit">Guardar clave</button>
     </form>
   </section>
@@ -355,8 +356,9 @@
       <button class="btn small ghost" id="btnStaffRefDel" type="button" hidden>Quitar</button>
     </div>
     <div class="staff-row">
-      <label>IA para contar <select id="aiModel" class="svc-sel"><option value="gratis">Gratis: rota entre los modelos gratuitos de Google (Flash y Gemma)</option><option value="flash">Gemini Flash de pago (~US$ 1 por expedición)</option><option value="pro">Gemini Pro de pago (más preciso · ~US$ 2,5 por expedición)</option><option value="haiku">Claude Haiku (clave de Claude · ~US$ 0,7 por expedición)</option><option value="sonnet">Claude Sonnet (clave de Claude · ~US$ 1,4 por expedición)</option></select></label>
+      <label>IA para contar <select id="aiModel" class="svc-sel"><option value="qwen">Qwen, IA china de bajo costo (clave de Alibaba · ~US$ 0,05 por expedición)</option><option value="gratis">Gratis: rota entre los modelos gratuitos de Google (Flash y Gemma)</option><option value="flash">Gemini Flash de pago (~US$ 1 por expedición)</option><option value="pro">Gemini Pro de pago (más preciso · ~US$ 2,5 por expedición)</option><option value="haiku">Claude Haiku (clave de Claude · ~US$ 0,7 por expedición)</option><option value="sonnet">Claude Sonnet (clave de Claude · ~US$ 1,4 por expedición)</option></select></label>
       <label class="iarev" title="Sin marcar, el conteo usa solo el detector de personas y la luz del validador (gratis). Marcado, además una IA revisa a cada pasajero (si es agente, si subió), lo que cuesta."><input type="checkbox" id="iaRev"> Revisar cada pasajero con IA (cuesta)</label>
+      <span id="qwenKey" hidden><input id="qkeyInput" type="password" autocomplete="off" placeholder="Clave de Qwen (sk-…)" style="width:220px"> <button class="btn small" id="btnQkey" type="button">Guardar</button></span>
       <span id="claudeKey" hidden><input id="ckeyInput" type="password" autocomplete="off" placeholder="Clave de Claude (sk-ant-…)" style="width:220px"> <button class="btn small" id="btnCkey" type="button">Guardar</button> <label title="Al llegar a este gasto en el día, el conteo se detiene">Tope diario US$ <input id="topeInput" type="number" min="0" step="0.5" style="width:64px;min-width:0;flex:none"></label></span>
       <span class="muted" id="costInfo"></span>
     </div>
@@ -420,8 +422,11 @@
   // Claude (Anthropic) también puede contar, con una clave de Claude aparte. Las lecturas rápidas siguen con Gemini.
   const CLAUDE = { haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5' };
   const isClaude = (ai) => !!CLAUDE[ai];
+  // Qwen (Alibaba Cloud, IA china de bajo costo): lee el recorrido, los paraderos y los detalles con la clave de la persona.
+  // Flash para las lecturas rápidas y Plus para las revisiones de cada paradero.
+  const QWEN = { quick: 'qwen3-vl-flash', main: 'qwen3-vl-plus', url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions' };
   // Tarifas en US$ por millón de tokens (entrada, salida), para estimar el gasto.
-  const PRICE = (m) => (/haiku/.test(m) ? [1, 5] : /sonnet/.test(m) ? [2, 10] : /gemma/.test(m) ? [0, 0] : /pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
+  const PRICE = (m) => (/qwen3-vl-plus/.test(m) ? [0.2, 1.6] : /qwen/.test(m) ? [0.05, 0.4] : /haiku/.test(m) ? [1, 5] : /sonnet/.test(m) ? [2, 10] : /gemma/.test(m) ? [0, 0] : /pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
   // En Railway la página la entrega el servidor, que agrega la clave: el navegador nunca la ve.
   const SERVER = !!window.COF_SERVER;
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -487,8 +492,9 @@
     staffRef: store.get('cofsimple:staffref', null),
     staffN: store.get('cofsimple:staffn', null),
     // Una copia personal puede traer la clave de Claude incorporada: entonces cuenta con Claude Haiku salvo que se elija otra IA.
-    ai: ({ flash: 'flash', pro: 'pro', haiku: 'haiku', sonnet: 'sonnet', gratis: 'gratis' })[store.get('cofsimple:ai', EMBED_CKEY.startsWith('__') && !store.get('cofsimple:ckey', '') ? 'gratis' : 'haiku')] || 'gratis',
+    ai: ({ flash: 'flash', pro: 'pro', haiku: 'haiku', sonnet: 'sonnet', gratis: 'gratis', qwen: 'qwen' })[store.get('cofsimple:ai', EMBED_CKEY.startsWith('__') && !store.get('cofsimple:ckey', '') ? 'gratis' : 'haiku')] || 'gratis',
     ckey: store.get('cofsimple:ckey', '') || (EMBED_CKEY.startsWith('__') ? '' : EMBED_CKEY),
+    qkey: store.get('cofsimple:qkey', ''),
     tope: store.get('cofsimple:tope', 1),
     spend: store.get('cofsimple:gasto', null),
     staff: store.get('cofsimple:staff2', 'Agentes de la empresa con uniforme negro (chaqueta y pantalón negros con franjas reflectantes, a menudo gorro negro), que suben al bus en el terminal antes de iniciar el recorrido o se paran en las puertas mientras el bus está detenido'),
@@ -1005,7 +1011,7 @@
   }
   // Modelos en pausa: sin cupo gratuito (limit: 0), saturados o con el límite por minuto agotado.
   const COOL = {};
-  const MODEL_NAMES = { 'gemini-flash-lite-latest': 'Gemini Flash-Lite (básico)', 'gemini-3.5-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-3.1-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-flash-latest': 'Gemini Flash', 'gemini-3.8-flash': 'Gemini Flash', 'gemini-3.7-flash': 'Gemini Flash', 'gemini-3.6-flash': 'Gemini Flash', 'gemini-3.5-flash': 'Gemini Flash', 'gemini-3-flash-preview': 'Gemini Flash', 'gemma-4-31b-it': 'Gemma 4', 'gemma-4-26b-a4b-it': 'Gemma 4', 'gemini-pro-latest': 'Gemini Pro', 'gemini-3.1-pro-preview': 'Gemini Pro', 'claude-haiku-4-5': 'Claude Haiku', 'claude-sonnet-5': 'Claude Sonnet' };
+  const MODEL_NAMES = { 'gemini-flash-lite-latest': 'Gemini Flash-Lite (básico)', 'gemini-3.5-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-3.1-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-flash-latest': 'Gemini Flash', 'gemini-3.8-flash': 'Gemini Flash', 'gemini-3.7-flash': 'Gemini Flash', 'gemini-3.6-flash': 'Gemini Flash', 'gemini-3.5-flash': 'Gemini Flash', 'gemini-3-flash-preview': 'Gemini Flash', 'gemma-4-31b-it': 'Gemma 4', 'gemma-4-26b-a4b-it': 'Gemma 4', 'gemini-pro-latest': 'Gemini Pro', 'gemini-3.1-pro-preview': 'Gemini Pro', 'claude-haiku-4-5': 'Claude Haiku', 'claude-sonnet-5': 'Claude Sonnet', 'qwen3-vl-flash': 'Qwen Flash', 'qwen3-vl-plus': 'Qwen Plus' };
   const isLite = (m) => /lite/.test(m || '');
   // Gasto estimado del día según los tokens que informa Google (si la clave tiene facturación activa).
   const today = () => new Date().toLocaleDateString('sv');
@@ -1014,8 +1020,8 @@
     const [pin, pout] = PRICE(model);
     if (!S.spend || S.spend.dia !== today()) S.spend = { dia: today(), usd: 0, n: 0 };
     // Gemini informa promptTokenCount/candidatesTokenCount; Claude, input_tokens/output_tokens.
-    const tin = (u.promptTokenCount || 0) + (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) * 0.1 + (u.cache_creation_input_tokens || 0) * 1.25;
-    const tout = (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0) + (u.output_tokens || 0);
+    const tin = (u.promptTokenCount || 0) + (u.prompt_tokens || 0) + (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) * 0.1 + (u.cache_creation_input_tokens || 0) * 1.25;
+    const tout = (u.candidatesTokenCount || 0) + (u.thoughtsTokenCount || 0) + (u.output_tokens || 0) + (u.completion_tokens || 0);
     S.spend.usd += (tin * pin + tout * pout) / 1e6;
     S.spend.n++;
     store.set('cofsimple:gasto', S.spend);
@@ -1024,7 +1030,8 @@
   function renderSpend() {
     const sp = S.spend && S.spend.dia === today() ? S.spend : null;
     $('#claudeKey').hidden = !isClaude(S.ai);
-    $('#costInfo').textContent = isClaude(S.ai) && !S.ckey ? 'Pega tu clave de Claude (empieza con sk-ant-) y presiona Guardar.' : S.ai === 'gratis' ? 'Sin costo: usa los cupos diarios gratuitos de Google (se renuevan cada noche).' : sp ? `Gasto estimado hoy: US$ ${sp.usd.toFixed(2)} en ${sp.n} consultas${isClaude(S.ai) ? ' (se descuenta de tu crédito de Claude)' : ' (solo se cobra si tu clave tiene facturación activa)'}.` : '';
+    $('#qwenKey').hidden = S.ai !== 'qwen';
+    $('#costInfo').textContent = S.ai === 'qwen' && !S.qkey ? 'Pega tu clave de Qwen (Alibaba Cloud Model Studio, empieza con sk-) y presiona Guardar.' : isClaude(S.ai) && !S.ckey ? 'Pega tu clave de Claude (empieza con sk-ant-) y presiona Guardar.' : S.ai === 'gratis' ? 'Sin costo: usa los cupos diarios gratuitos de Google (se renuevan cada noche).' : sp ? `Gasto estimado hoy: US$ ${sp.usd.toFixed(2)} en ${sp.n} consultas${isClaude(S.ai) ? ' (se descuenta de tu crédito de Claude)' : ' (solo se cobra si tu clave tiene facturación activa)'}.` : '';
   }
   // Saca el JSON de la respuesta. Algunos modelos (Gemma) escriben antes su razonamiento: se prueba el
   // último bloque ```json y, si no, desde cada «{» o «[» hasta el final, quedándose con el primero que es JSON completo.
@@ -1100,8 +1107,66 @@
     }
     throw new Error('Claude no respondió después de varios intentos.');
   }
+  // Qwen por su API compatible con OpenAI (Singapur), directo desde el navegador con la clave de la persona.
+  let qwenInFlight = 0;
+  async function qwen(parts, run, model, opts) {
+    const sp = (S.spend && S.spend.dia === today() ? S.spend.usd : 0) + qwenInFlight * 0.002;
+    if (S.tope > 0 && sp >= S.tope) {
+      const err = new Error(`Se llegó al tope de gasto de hoy (US$ ${S.tope.toFixed(2)}). Súbelo junto a «IA para contar» para seguir.`);
+      err.stop = true;
+      throw err;
+    }
+    // Las partes vienen en formato Gemini (texto e imágenes en base64): se pasan al formato de OpenAI.
+    const content = parts.map((p) => (p.inlineData ? { type: 'image_url', image_url: { url: `data:${p.inlineData.mimeType};base64,${p.inlineData.data}` } } : { type: 'text', text: p.text || ' ' }));
+    qwenInFlight++;
+    try {
+      for (let attempt = 0; attempt < 6; attempt++) {
+        if (run !== S.run) return null;
+        let res;
+        try {
+          res = await fetch(QWEN.url, {
+            signal: AbortSignal.timeout(120000),
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${S.qkey}` },
+            body: JSON.stringify({ model, temperature: 0.1, messages: [{ role: 'user', content }] }),
+          });
+        } catch (e) {
+          status('Sin conexión con Qwen. Reintentando…', null);
+          await wait(4000 * (attempt + 1));
+          continue;
+        }
+        const body = await res.json().catch(() => ({}));
+        if (res.ok) {
+          const text = (body.choices && body.choices[0] && body.choices[0].message && body.choices[0].message.content) || '';
+          S.lastModel = model;
+          addSpend(model, body.usage);
+          if (opts && opts.raw) return text;
+          const data = jsonIn(text);
+          if (data !== undefined) return data;
+          continue;
+        }
+        const msg = (body.error && body.error.message) || body.message || res.statusText;
+        if (res.status === 401 || res.status === 403) {
+          const err = new Error(`Alibaba rechazó la clave de Qwen (${msg}). Revisa que esté bien copiada y que Model Studio esté activado en la región Singapur.`);
+          err.qwenKey = true;
+          throw err;
+        }
+        if (res.status === 429 || res.status >= 500) {
+          status('Qwen está ocupado o pidió esperar. Reintentando…', null);
+          await wait(4000 * (attempt + 1));
+          continue;
+        }
+        throw new Error(`Qwen: ${msg}`);
+      }
+      throw new Error('Qwen no respondió después de varios intentos.');
+    } finally {
+      qwenInFlight--;
+    }
+  }
   const GFAIL = { until: 0 };
   async function gemini(parts, run, tier, opts) {
+    // Con Qwen elegido, todas las lecturas van a Qwen (no se usa el cupo de Google).
+    if (S.ai === 'qwen' && S.qkey) return qwen(parts, run, tier === 'main' ? QWEN.main : QWEN.quick, opts);
     if (tier === 'main' && isClaude(S.ai) && S.ckey) return claude(parts, run);
     const list = MODELS[tier];
     // Con clave de Claude, las lecturas rápidas no esperan a Google saturado: tras 2 fallas seguidas pasan a
@@ -1179,9 +1244,9 @@
 
   // ---------------------------------------------------------------- análisis
   async function analyze(run) {
-    if (!S.key) {
+    if (!S.key && !(S.ai === 'qwen' && S.qkey)) {
       $('#keyBox').hidden = false;
-      status('Falta la clave de Gemini para analizar el video.', null, true);
+      status('Falta la clave de la IA (Qwen o Gemini) para analizar el video.', null, true);
       return;
     }
     if (!S.D) return status('No se pudo leer la duración del video.', null, true);
@@ -1212,7 +1277,7 @@
       tourDone = true;
       if (!ok) return;
       // Después, la IA lee solo la hora y la ubicación de cada paradero (pocas consultas).
-      if (loc !== 'sin' && !(await osdPass(run, stopTimes()).catch((e) => { if (e.badKey || e.claudeKey || e.stop) throw e; return true; }))) return;
+      if (loc !== 'sin' && !(await osdPass(run, stopTimes()).catch((e) => { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; return true; }))) return;
       if (!(await meta)) return;
       // La descripción de lo que pasa va en segundo plano mientras se terminan de contar los paraderos.
       const describing = descPass(run);
@@ -1222,6 +1287,7 @@
       await addresses(run);
     } catch (e) {
       if (e.claudeKey) { $('#ckeyInput').value = ''; return status(e.message, null, true); }
+      if (e.qwenKey) { $('#qkeyInput').value = ''; return status(e.message, null, true); }
       // Tope de gasto: se detiene todo (también lo que corre en segundo plano) para que el aviso quede a la vista.
       if (e.stop) { S.run++; S.running = false; S.paused = true; renderControls(); return status(e.message, null, true); }
       if (e.badKey) {
@@ -1353,6 +1419,20 @@
     status(S.iaRev ? 'La IA revisará a cada pasajero en los próximos paraderos que se cuenten (tiene costo).' : 'Conteo sin IA: detector de personas y luz del validador (gratis).', null);
   };
   $('#ckeyInput').value = S.ckey ? '••••••••' : '';
+  $('#qkeyInput').value = S.qkey ? '••••••••' : '';
+  $('#btnQkey').onclick = () => {
+    const k = $('#qkeyInput').value.trim();
+    if (k === '••••••••') return;
+    if (!/^sk-[A-Za-z0-9_-]{16,}$/.test(k) || /^sk-ant-/.test(k)) return status('Esa no parece una clave de Qwen: se crea en Alibaba Cloud Model Studio (región Singapur) y empieza con sk-.', null, true);
+    S.qkey = k;
+    store.set('cofsimple:qkey', k);
+    S.ai = 'qwen'; store.set('cofsimple:ai', 'qwen'); $('#aiModel').value = 'qwen';
+    $('#qkeyInput').value = '••••••••';
+    $('#keyBox').hidden = true;
+    renderSpend();
+    status('Clave de Qwen guardada en este navegador. El recorrido y los paraderos se leerán con Qwen.', null);
+    if (S.cams.length && !S.running) { S.run++; analyze(S.run); }
+  };
   $('#topeInput').value = String(S.tope);
   $('#topeInput').onchange = (e) => { const v = num(e.target.value); S.tope = v != null && v >= 0 ? v : 1; store.set('cofsimple:tope', S.tope); e.target.value = String(S.tope); };
   $('#btnCkey').onclick = () => {
@@ -1827,7 +1907,7 @@
       try {
         list = await gemini(parts, run, 'quick');
       } catch (e) {
-        if (e.badKey || e.claudeKey || e.stop) throw e;
+        if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e;
         continue;
       }
       if (!list || run !== S.run) return false;
@@ -2623,7 +2703,7 @@
         'Responde SOLO JSON: {"puerta_visible":true,"y_izq":62,"y_der":64,"x_desde":30,"x_hasta":72,"adentro":"abajo"}',
       ].join('\n') }, img(rulerImage(f), 0.85)];
       let r = null;
-      try { r = await gemini(parts, run, 'quick'); } catch (e) { if (e.badKey || e.claudeKey || e.stop) throw e; }
+      try { r = await gemini(parts, run, 'quick'); } catch (e) { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; }
       if (run !== S.run) return null;
       const n = (v) => (Number.isFinite(+v) ? clamp(+v / 100, 0, 1) : null);
       let y0 = r && n(r.y_izq), y1 = r && n(r.y_der), x0 = r && n(r.x_desde), x1 = r && n(r.x_hasta);
@@ -3566,11 +3646,11 @@
     let lineRes = [];
     try {
       // Se espera la línea de la IA hasta un minuto; si no llega, se cuenta con la línea estándar.
-      await Promise.all(allDoors.filter((c) => !c.line || c.line.guess).map((c) => withTimeout(autoLine(c, run).catch((e) => { if (e.badKey || e.claudeKey || e.stop) throw e; return null; }), 60000, null)));
+      await Promise.all(allDoors.filter((c) => !c.line || c.line.guess).map((c) => withTimeout(autoLine(c, run).catch((e) => { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; return null; }), 60000, null)));
       if (run !== S.run) return false;
-      lineRes = (await Promise.all(allDoors.filter((c) => c.line).map((c) => lineCount(s, c, run).catch((e) => { if (e.badKey || e.claudeKey || e.stop) throw e; return null; })))).filter(Boolean);
+      lineRes = (await Promise.all(allDoors.filter((c) => c.line).map((c) => lineCount(s, c, run).catch((e) => { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; return null; })))).filter(Boolean);
     } catch (e) {
-      if (e.badKey || e.claudeKey || e.stop) throw e;
+      if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e;
     }
     if (run !== S.run) return false;
     const doors = allDoors.filter((c) => !lineRes.some((x) => x.c === c));
@@ -3594,7 +3674,7 @@
         : !S.iaRev ? Promise.resolve({ meta: [], r: { suben: [], resumen: 'el detector no pudo seguir a las personas en esta puerta: revísala en el video' }, quiet: true, nodet: true })
           : countDoor(s, p.c, p.times, run, hasValidator(p.c) && i === 0 ? extra : null))));
     } catch (e) {
-      if (e.badKey || e.claudeKey || e.stop) throw e;
+      if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e;
       s.estado = 'error';
       s.resumen = `No se pudo analizar: ${e.message}`;
       S.counting = null;
@@ -3610,7 +3690,7 @@
     let ver = null;
     if (boarders.length && S.iaRev) {
       const valCams = allDoors.filter((c) => hasValidator(c) && lineRes.some((x) => x.c === c));
-      try { ver = await verifyBoarders(s, boarders, boarders.some((b) => !hasValidator(b.c)) ? valCams : [], run); } catch (e) { if (e.badKey || e.claudeKey || e.stop) throw e; ver = null; }
+      try { ver = await verifyBoarders(s, boarders, boarders.some((b) => !hasValidator(b.c)) ? valCams : [], run); } catch (e) { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; ver = null; }
       if (run !== S.run) return false;
     }
     if (!results.some((x) => x.meta.length || x.quiet) && !lineRes.length) { s.estado = 'error'; s.resumen = 'Ninguna cámara de puerta grabó este momento.'; S.counting = null; save(); rebuild(); return true; }
@@ -5394,8 +5474,13 @@
     e.preventDefault();
     const k = $('#keyInput').value.trim();
     if (k.length < 20) return;
-    S.key = k;
-    store.set('cofsimple:key', k);
+    if (/^sk-/.test(k) && !/^sk-ant-/.test(k)) {
+      S.qkey = k; store.set('cofsimple:qkey', k);
+      S.ai = 'qwen'; store.set('cofsimple:ai', 'qwen'); $('#aiModel').value = 'qwen'; $('#qkeyInput').value = '••••••••'; renderSpend();
+    } else {
+      S.key = k;
+      store.set('cofsimple:key', k);
+    }
     $('#keyInput').value = '';
     $('#keyBox').hidden = true;
     if (S.cams.length) { S.run++; analyze(S.run); } else status('', null);
@@ -5404,7 +5489,7 @@
   initMap();
   applyService();
   renderStops();
-  if (!S.key) $('#keyBox').hidden = false;
+  if (!S.key && !S.qkey) $('#keyBox').hidden = false;
   $('#btnOut').hidden = !SERVER;
 })();
 </script>
