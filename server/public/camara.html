@@ -446,7 +446,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.02-4';
+  const VERSION = '2026.10.02-5';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -3169,14 +3169,23 @@
     if (!fresh) return;
     for (const d of L.dets) {
       const tr = L.T.tracks.find((x) => x.id === d.id);
-      // Quien no llega a la puerta (sentado, de pie en el pasillo, afuera lejos) va en gris: no se cuenta.
+      // Toda persona que ve YOLO lleva su recuadro: quien no llega a la puerta (sentado, de pie en el pasillo, afuera
+      // lejos) va en blanco con línea más delgada y no se cuenta; quien llega a la puerta va en color con su recorrido.
       if (!tr || !tr.door) {
         const [y0, x0, y1, x1] = d.box;
-        g.lineWidth = 1 * dpr;
-        g.strokeStyle = 'rgba(200,200,200,.55)';
-        g.setLineDash([4 * dpr, 4 * dpr]);
+        g.lineWidth = 2 * dpr;
+        g.strokeStyle = 'rgba(0,0,0,.6)';
         g.strokeRect(X(x0), Yp(y0), X(x1) - X(x0), Yp(y1) - Yp(y0));
-        g.setLineDash([]);
+        g.lineWidth = 1.5 * dpr;
+        g.strokeStyle = 'rgba(255,255,255,.9)';
+        g.strokeRect(X(x0), Yp(y0), X(x1) - X(x0), Yp(y1) - Yp(y0));
+        g.font = `bold ${10 * dpr}px system-ui, sans-serif`;
+        const lab = d.id ? `#${d.id}` : 'persona';
+        const lw = g.measureText(lab).width + 6 * dpr;
+        g.fillStyle = 'rgba(255,255,255,.9)';
+        g.fillRect(X(x0), Yp(y0) - 13 * dpr, lw, 13 * dpr);
+        g.fillStyle = '#000';
+        g.fillText(lab, X(x0) + 3 * dpr, Yp(y0) - 3 * dpr);
         continue;
       }
       const col = idColor(d.id);
@@ -3223,7 +3232,7 @@
     for (const tr of L.T.tracks) {
       const last = tr.boxes[tr.boxes.length - 1];
       if (last.i !== tr.last) continue;
-      if (segDist(c.line, boxFoot(last.box)) < 0.12) tr.door = true;
+      if (segDist(c.line, boxFoot(last.box)) < 0.2) tr.door = true;
       const sd = lineSide(c.line, boxFoot(last.box), LINE_BAND);
       if (!sd) continue;
       // Si la persona vuelve, se descuenta: cada una suma a lo más una vez.
