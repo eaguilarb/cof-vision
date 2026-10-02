@@ -446,7 +446,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.02-5';
+  const VERSION = '2026.10.02-6';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1956,7 +1956,9 @@
     let cur = null;
     for (const m of pts) {
       if (still(m)) {
-        if (cur && m.t - cur[cur.length - 1].t <= S.step * 1.6) cur.push(m);
+        // Lecturas sin velocidad ni coordenadas (la IA no pudo leer la cámara) no cortan la detención: solo la corta una
+        // lectura en movimiento. Antes un par de fotos ilegibles partía el paradero en dos y se perdía a quien subía justo ahí.
+        if (cur && m.t - cur[cur.length - 1].t <= S.step * 4.2) cur.push(m);
         else segs.push((cur = [m]));
       } else cur = null;
     }
@@ -3302,7 +3304,8 @@
     o.suben = Math.max(o.suben, o.pagan);
     // Con el validador confirmado: quien subió y no generó verde es posible evasión (en blanco y negro no se afirma).
     const conf = S.cams.some((c) => c.valz && !c.valz.auto);
-    o.evaden = conf && !mono ? Math.max(0, o.suben - o.pagan) : null;
+    // El conteo en vivo es preliminar (la línea y los pagos se confirman en el conteo completo): no muestra evasiones.
+    o.evaden = null;
     return o;
   }
   let vivoTimer = 0;
@@ -3572,7 +3575,7 @@
     const keep = {};
     // La puerta se abre mientras el bus frena y se cierra cuando ya parte: se mira desde 4 s antes hasta 2 s después.
     const win = { t0: Math.max(0, s.t0 - 4), t1: s.t1 + 2 };
-    const times = await lineTimes(c, win, run, (await yolo()) ? 160 : 96, keep);
+    const times = await lineTimes(c, win, run, (await yolo()) ? 400 : 96, keep);
     if (run !== S.run) return null;
     // Luz del validador en esta detención (pagos), sin IA.
     // Cámara en blanco y negro en este paradero (modo noche/infrarrojo): el pago se ve como destello.
@@ -3685,9 +3688,25 @@
     }));
     // Aglomeración en la puerta (o zona paga): además se cuenta por cabezas, que se ven aunque los cuerpos se tapen.
     const crowd = frames.some((f) => f.dets.length >= 6);
+    // Puerta cerrada: con 1 o 2 «subidas» sueltas, sin luz verde ni aglomeración, la IA mira la puerta en ese momento.
+    // Si estaba cerrada, era alguien caminando por el pasillo (pasaba en la puerta central): no subió nadie por ahí.
+    const cand = out.filter((x) => !x.near);
+    if (cand.length && cand.length <= 2 && !greens.length && !crowd && !zpOf(s)) {
+      const open = await doorOpen(c, cand.map((x) => x.t), run).catch(() => null);
+      if (run !== S.run) return null;
+      if (open === false) return { c, boarders: [], near: [], bajan: 0, frames: frames.length, tracks: tracks.length, how, greens, heads: null, closed: cand.length };
+    }
     const heads = crowd || zpOf(s) ? await headCount(s, c, run).catch(() => null) : null;
     if (run !== S.run) return null;
     return { c, boarders: out.filter((x) => !x.near), near: out.filter((x) => x.near), bajan, frames: frames.length, tracks: tracks.length, how, greens, heads };
+  }
+  // ¿Estaba abierta la puerta en esos momentos? (Qwen mira la foto de la puerta.) null si no se pudo saber.
+  async function doorOpen(c, ts, run) {
+    const fs = [];
+    for (const t of ts.slice(0, 3)) { const f = await frameOf(c, t, 640); if (f) fs.push(img(f, 0.85)); }
+    if (!fs.length || run !== S.run) return null;
+    const r = await gemini([...fs, { text: 'Imágenes de una cámara de techo DENTRO de un bus que mira hacia una puerta de pasajeros, en distintos momentos de una detención. ¿En alguna de estas imágenes esa puerta está ABIERTA (las hojas de la puerta separadas o plegadas, el vano libre para pasar a la calle o al andén)? Una puerta cerrada tiene las hojas juntas aunque se vea la calle a través del vidrio. Responde SOLO JSON: {"abierta":true} o {"abierta":false}.' }], run, 'quick');
+    return r && typeof r.abierta === 'boolean' ? r.abierta : null;
   }
   // La IA de conteo revisa a cada pasajero que cruzó la línea: si es personal y si pagó.
   async function verifyBoarders(s, boarders, valCams, run) {
@@ -3831,10 +3850,13 @@
     if (valKnown) {
       const ordered = [...boarders].sort((a, b) => a.t - b.t);
       const front = ordered.filter((b) => hasValidator(b.c));
-      for (const g of greens) {
-        let pick = null;
-        for (const b of front) if (!payOf.has(b) && Math.abs(b.t - g.t) <= 8 && (!pick || Math.abs(b.t - g.t) < Math.abs(pick.t - g.t))) pick = b;
-        if (pick) { payOf.set(pick, true); g.used = true; }
+      // Primero a quienes cruzaron la línea; los verdes que sobran, a quienes solo se vio llegar a la puerta.
+      for (const pool of [front.filter((b) => !b.near), front.filter((b) => b.near)]) {
+        for (const g of greens.filter((x) => !x.used)) {
+          let pick = null;
+          for (const b of pool) if (!payOf.has(b) && Math.abs(b.t - g.t) <= 8 && (!pick || Math.abs(b.t - g.t) < Math.abs(pick.t - g.t))) pick = b;
+          if (pick) { payOf.set(pick, true); g.used = true; }
+        }
       }
       for (const g of greens.filter((x) => !x.used)) {
         const b = ordered.find((x) => !hasValidator(x.c) && !payOf.has(x) && g.t >= x.t - 2 && g.t - x.t <= 30);
@@ -3964,19 +3986,8 @@
         p.revisar = false;
         p.desc = p.desc.replace(' · NO se vio luz verde en el validador', '') + ` · pagó después, con el bus en marcha (${horaAt(g.t) || mmss(g.t)})`;
       }
-      // Un pago en marcha que no calza con nadie visto (el detector no lo siguió) igual es alguien que subió aquí.
-      const used = personas.filter((p) => p.late).length;
-      for (const g of late.slice(used)) {
-        const f = await frameOf(vc0, g.t, 640);
-        if (run !== S.run) return false;
-        if (!f) continue;
-        allMeta.push({ cam: vc0.key, t: g.t, thumb: thumbOf(f) });
-        personas.push({
-          t: g.t, cam: vc0.key, desc: `pasajero que pagó con el bus en marcha (${horaAt(g.t) || mmss(g.t)}); el detector no alcanzó a seguirlo al subir`,
-          luz: 'verde', valida: true, sinValidador: false, fueraZona: false, desdeAfuera: true, staff: false,
-          img: allMeta.length - 1, box: null, linea: true, revisar: false, res: 'paga', late: true,
-        });
-      }
+      // Un verde con el bus ya en marcha que no calza con nadie visto subir NO crea un pasajero nuevo: con el bus andando
+      // el validador refleja luces y hay quien valida dos veces (sumaba uno de más en cada paradero).
       if (late.length) porCamara.push(`Validador después de partir: ${late.length} pago${late.length === 1 ? '' : 's'} con el bus en marcha.`);
     }
     // Cada verde del validador es un pasajero que pagó: si el detector no siguió a esa persona (tapada por un
@@ -4029,7 +4040,7 @@
         : x.c.valz.auto ? ` · validador sin confirmar (${ng} posible${ng === 1 ? '' : 's'} ${ng === 1 ? 'luz' : 'luces'} verde${ng === 1 ? '' : 's'}): confírmalo con «💡» sobre la cámara`
           : ` · validador: ${ng} ${ng === 1 ? 'luz' : 'luces'} verde${ng === 1 ? '' : 's'} (pagos)`;
       const cab = x.heads ? ` · aglomeración, conteo por cabezas: entran ${x.heads.ins.length}, salen ${x.heads.outs.length} (${x.heads.frames} fotos)` : '';
-      porCamara.push(`${camName(x.c)}: ${x.quiet ? `sin movimiento, nadie sube${luces}` : `línea de conteo${x.c.line && x.c.line.auto ? ' automática' : ''} (${x.how}): cruzan hacia adentro ${x.boarders.length}, hacia afuera ${x.bajan}${(x.near || []).length ? `, ${x.near.length} más llegaron a la puerta` : ''} · ${x.tracks} personas seguidas en ${x.frames} fotos${cab}${luces}`}`);
+      porCamara.push(`${camName(x.c)}: ${x.closed ? `la puerta estuvo cerrada (lo que cruzó la línea era gente moviéndose adentro): nadie sube${luces}` : x.quiet ? `sin movimiento, nadie sube${luces}` : `línea de conteo${x.c.line && x.c.line.auto ? ' automática' : ''} (${x.how}): cruzan hacia adentro ${x.boarders.length}, hacia afuera ${x.bajan}${(x.near || []).length ? `, ${x.near.length} más llegaron a la puerta` : ''} · ${x.tracks} personas seguidas en ${x.frames} fotos${cab}${luces}`}`);
       bajan += x.bajan;
     }
     if (checkList.length && S.iaRev && !ver) porCamara.push('No se pudo revisar con IA si los pasajeros contados son personal: quedan para revisar.');
