@@ -357,7 +357,7 @@
       <button class="btn small ghost" id="btnStaffRefDel" type="button" hidden>Quitar</button>
     </div>
     <div class="staff-row">
-      <label>IA <select id="aiModel" class="svc-sel"><option value="qwen">Qwen, IA china de bajo costo (Alibaba · ~US$ 0,05 por expedición)</option></select></label>
+      <label>IA <select id="aiModel" class="svc-sel"><option value="qwen">Qwen, IA china de bajo costo (Alibaba: Qwen 3.7 Plus decide y Qwen3-VL lee la pantalla · ~US$ 0,06 por expedición)</option></select></label>
       <label class="iarev" title="Sin marcar, el conteo usa solo el detector de personas y la luz del validador (gratis). Marcado, además una IA revisa a cada pasajero (si es agente, si subió), lo que cuesta."><input type="checkbox" id="iaRev"> Revisar cada pasajero con IA (cuesta)</label>
       <span id="qwenKey" hidden><input id="qkeyInput" type="password" autocomplete="off" placeholder="Clave de Qwen (sk-…)" style="width:220px"> <button class="btn small" id="btnQkey" type="button">Guardar</button> <label title="Al llegar a este gasto en el día, el conteo se detiene">Tope diario US$ <input id="topeInput" type="number" min="0" step="0.5" style="width:64px;min-width:0;flex:none"></label></span>
       <span id="claudeKey" hidden><input id="ckeyInput" type="password" autocomplete="off" hidden> <button class="btn small" id="btnCkey" type="button" hidden>Guardar</button></span>
@@ -425,9 +425,10 @@
   const isClaude = (ai) => !!CLAUDE[ai];
   // Qwen (Alibaba Cloud, IA china de bajo costo): lee el recorrido, los paraderos y los detalles con la clave de la persona.
   // Plus para todo: Flash lee mal el texto chico de la cámara (patente, velocidad), y Plus sigue siendo muy barato.
-  const QWEN = { quick: 'qwen3-vl-plus', main: 'qwen3-vl-plus', url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions' };
+  // quick: lectura de pantalla y recuadros (Qwen3-VL lee mejor el texto y ubica mejor); main: decisiones (quién subió, pagó, puerta abierta).
+  const QWEN = { quick: 'qwen3-vl-plus', main: 'qwen3.7-plus', fallback: 'qwen3-vl-plus', url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions' };
   // Tarifas en US$ por millón de tokens (entrada, salida), para estimar el gasto.
-  const PRICE = (m) => (/qwen3-vl-plus/.test(m) ? [0.2, 1.6] : /qwen/.test(m) ? [0.05, 0.4] : /haiku/.test(m) ? [1, 5] : /sonnet/.test(m) ? [2, 10] : /gemma/.test(m) ? [0, 0] : /pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
+  const PRICE = (m) => (/qwen3-vl-plus/.test(m) ? [0.2, 1.6] : /qwen3\.\d-plus/.test(m) ? [0.4, 1.6] : /qwen/.test(m) ? [0.05, 0.4] : /haiku/.test(m) ? [1, 5] : /sonnet/.test(m) ? [2, 10] : /gemma/.test(m) ? [0, 0] : /pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
   // En Railway la página la entrega el servidor, que agrega la clave: el navegador nunca la ve.
   const SERVER = !!window.COF_SERVER;
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -447,7 +448,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.05-2';
+  const VERSION = '2026.10.05-3';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -465,7 +466,32 @@
     get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* sin almacenamiento */ } },
   };
-  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // Con la pestaña oculta o la ventana minimizada, Chrome demora los temporizadores de la página (después de unos
+  // minutos, uno por minuto) y no dibuja fotogramas. Los temporizadores de un Worker no se demoran: con ellos el
+  // análisis sigue a la misma velocidad en segundo plano.
+  const BGTIMER = (() => {
+    try {
+      const w = new Worker(URL.createObjectURL(new Blob(['onmessage=(e)=>setTimeout(()=>postMessage(e.data[0]),e.data[1])'], { type: 'text/javascript' })));
+      const cb = new Map();
+      let n = 0;
+      w.onmessage = (e) => { const f = cb.get(e.data); cb.delete(e.data); if (f) f(); };
+      w.onerror = () => { for (const f of cb.values()) f(); cb.clear(); };
+      return (f, ms) => { const id = ++n; cb.set(id, f); w.postMessage([id, ms]); };
+    } catch { return null; }
+  })();
+  const later = (f, ms) => (document.hidden && BGTIMER ? BGTIMER(f, ms) : setTimeout(f, ms));
+  const wait = (ms) => new Promise((r) => later(r, ms));
+  // Mientras analiza, la pantalla no se apaga ni el computador se suspende solo (mientras la pestaña está a la vista).
+  let WAKE = null;
+  async function keepAwake(on) {
+    try {
+      if (on && !WAKE && !document.hidden && navigator.wakeLock) {
+        WAKE = await navigator.wakeLock.request('screen');
+        WAKE.addEventListener('release', () => { WAKE = null; });
+      } else if (!on && WAKE) { const w = WAKE; WAKE = null; await w.release(); }
+    } catch {}
+  }
+  document.addEventListener('visibilitychange', () => keepAwake(S.running));
   const pad = (n) => String(n).padStart(2, '0');
   const mmss = (s) => { s = Math.max(0, s); const h = Math.floor(s / 3600); return h ? `${h}:${pad(Math.floor((s % 3600) / 60))}:${pad(Math.floor(s % 60))}` : `${pad(Math.floor(s / 60))}:${pad(Math.floor(s % 60))}`; };
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -925,10 +951,14 @@
   function seek(v, t) {
     return new Promise((resolve) => {
       let done = false;
-      const fin = () => { if (done) return; done = true; v.removeEventListener('seeked', fin); requestAnimationFrame(() => resolve()); };
+      // Se espera a que el fotograma esté pintado; con la pestaña oculta no se pinta nada (requestAnimationFrame no
+      // corre) y se sigue de inmediato: el fotograma buscado ya está decodificado.
+      let ok = false;
+      const go = () => { if (!ok) { ok = true; resolve(); } };
+      const fin = () => { if (done) return; done = true; v.removeEventListener('seeked', fin); if (document.hidden) go(); else { requestAnimationFrame(go); later(go, 200); } };
       v.addEventListener('seeked', fin);
       v.currentTime = t;
-      setTimeout(fin, 5000);
+      later(fin, 5000);
     });
   }
   // Fotograma de una cámara en un instante de la línea de tiempo principal (null si no grabó).
@@ -1014,7 +1044,7 @@
   }
   // Modelos en pausa: sin cupo gratuito (limit: 0), saturados o con el límite por minuto agotado.
   const COOL = {};
-  const MODEL_NAMES = { 'gemini-flash-lite-latest': 'Gemini Flash-Lite (básico)', 'gemini-3.5-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-3.1-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-flash-latest': 'Gemini Flash', 'gemini-3.8-flash': 'Gemini Flash', 'gemini-3.7-flash': 'Gemini Flash', 'gemini-3.6-flash': 'Gemini Flash', 'gemini-3.5-flash': 'Gemini Flash', 'gemini-3-flash-preview': 'Gemini Flash', 'gemma-4-31b-it': 'Gemma 4', 'gemma-4-26b-a4b-it': 'Gemma 4', 'gemini-pro-latest': 'Gemini Pro', 'gemini-3.1-pro-preview': 'Gemini Pro', 'claude-haiku-4-5': 'Claude Haiku', 'claude-sonnet-5': 'Claude Sonnet', 'qwen3-vl-flash': 'Qwen Flash', 'qwen3-vl-plus': 'Qwen Plus' };
+  const MODEL_NAMES = { 'gemini-flash-lite-latest': 'Gemini Flash-Lite (básico)', 'gemini-3.5-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-3.1-flash-lite': 'Gemini Flash-Lite (básico)', 'gemini-flash-latest': 'Gemini Flash', 'gemini-3.8-flash': 'Gemini Flash', 'gemini-3.7-flash': 'Gemini Flash', 'gemini-3.6-flash': 'Gemini Flash', 'gemini-3.5-flash': 'Gemini Flash', 'gemini-3-flash-preview': 'Gemini Flash', 'gemma-4-31b-it': 'Gemma 4', 'gemma-4-26b-a4b-it': 'Gemma 4', 'gemini-pro-latest': 'Gemini Pro', 'gemini-3.1-pro-preview': 'Gemini Pro', 'claude-haiku-4-5': 'Claude Haiku', 'claude-sonnet-5': 'Claude Sonnet', 'qwen3-vl-flash': 'Qwen Flash', 'qwen3-vl-plus': 'Qwen3-VL Plus', 'qwen3.7-plus': 'Qwen 3.7 Plus' };
   const isLite = (m) => /lite/.test(m || '');
   // Gasto estimado del día según los tokens que informa Google (si la clave tiene facturación activa).
   const today = () => new Date().toLocaleDateString('sv');
@@ -1131,7 +1161,7 @@
             signal: AbortSignal.timeout(120000),
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${S.qkey}` },
-            body: JSON.stringify({ model, temperature: 0.1, messages: [{ role: 'user', content }] }),
+            body: JSON.stringify({ model, temperature: 0.1, ...(/-vl-/.test(model) ? {} : { enable_thinking: false }), messages: [{ role: 'user', content }] }),
           });
         } catch (e) {
           status('Sin conexión con Qwen. Reintentando…', null);
@@ -1159,6 +1189,8 @@
           await wait(4000 * (attempt + 1));
           continue;
         }
+        // Si la cuenta no tiene el modelo nuevo, se sigue con Qwen3-VL Plus.
+        if (model !== QWEN.fallback && (res.status === 404 || /model.{0,40}(not|exist|access|support)/i.test(msg))) { model = QWEN.fallback; continue; }
         throw new Error(`Qwen: ${msg}`);
       }
       throw new Error('Qwen no respondió después de varios intentos.');
@@ -1342,6 +1374,7 @@
     restart();
   }
   function renderControls() {
+    keepAwake(S.running);
     const box = $('#controls');
     box.hidden = !S.cams.length;
     if (!S.range) return;
@@ -3225,7 +3258,7 @@
       g.fillText(lab, X(x0) + 4 * dpr, Yp(y0) - 4 * dpr);
     }
   }
-  const nap = (ms) => new Promise((ok) => setTimeout(ok, ms));
+  const nap = wait;
   window.__cofDebug = { ...(window.__cofDebug || {}), live: () => S.cams.map((c) => [c.label, +c.video.currentTime.toFixed(1), c.live ? +c.live.t.toFixed(1) : null, c.live ? c.live.dets.length : null, c.live ? +c.live.dt.toFixed(2) : null, c.line ? `${c.line.guess || (c.line.auto ? "ia" : "mano")}:${c.line.a.map((v) => v.toFixed(2))}-${c.line.b.map((v) => v.toFixed(2))}` : 0, (c.flow || []).length]).concat([[Y.ep, Math.round(Y.ms || 0), S.stops.length, (S.provs || []).map((p) => `${p.t0.toFixed(0)}-${p.t1.toFixed(0)}:${JSON.stringify(p.vivo && p.vivo.cams)}`).join(' ')]]) }; // solo para pruebas automáticas
   // Una foto nueva de una cámara: se sigue a cada persona y se cuenta quien cruza la línea de la puerta.
   function liveFeed(c, t, dets) {
@@ -3719,7 +3752,7 @@
     const fs = [];
     for (const t of ts.slice(0, 3)) { const f = await frameOf(c, t, 640); if (f) fs.push(img(f, 0.85)); }
     if (!fs.length || run !== S.run) return null;
-    const r = await gemini([...fs, { text: 'Imágenes de una cámara de techo DENTRO de un bus que mira hacia una puerta de pasajeros, en distintos momentos de una detención. ¿En alguna de estas imágenes esa puerta está ABIERTA (las hojas de la puerta separadas o plegadas, el vano libre para pasar a la calle o al andén)? Una puerta cerrada tiene las hojas juntas aunque se vea la calle a través del vidrio. Responde SOLO JSON: {"abierta":true} o {"abierta":false}.' }], run, 'quick');
+    const r = await gemini([...fs, { text: 'Imágenes de una cámara de techo DENTRO de un bus que mira hacia una puerta de pasajeros, en distintos momentos de una detención. ¿En alguna de estas imágenes esa puerta está ABIERTA (las hojas de la puerta separadas o plegadas, el vano libre para pasar a la calle o al andén)? Una puerta cerrada tiene las hojas juntas aunque se vea la calle a través del vidrio. Responde SOLO JSON: {"abierta":true} o {"abierta":false}.' }], run, 'main');
     return r && typeof r.abierta === 'boolean' ? r.abierta : null;
   }
   // La IA de conteo revisa a cada pasajero que cruzó la línea: si es personal y si pagó.
