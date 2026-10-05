@@ -446,7 +446,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.02-6';
+  const VERSION = '2026.10.05-1';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -2701,8 +2701,10 @@
   }
   // Conteo por cabezas de una puerta en una detención (solo con aglomeración o zona paga: mira 5 fotos por segundo).
   async function headCount(s, c, run) {
+    // 5 fotos por segundo, hasta 200 por puerta (en detenciones largas se espacian un poco más).
+    const span = s.t1 - s.t0 + 4, step = Math.max(HEAD_STEP, span / 200);
     const times = [];
-    for (let t = Math.max(0, s.t0 - 2); t <= s.t1 + 2 + 1e-6; t += HEAD_STEP) times.push(+t.toFixed(2));
+    for (let t = Math.max(0, s.t0 - 2); t <= s.t1 + 2 + 1e-6; t += step) times.push(+t.toFixed(2));
     const frames = await headFrames(c, times, run, s);
     if (!frames || run !== S.run) return null;
     if (window.__cofDebug) (window.__cofDebug.heads = window.__cofDebug.heads || []).push({ cam: c.label, frames: frames.map((f) => f.dets.map((d) => d.box.map((v) => +v.toFixed(4)))) }); // solo para pruebas
@@ -2826,8 +2828,9 @@
       const door = boxOf('puerta'), step = boxOf('escalon');
       const r = { adentro: 'abajo' };
       let y0 = null, x0 = null, x1 = null;
-      if (step && step[3] > step[1]) { y0 = step[1]; x0 = step[0]; x1 = step[2]; }
-      else if (door && door[3] > door[1]) { y0 = door[3] - 0.15 * (door[3] - door[1]); x0 = door[0]; x1 = door[2]; }
+      const stepOk = step && step[3] > step[1] && step[1] >= 0.4 && (!door || step[1] >= (door[1] + door[3]) / 2);
+      if (stepOk) { y0 = step[1]; x0 = step[0]; x1 = step[2]; }
+      else if (door && door[3] > door[1] && door[3] >= 0.5) { y0 = door[3] - 0.15 * (door[3] - door[1]); x0 = door[0]; x1 = door[2]; }
       if (door && x0 != null) { x0 = Math.max(x0, door[0]); x1 = Math.min(x1, door[2]); }
       let y1 = y0;
       const bad = y0 == null || x0 == null || x1 == null || y0 < 0.15 || y0 > 0.9 || Math.abs(x1 - x0) < 0.08;
@@ -3492,14 +3495,14 @@
       const [y0, x0, y1, x1] = d.box;
       const me = tr && d.id === tr.id;
       g.lineWidth = me ? 3 : 1;
-      g.strokeStyle = me ? (hi || '#cf222e') : 'rgba(255,255,255,.7)';
+      g.strokeStyle = me ? (hi || 'rgba(255,255,255,.95)') : 'rgba(255,255,255,.55)';
       g.strokeRect(X(x0), Y(y0), X(x1) - X(x0), Y(y1) - Y(y0));
       g.fillStyle = g.strokeStyle;
       g.font = `bold ${me ? 15 : 12}px sans-serif`;
       g.fillText(`#${d.id}`, X(x0) + 3, Y(y0) + (me ? 16 : 13));
     }
     if (tr) {
-      g.strokeStyle = '#cf222e';
+      g.strokeStyle = '#00e5ff';
       g.lineWidth = 3;
       g.beginPath();
       tr.boxes.forEach((b, k) => { const [x, y] = boxFoot(b.box); if (k) g.lineTo(X(x), Y(y)); else g.moveTo(X(x), Y(y)); });
@@ -3575,7 +3578,7 @@
     const keep = {};
     // La puerta se abre mientras el bus frena y se cierra cuando ya parte: se mira desde 4 s antes hasta 2 s después.
     const win = { t0: Math.max(0, s.t0 - 4), t1: s.t1 + 2 };
-    const times = await lineTimes(c, win, run, (await yolo()) ? 400 : 96, keep);
+    const times = await lineTimes(c, win, run, (await yolo()) ? 240 : 96, keep);
     if (run !== S.run) return null;
     // Luz del validador en esta detención (pagos), sin IA.
     // Cámara en blanco y negro en este paradero (modo noche/infrarrojo): el pago se ve como destello.
@@ -3687,7 +3690,7 @@
       where: x.pick.filter((b) => frames[b.i].f).map((b) => x.where[x.pick.indexOf(b)]),
     }));
     // Aglomeración en la puerta (o zona paga): además se cuenta por cabezas, que se ven aunque los cuerpos se tapen.
-    const crowd = frames.some((f) => f.dets.length >= 6);
+    const crowd = frames.filter((f) => f.dets.length >= 8).length >= 3;
     // Puerta cerrada: con 1 o 2 «subidas» sueltas, sin luz verde ni aglomeración, la IA mira la puerta en ese momento.
     // Si estaba cerrada, era alguien caminando por el pasillo (pasaba en la puerta central): no subió nadie por ahí.
     const cand = out.filter((x) => !x.near);
@@ -3959,7 +3962,8 @@
         // Por una puerta sin validador, quien fue a validar adelante (verde que sobró) queda como pagado.
         valida: val ? v : pay === true ? true : null, sinValidador: !val, fueraZona: false, desdeAfuera: true,
         staff: noSube || (!paid && (truthy(q.es_personal) || STAFF_RE.test(desc))),
-        img: allMeta.length - 1, box: null, linea: true,
+        // El recuadro se pinta del color del resultado (rojo evade, verde paga, amarillo dudoso, azul zona paga).
+        img: allMeta.length - 1, box: b.box || null, linea: true,
         // Sin validador confirmado no se sabe si pagó (ni adelante ni atrás): queda para revisar.
         revisar: monoNo || (pay === null && (checked.has(b) ? false : !valKnown)),
         res: v === true ? 'paga' : v === false ? 'evade' : val ? 'dudoso' : 'evade',
