@@ -162,6 +162,7 @@
   tr.stop-row { cursor: pointer; }
   tr.stop-row:hover { background: #f6f8fa; }
   tr.stop-row.cur { background: #fff6e0; }
+  tr.stop-row.pasado td { color: #8c959f; font-size: 13px; }
   tr.detail td { background: #fafbfc; padding: 6px 10px 12px 34px; }
   .people { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
   .people li { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
@@ -446,7 +447,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.05-1';
+  const VERSION = '2026.10.05-2';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1962,8 +1963,18 @@
         else segs.push((cur = [m]));
       } else cur = null;
     }
-    return segs
-      .filter((g) => g.some((m) => m.puertas || m.subiendo > 0) || g[g.length - 1].t - g[0].t + S.step >= 15 || g.some((m) => m.lat != null && nearestParadero(m.lat, m.lon, 0.1)))
+    // Varias detenciones seguidas en el mismo paradero (el bus avanza unos metros y vuelve a parar) son un solo
+    // paradero: se juntan si están a menos de 2 minutos. Antes salía el mismo paradero en 2 o 3 filas.
+    const parOfSeg = (g) => { const ll = g.filter((m) => m.lat != null); if (!ll.length) return null; const m = ll[ll.length >> 1]; return nearestParadero(m.lat, m.lon, 0.1); };
+    const kept = segs.filter((g) => g.some((m) => m.puertas || m.subiendo > 0) || g[g.length - 1].t - g[0].t + S.step >= 15 || g.some((m) => m.lat != null && nearestParadero(m.lat, m.lon, 0.1)));
+    const joined = [];
+    for (const g of kept) {
+      const prev = joined[joined.length - 1];
+      const pa = prev && parOfSeg(prev), pb = parOfSeg(g);
+      if (prev && pa && pb && pa === pb && g[0].t - prev[prev.length - 1].t <= 120) prev.push(...g);
+      else joined.push([...g]);
+    }
+    return joined
       .map((g) => ({
         t0: +Math.max(0, g[0].t - S.step * 0.6).toFixed(1),
         t1: +Math.min(S.D, g[g.length - 1].t + S.step * 0.6).toFixed(1),
@@ -4356,6 +4367,20 @@
     return bd <= maxKm ? best : null;
   }
   const parOf = (s) => (s.lat != null ? nearestParadero(s.lat, s.lon, 0.1) : null);
+  // Paraderos del servicio por los que el bus pasó (a menos de 60 m del recorrido) sin detenerse en ellos.
+  setTimeout(() => { if (window.__cofDebug) window.__cofDebug.paraderos = () => ({ list: PAR.list.length, track: S.track.length, passed: passedParaderos().map((p) => p.par.c), stopped: S.stops.map((x) => { const p = parOf(x); return p ? p.c : null; }), near: S.track.length ? PAR.list.map((p) => [p.c, Math.round(1000 * Math.min(...S.track.map((q) => distKm(p, q))))]).filter((x) => x[1] < 400) : [] }); }, 0); // solo para pruebas
+  function passedParaderos() {
+    if (!PAR.list.length || S.track.length < 2) return [];
+    const stopped = new Set(S.stops.map(parOf).filter(Boolean));
+    const out = [];
+    for (const p of PAR.list) {
+      if (stopped.has(p)) continue;
+      let best = null, bd = Infinity;
+      for (const q of S.track) { const d = distKm(p, q); if (d < bd) { bd = d; best = q; } }
+      if (best && bd <= 0.06 && (!S.range || inRange({ t0: best.t, t1: best.t }))) out.push({ pasado: true, par: p, t0: best.t, t1: best.t });
+    }
+    return out;
+  }
   const parText = (p) => (p ? `${p.o ? `#${p.o} ` : ''}${[p.c, p.n].filter(Boolean).join(' · ')}` : '');
   // Sentido automático: el que recorre sus paraderos en orden creciente a lo largo del video.
   function detectDir() {
@@ -4801,7 +4826,10 @@
     );
     const body = $('#stopRows');
     // Los paraderos en vivo (vistos por el detector antes de leer el recorrido) van en su lugar según la hora.
-    const list = [...S.stops.filter((s) => (s.estado !== 'listo' && inRange(s) && !beforeStart(s)) || moving(s)), ...provList()].sort((a, b) => a.t0 - b.t0);
+    // Con los paraderos del servicio cargados se muestran TODOS los del tramo recorrido, en orden: los que tuvieron
+    // pasajeros, las detenciones en un paradero sin nadie (con 0) y los paraderos por los que pasó sin detenerse.
+    const atPar = (s) => s.estado === 'listo' && inRange(s) && !beforeStart(s) && !moving(s) && parOf(s);
+    const list = [...S.stops.filter((s) => (s.estado !== 'listo' && inRange(s) && !beforeStart(s)) || moving(s) || atPar(s)), ...provList(), ...passedParaderos()].sort((a, b) => a.t0 - b.t0);
     if (!list.length) {
       const tr = el('tr');
       const td = el('td', 'empty', S.stops.length ? 'En las detenciones analizadas no subió ni bajó nadie.' : 'Todavía no hay paraderos analizados.');
@@ -4812,6 +4840,13 @@
     }
     const rows = [];
     for (const s of list) {
+      if (s.pasado) {
+        const tr = el('tr', 'stop-row pasado');
+        tr.append(el('td', 'muted', '·'), el('td', 'muted', horaAt(s.t0) || mmss(s.t0)), el('td', 'hide-sm muted', `${parText(s.par)} · no se detuvo`), el('td', 'n muted', '—'), el('td', 'n'), el('td', 'n'), el('td', 'n hide-sm'), el('td', 'n hide-sm'));
+        tr.onclick = () => goTo(s.t0);
+        rows.push(tr);
+        continue;
+      }
       if (s.prov) {
         const v = vivoCounts(s);
         const tr = el('tr', 'stop-row');
