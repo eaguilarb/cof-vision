@@ -79,6 +79,8 @@
   .cam-chip { flex: none; border: 1px solid #3a4652; background: #1b2530; color: #d6dee5; border-radius: 99px; padding: 5px 12px; font: 600 13px system-ui, sans-serif; cursor: pointer; white-space: nowrap; }
   .cam-chip small { font-weight: 400; color: #9fb0bf; margin-left: 4px; }
   .cam-chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .cam-chip-wrap { flex: none; display: inline-flex; align-items: center; gap: 4px; }
+  .cam-role { border: 1px solid #3a4652; background: #1b2530; color: #d6dee5; border-radius: 99px; padding: 4px 6px; font: 12px system-ui, sans-serif; cursor: pointer; }
   .cam-chip.on small { color: #4a3500; }
   .cam-chip.all { margin-left: auto; background: transparent; }
   .cam-chip.all.on { background: #fff; color: #10181f; border-color: #fff; }
@@ -448,7 +450,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.06-4';
+  const VERSION = '2026.10.06-5';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -705,16 +707,43 @@
     S.cur = -2;
     tick();
   }
+  // Cambiar a mano qué es una cámara: la delantera lleva validador; las demás no (y se borra el que tuvieran).
+  function setCamTipo(c, tipo) {
+    c.tipo = tipo || null;
+    c.validador = c.tipo === 'puerta_delantera';
+    c.manual = true;
+    if (!hasValidator(c)) c.valz = null;
+    if (!/^puerta_/.test(c.tipo || '')) { c.line = null; c.excl = null; }
+    tileLineBtn(c);
+    pickRef();
+    orderCams();
+    renderCams();
+    renderCamBar();
+    for (const s of S.stops) s.estado = 'pendiente';
+    save();
+    rebuild();
+    if (S.moments.length) { S.run++; analyze(S.run); }
+  }
   function renderCamBar() {
     const bar = $('#camBar');
     bar.hidden = !S.cams.length;
     bar.replaceChildren(...S.cams.map((c, i) => {
       const b = el('button', `cam-chip${i === S.main ? ' on' : ''}`, c.label);
       b.type = 'button';
-      if (c.tipo) b.append(el('small', null, TIPOS[c.tipo] || c.tipo));
       if (c.bad) { b.disabled = true; b.append(el('small', null, 'no se abre')); }
       b.onclick = () => setMain(i);
-      return b;
+      if (c.bad) return b;
+      // Qué cámara es (se puede corregir aquí mismo si la app se equivocó).
+      const sel = el('select', 'cam-role');
+      sel.title = 'Qué muestra esta cámara (cámbialo si está mal)';
+      sel.append(el('option', null, 'Tipo…'));
+      sel.firstChild.value = '';
+      for (const [k, v] of Object.entries(TIPOS)) { const o = el('option', null, v); o.value = k; sel.append(o); }
+      sel.value = c.tipo || '';
+      sel.onchange = () => setCamTipo(c, sel.value);
+      const w = el('span', 'cam-chip-wrap');
+      w.append(b, sel);
+      return w;
     }));
     const lv = el('button', `cam-chip live${LIVE.on ? ' on' : ''}`, LIVE.on ? '🧍 Detección en vivo: sí' : '🧍 Detección en vivo: no');
     lv.type = 'button';
@@ -920,6 +949,7 @@
         c.validador = val.checked;
         c.off = num(off.value) || 0;
         c.manual = true;
+        if (!hasValidator(c)) c.valz = null;
         tileLineBtn(c);
         pickRef();
         orderCams();
@@ -1595,7 +1625,7 @@
   // trasera), y los archivos suelen traer la puerta en el nombre («primera_puerta», «puerta trasera»…).
   const FIXED = { CH4: ['puerta_delantera', true], CH5: ['puerta_central', false], CH7: ['puerta_trasera', false] };
   function doorGuess(c) {
-    if (FIXED[c.label] && S.cams.some((x) => x.label === 'CH4')) return FIXED[c.label];
+    if (FIXED[c.label]) return FIXED[c.label];
     const n = c.name.toLowerCase().replace(/[_\-.]+/g, ' ');
     if (/primera puerta|puerta (1|uno|delantera)|delantera/.test(n)) return FIXED.CH4;
     if (/segunda puerta|puerta (2|dos|central|media|del medio)|central/.test(n)) return FIXED.CH5;
@@ -1620,6 +1650,27 @@
     const frames = [];
     for (let i = 0; i < cams.length; i++) frames.push(await frameOf({ ...cams[i], off: 0 }, ts[i], 1024));
     if (run !== S.run) return false;
+    // Un video sin el canal en el nombre del archivo («Cám 1») toma el canal que la cámara escribe arriba a la izquierda
+    // («CH7»): así se sabe qué puerta es y no hereda zonas ni validador de otro video.
+    const generic = cams.map((c, i) => [c, frames[i]]).filter(([c, f]) => f && /^Cám /.test(c.label));
+    if (generic.length) {
+      const parts = [{ text: 'Cada imagen es la esquina de arriba a la izquierda de una cámara de bus: arriba la patente y debajo el canal de la cámara (las letras CH y un número). Lee el canal de cada imagen. Responde SOLO JSON: [{"n":<número de imagen>,"canal":"CH y el número que se lee, o null"}]' }];
+      generic.forEach(([, f], k) => {
+        const cv = newCanvas(Math.round(f.width * 0.3 * 2), Math.round(f.height * 0.22 * 2));
+        cv.getContext('2d').drawImage(f, 0, 0, f.width * 0.3, f.height * 0.22, 0, 0, cv.width, cv.height);
+        parts.push({ text: `Imagen ${k + 1}:` }, img(cv, 0.9));
+      });
+      const r = await gemini(parts, run, 'quick').catch(() => null);
+      if (run !== S.run) return false;
+      const arr = Array.isArray(r) ? r : [];
+      generic.forEach(([c], k) => {
+        const e = arr.find((x) => Number(x && x.n) === k + 1);
+        const ch = String((e && e.canal) || '').toUpperCase().replace(/\s+/g, '').match(/^CH0?(\d{1,2})$/);
+        if (ch && !S.cams.some((x) => x !== c && x.label === `CH${+ch[1]}`)) c.label = `CH${+ch[1]}`;
+      });
+      // Con el canal conocido (CH4, CH5, CH7) ya se sabe qué puerta es.
+      for (const [c] of generic) { const g = doorGuess(c); if (g) [c.tipo, c.validador] = g; }
+    }
     const parts = [{ text: [
       `Te envío una imagen de cada una de las ${cams.length} cámaras de un bus del transporte público: ${cams.map((c, i) => `imagen ${i + 1} = ${c.label}`).join(', ')}.`,
       'Para cada imagen indica:',
@@ -2918,7 +2969,8 @@
   }
   // Las líneas dibujadas a mano se recuerdan por bus (patente) y cámara: los videos siguientes del mismo bus ya las traen.
   const LINE_MEM = 'cofsimple:lineas';
-  const lineKey = (c) => (S.meta && S.meta.patente ? `${String(S.meta.patente).replace(/[^A-Za-z0-9]/g, '').toUpperCase()}|${c.label}` : null);
+  // Solo con el canal real (CH4, CH5…): con un nombre genérico («Cám 1») se mezclaban zonas y validador de otros videos.
+  const lineKey = (c) => (S.meta && S.meta.patente && /^CH\d+$/.test(c.label) ? `${String(S.meta.patente).replace(/[^A-Za-z0-9]/g, '').toUpperCase()}|${c.label}` : null);
   function rememberLine(c) {
     const k = lineKey(c);
     if (!k) return;
@@ -4125,7 +4177,7 @@
         luz: pay === true || verde ? 'verde' : roja ? 'roja' : null,
         // Por una puerta sin validador, quien fue a validar adelante (verde que sobró) queda como pagado.
         valida: val ? v : pay === true ? true : null, sinValidador: !val, fueraZona: false, desdeAfuera: true,
-        staff: noSube || (!paid && (truthy(q.es_personal) || STAFF_RE.test(desc))),
+        staff: noSube || (!paid && (truthy(q.es_personal) || STAFF_RE.test(desc))), nosube: noSube && !truthy(q.es_personal) && !STAFF_RE.test(desc),
         // El recuadro se pinta del color del resultado (rojo evade, verde paga, amarillo dudoso, azul zona paga).
         img: allMeta.length - 1, box: b.box || null, linea: true,
         // Sin validador confirmado no se sabe si pagó (ni adelante ni atrás): queda para revisar.
@@ -4176,6 +4228,27 @@
           t: g.t, cam: vc.key, desc: 'pasajero que pagó (luz verde en el validador); el detector no alcanzó a seguirlo',
           luz: 'verde', valida: true, sinValidador: false, fueraZona: false, desdeAfuera: true, staff: false,
           img: allMeta.length - 1, box: null, linea: true, revisar: false, res: 'paga',
+        });
+      }
+    }
+    // Aglomeración o zona paga: las cabezas mandan. Si la IA descartó a alguien que cruzó diciendo que «no subió» (en el
+    // apretón se equivoca), su cabeza igual cuenta: se completa hasta el número de cabezas que entraron. Los agentes
+    // (la IA los reconoce como personal) no se reponen.
+    for (const x of lineRes) {
+      if (!x.heads || x.heads.plain || !x.heads.inEv) continue;
+      const have = personas.filter((p) => p.cam === x.c.key && !p.nosube).length;
+      const deficit = x.heads.ins.length - have;
+      if (deficit < 1 || x.heads.ins.length - lineRes.filter((y) => y.c === x.c).flatMap((y) => y.boarders).length < 3) continue;
+      const usedT = headB.filter((b) => b.c === x.c).map((b) => b.t);
+      for (const e of x.heads.inEv.filter((q) => !usedT.includes(q.t)).slice(0, deficit)) {
+        const f = await frameOf(x.c, e.t, 640);
+        if (run !== S.run) return false;
+        if (!f) continue;
+        allMeta.push({ cam: x.c.key, t: e.t, thumb: thumbOf(f) });
+        personas.push({
+          t: e.t, cam: x.c.key, desc: 'pasajero contado por su cabeza en la aglomeración (el detector de personas no alcanzó a seguirlo)',
+          luz: null, valida: null, sinValidador: !hasValidator(x.c), fueraZona: false, desdeAfuera: true, staff: false,
+          img: allMeta.length - 1, box: e.box, linea: true, revisar: !zpOf(s), res: hasValidator(x.c) ? 'dudoso' : 'evade', cabeza: true,
         });
       }
     }
