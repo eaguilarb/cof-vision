@@ -448,7 +448,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.06-3';
+  const VERSION = '2026.10.06-4';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -2720,7 +2720,7 @@
   function headEvents(frames, fast) {
     const tracks = [];
     frames.forEach((fr, i) => {
-      const pts = fr.dets.map((d) => [(d.box[1] + d.box[3]) / 2, (d.box[0] + d.box[2]) / 2]).filter((p) => p[0] >= HEAD_X0 && p[0] <= HEAD_X1);
+      const pts = fr.dets.map((d) => [(d.box[1] + d.box[3]) / 2, (d.box[0] + d.box[2]) / 2, d.box]).filter((p) => p[0] >= HEAD_X0 && p[0] <= HEAD_X1);
       const live = tracks.filter((tr) => i - tr.f <= 2);
       const ub = new Set();
       const C = live.map((tr) => pts.map((p) => { const n = i - tr.f; return Math.hypot(p[0] - (tr.x + tr.vx * n), p[1] - (tr.y + tr.vy * n)); }));
@@ -2731,9 +2731,9 @@
         const tr = live[a], p = pts[b], n = i - tr.f;
         tr.vx = ((p[0] - tr.x) / n + tr.vx) / 2; tr.vy = ((p[1] - tr.y) / n + tr.vy) / 2;
         tr.x = p[0]; tr.y = p[1]; tr.f = i;
-        tr.d.push({ i, v: p[1] });
+        tr.d.push({ i, v: p[1], box: p[2] });
       });
-      pts.forEach((p, b) => { if (!ub.has(b)) tracks.push({ x: p[0], y: p[1], vx: 0, vy: 0, f: i, d: [{ i, v: p[1] }] }); });
+      pts.forEach((p, b) => { if (!ub.has(b)) tracks.push({ x: p[0], y: p[1], vx: 0, vy: 0, f: i, d: [{ i, v: p[1], box: p[2] }] }); });
     });
     const ins = [], outs = [];
     for (const tr of tracks) {
@@ -2745,7 +2745,7 @@
         const k = tr.d.findIndex((q) => q.v - v0 >= HEAD_T);
         const tk = frames[tr.d[k].i].t;
         // (Y debe aparecer arriba, en la puerta: una cabeza que aparece al borde de abajo es alguien ya contado o el agente.)
-        if (!fast || v0 <= HEAD_Y0 && tr.d.slice(0, k + 1).some((q) => tk - frames[q.i].t <= HEAD_FAST && tr.d[k].v - q.v >= HEAD_T * 0.8)) ins.push(tr.d[k].i);
+        if (!fast || v0 <= HEAD_Y0 && tr.d.slice(0, k + 1).some((q) => tk - frames[q.i].t <= HEAD_FAST && tr.d[k].v - q.v >= HEAD_T * 0.8)) ins.push({ i: tr.d[k].i, box: tr.d[k].box });
       }
       else if (v0 - Math.min(...vs) >= HEAD_T && v0 - last >= HEAD_T * 0.8) outs.push(tr.d.find((q) => v0 - q.v >= HEAD_T).i);
     }
@@ -2764,7 +2764,7 @@
     if (!frames || run !== S.run) return null;
     if (window.__cofDebug) (window.__cofDebug.heads = window.__cofDebug.heads || []).push({ cam: c.label, times: frames.map((f) => f.t), frames: frames.map((f) => f.dets.map((d) => d.box.map((v) => +v.toFixed(4)))) }); // solo para pruebas
     const ev = headEvents(frames, fast);
-    return { ins: ev.ins.map((i) => frames[i].t), outs: ev.outs.map((i) => frames[i].t), frames: frames.length };
+    return { ins: ev.ins.map((e) => frames[e.i].t), inEv: ev.ins.map((e) => ({ t: frames[e.i].t, box: e.box })), outs: ev.outs.map((i) => frames[i].t), frames: frames.length };
   }
   // Fotos de evidencia de una puerta (copias propias, porque el lector reutiliza sus imágenes).
   async function framesAt(c, ts) {
@@ -3437,6 +3437,8 @@
     // Subidas y bajadas solo con el bus detenido (las puertas cerradas en marcha): lo que cruza la línea justo antes
     // de llegar o después de partir es gente moviéndose adentro. En blanco y negro tampoco hay pagos en marcha.
     if (kind !== 'pay' && !S.stops.some((x) => tr >= x.t0 - 1 && tr <= x.t1 + 1) && stopAtRef(tr)) return null;
+    // Las cabezas en vivo solo suman con el bus detenido en un paradero ya conocido (en marcha la gente se mueve adentro).
+    if (kind === 'hin' && !S.stops.some((x) => tr >= x.t0 - 1 && tr <= x.t1 + 1)) return null;
     const s = kind === 'pay' ? (c.mono ? stopAtRef(tr) : stopForPay(tr)) : stopAtRef(tr);
     if (!s) {
       if (tr < startT() - 0.01) return null;
@@ -3831,7 +3833,7 @@
     const parts = [{ text: '' }];
     if (S.staffRef) parts.push({ text: 'IMAGEN DE REFERENCIA (no es de este paradero): agentes de la empresa.' }, { inlineData: { mimeType: 'image/jpeg', data: S.staffRef.split(',')[1] } });
     boarders.forEach((b, k) => {
-      parts.push({ text: `PERSONA ${k + 1} (#${b.tr.id}, ${TIPOS[b.c.tipo] || 'puerta'}${hasValidator(b.c) ? ', con validador' : ', sin validador'}): marcada con recuadro celeste y su número #${b.tr.id}; la línea naranja es el umbral de la puerta. ${b.near ? 'El contador la vio llegar a la puerta pero no alcanzó a ver si cruzó: revisa si sube.' : 'El contador la vio cruzar la línea hacia adentro.'} Fotos en orden de tiempo${b.where ? ` (según el contador, sus pies están: ${b.where.join(' → ')})` : ''}:` });
+      parts.push({ text: `PERSONA ${k + 1} (#${b.tr.id}, ${TIPOS[b.c.tipo] || 'puerta'}${hasValidator(b.c) ? ', con validador' : ', sin validador'}): ${b.cabeza ? `su CABEZA está marcada con recuadro celeste y el número #${b.tr.id} en la foto del medio (las otras fotos son 1,5 s antes y después). El contador vio esa cabeza entrar desde la puerta: revisa si es un pasajero que SUBE o un agente/personal (que nunca se cuenta).` : `marcada con recuadro celeste y su número #${b.tr.id}; la línea naranja es el umbral de la puerta.`} ${b.cabeza ? '' : b.near ? 'El contador la vio llegar a la puerta pero no alcanzó a ver si cruzó: revisa si sube.' : 'El contador la vio cruzar la línea hacia adentro.'} Fotos en orden de tiempo${b.where ? ` (según el contador, sus pies están: ${b.where.join(' → ')})` : ''}:` });
       for (const v of b.views) parts.push(img(v, 0.8));
     });
     const valFrames = [];
@@ -3960,16 +3962,57 @@
     // Pagos según la luz verde del validador: cada verde se asigna a quien subió por la puerta delantera más cerca
     // de ese momento; los verdes que sobran, a quienes subieron por otra puerta y fueron a validar. Quien sube
     // por la puerta del validador sin un verde queda como posible evasión (con su foto para revisar).
+    // Subidas por cabeza que el detector de personas no siguió (cámara infrarroja, aglomeración): cada una se marca en
+    // sus fotos y pasa por la misma revisión de la IA que las demás (si subió, si es agente, si validó). Así no quedan
+    // todas como «dudosas» y el agente que baja y vuelve a subir no se cuenta.
+    const headB = [];
+    for (const x of lineRes) {
+      if (!x.heads || !x.heads.inEv) continue;
+      const mine = boarders.filter((b) => b.c === x.c);
+      // Solo con una diferencia clara (3 o más) respecto de quienes cruzaron la línea: diferencias chicas son ruido de una
+      // puerta concurrida. En la cámara infrarroja de la puerta delantera basta con 2: ahí el detector ve a muy pocos.
+      const missing = x.heads.ins.length - mine.filter((b) => !b.near).length;
+      if (missing < (x.ir && x.heads.plain ? 2 : 3)) continue;
+      // Sin repetir a nadie: una cabeza cerca (en el tiempo) de alguien que cruzó la línea es esa persona. (Con quienes
+      // solo llegaron a la puerta se compara al final, si quedaron contados.)
+      // Uno a uno: cada persona que cruzó descarta solo la cabeza más cercana (en un grupo suben varios en un segundo).
+      const taken = new Set();
+      for (const b of mine.filter((q) => !q.near)) {
+        let best = -1, bd = 1.5;
+        x.heads.inEv.forEach((e, i) => { if (!taken.has(i) && Math.abs(e.t - b.t) < bd) { bd = Math.abs(e.t - b.t); best = i; } });
+        if (best >= 0) taken.add(best);
+      }
+      const free = x.heads.inEv.filter((_, i) => !taken.has(i));
+      for (const e of free.slice(0, missing)) {
+        const id = 900 + headB.length + 1;
+        const views = [];
+        for (const dt of [-1.5, 0, 1.5]) {
+          const f = await frameOf(x.c, Math.max(0, e.t + dt), 640);
+          if (run !== S.run) return false;
+          if (!f) continue;
+          const g = f.getContext('2d'), [y0, x0, y1, x1] = e.box;
+          if (dt === 0) {
+            g.lineWidth = 3; g.strokeStyle = '#00e5ff';
+            g.strokeRect(x0 * f.width - 6, y0 * f.height - 6, (x1 - x0) * f.width + 12, (y1 - y0) * f.height + 12);
+            g.font = 'bold 15px sans-serif'; g.fillStyle = '#00e5ff'; g.fillText(`#${id}`, x0 * f.width, y0 * f.height - 10);
+          }
+          views.push(f);
+        }
+        if (!views.length) continue;
+        headB.push({ c: x.c, t: e.t, tr: { id }, cabeza: true, review: !!x.heads.plain, box: e.box, views, thumb: thumbOf(views[Math.min(1, views.length - 1)]), near: false, d: 0, fromOut: true });
+      }
+    }
     const valDoors = lineRes.filter((x) => hasValidator(x.c));
     // Solo un validador confirmado por el fiscalizador decide quién pagó; el que ubica el programa es una sugerencia.
     const valKnown = valDoors.some((x) => x.c.valz && !x.c.valz.auto);
     const greens = valDoors.flatMap((x) => x.greens || []).map((g) => ({ t: g.t, used: false })).sort((a, b) => a.t - b.t);
     const payOf = new Map();
     if (valKnown) {
-      const ordered = [...boarders].sort((a, b) => a.t - b.t);
+      const ordered = [...boarders, ...headB].sort((a, b) => a.t - b.t);
       const front = ordered.filter((b) => hasValidator(b.c));
-      // Primero a quienes cruzaron la línea; los verdes que sobran, a quienes solo se vio llegar a la puerta.
-      for (const pool of [front.filter((b) => !b.near), front.filter((b) => b.near)]) {
+      // Primero a quienes cruzaron la línea, luego a los contados por cabeza; los verdes que sobran, a quienes solo
+      // se vio llegar a la puerta.
+      for (const pool of [front.filter((b) => !b.near && !b.cabeza), front.filter((b) => b.cabeza), front.filter((b) => b.near)]) {
         for (const g of greens.filter((x) => !x.used)) {
           let pick = null;
           for (const b of pool) if (!payOf.has(b) && Math.abs(b.t - g.t) <= 8 && (!pick || Math.abs(b.t - g.t) < Math.abs(pick.t - g.t))) pick = b;
@@ -3986,7 +4029,8 @@
     // Revisión con IA (Qwen) solo de quienes cruzaron la línea y NO tienen un pago medido: son los que quedarían como
     // evasión. La IA mira las fotos y dice si de verdad subió, si es personal y si se ve la luz verde. A quienes solo
     // llegaron a la puerta no se los manda (la IA tiende a «confirmarlos» y sumaba gente que no subió).
-    const checkList = crossed.filter((b) => payOf.get(b) !== true);
+    // (Las cabezas de una aglomeración o zona paga no se revisan: ahí la IA descartaba a gente que sí subía.)
+    const checkList = [...crossed, ...headB.filter((b) => b.review)].filter((b) => payOf.get(b) !== true);
     const checked = new Set(checkList);
     let ver = null;
     if (checkList.length && S.iaRev) {
@@ -4037,8 +4081,12 @@
     });
     // Personas contadas por línea: cada una con su foto anotada (línea, recuadro y número).
     const vp = ver && Array.isArray(ver.personas) ? ver.personas : [];
-    boarders.forEach((b, k) => {
+    const nearKept = [];
+    [...boarders, ...headB].forEach((b, k) => {
       const nOf = (x, f) => Math.round(num(x && x[f]) || 0);
+      // Cabeza que coincide con alguien que llegó a la puerta y ya quedó contado: es la misma persona.
+      const twin = b.cabeza ? nearKept.findIndex((n) => n.c === b.c && Math.abs(n.t - b.t) < 3) : -1;
+      if (twin >= 0) { nearKept.splice(twin, 1); return; }
       const kk = checkList.indexOf(b);
       const q = !checked.has(b) ? {} : vp.find((x) => nOf(x, 'id') === b.tr.id) || vp.find((x) => nOf(x, 'n') === kk + 1 && !(x.id != null && nOf(x, 'id') !== b.tr.id)) || vp.find((x) => x.id == null && nOf(x, 'n') === b.tr.id) || (vp.length === checkList.length ? vp[kk] : null) || {};
       const val = hasValidator(b.c);
@@ -4068,8 +4116,9 @@
       if (pay === false && ver && (verde || v === true)) { pay = verde ? true : null; }
       if (pay !== null) v = pay;
       else if (ver && v === false && !verde && !truthy(q.sin_validar_visto)) v = null;
-      const how = b.onboard ? 'ya iba a bordo antes del paradero (agente, o alguien que bajó y volvió a subir): no se cuenta' : noSube ? 'cruzó la línea, pero la IA revisó y NO subió (ya estaba adentro o se bajó)' : b.near ? `llegó desde afuera hasta la puerta${pay ? ' y pagó' : sube ? ' y la IA vio que sube' : ''}` : 'cruzó la línea';
+      const how = b.onboard ? 'ya iba a bordo antes del paradero (agente, o alguien que bajó y volvió a subir): no se cuenta' : b.cabeza ? (noSube ? 'contado por su cabeza, pero la IA revisó y NO subió' : 'contado por su cabeza (el detector de personas no lo siguió entero)') : noSube ? 'cruzó la línea, pero la IA revisó y NO subió (ya estaba adentro o se bajó)' : b.near ? `llegó desde afuera hasta la puerta${pay ? ' y pagó' : sube ? ' y la IA vio que sube' : ''}` : 'cruzó la línea';
       const light = pay === true ? (b.c.mono ? ' · destello en el validador (cámara en blanco y negro)' : ' · luz verde en el validador') : pay === false ? ' · NO se vio luz verde en el validador' : monoNo ? ' · cámara en blanco y negro: no se vio el destello del validador, revisar' : '';
+      if (b.near) nearKept.push(b);
       allMeta.push({ cam: b.c.key, t: b.t, thumb: b.thumb });
       personas.push({
         t: b.t, cam: b.c.key, desc: `${desc} · ${how}${light} (#${b.tr.id})`,
@@ -4080,7 +4129,7 @@
         // El recuadro se pinta del color del resultado (rojo evade, verde paga, amarillo dudoso, azul zona paga).
         img: allMeta.length - 1, box: b.box || null, linea: true,
         // Sin validador confirmado no se sabe si pagó (ni adelante ni atrás): queda para revisar.
-        revisar: monoNo || (pay === null && (checked.has(b) ? false : !valKnown)),
+        revisar: b.cabeza && !b.review ? !zpOf(s) : monoNo || (pay === null && (checked.has(b) ? false : !valKnown)),
         res: v === true ? 'paga' : v === false ? 'evade' : val ? 'dudoso' : 'evade',
       });
     });
@@ -4127,29 +4176,6 @@
           t: g.t, cam: vc.key, desc: 'pasajero que pagó (luz verde en el validador); el detector no alcanzó a seguirlo',
           luz: 'verde', valida: true, sinValidador: false, fueraZona: false, desdeAfuera: true, staff: false,
           img: allMeta.length - 1, box: null, linea: true, revisar: false, res: 'paga',
-        });
-      }
-    }
-    // Aglomeración: si entran más cabezas que las personas contadas por esa puerta, las que faltan se agregan con la
-    // foto de ese momento (en el apretón el detector de personas no alcanza a seguirlas a todas).
-    for (const x of lineRes) {
-      if (!x.heads) continue;
-      const mine = personas.filter((p) => p.cam === x.c.key && !p.staff);
-      // Solo con una diferencia clara (3 o más): diferencias chicas son ruido de una puerta concurrida, no aglomeración.
-      // En la cámara infrarroja de la puerta delantera basta con 2: ahí el detector de personas ve a muy pocos.
-      const missing = x.heads.ins.length - mine.length;
-      if (missing < (x.ir && x.heads.plain ? 2 : 3)) continue;
-      const free = x.heads.ins.filter((t) => !mine.some((p) => Math.abs(p.t - t) < 0.8));
-      const pick = [...free, ...x.heads.ins.filter((t) => !free.includes(t))].slice(0, missing);
-      for (const t of pick) {
-        const f = await frameOf(x.c, t, 640);
-        if (run !== S.run) return false;
-        if (!f) continue;
-        allMeta.push({ cam: x.c.key, t, thumb: thumbOf(f) });
-        personas.push({
-          t, cam: x.c.key, desc: x.heads.plain ? 'pasajero contado por su cabeza (el detector de personas no alcanzó a seguirlo)' : 'pasajero contado por su cabeza en la aglomeración (el detector de personas no alcanzó a seguirlo)',
-          luz: null, valida: null, sinValidador: !hasValidator(x.c), fueraZona: false, desdeAfuera: true, staff: false,
-          img: allMeta.length - 1, box: null, linea: true, revisar: !zpOf(s), res: hasValidator(x.c) ? 'dudoso' : 'evade', cabeza: true,
         });
       }
     }
