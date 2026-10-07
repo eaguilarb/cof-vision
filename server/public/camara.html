@@ -456,7 +456,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.07-1';
+  const VERSION = '2026.10.07-2';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -649,7 +649,7 @@
     if (run !== S.run) return;
     S.cams.forEach((c, i) => { c.bad = !ok[i]; c.dur = c.video.duration || c.probe.duration || 0; });
     const bad = S.cams.filter((c) => c.bad);
-    if (bad.length === S.cams.length) return status('Este navegador no puede reproducir esos videos. Prueba con archivos .mp4 o ábrelos en Chrome.', null, true);
+    if (bad.length === S.cams.length) return status(S.cams.some((c) => c.remote) ? 'Drive entregó los videos pero el navegador no pudo abrirlos. Usa Google Chrome y vuelve a intentar; si sigue, descarga el video y elígelo con «Elegir videos».' : 'Este navegador no puede reproducir esos videos. Prueba con archivos .mp4 o ábrelos en Chrome.', null, true);
     if (bad.length) warn += `No se pudo abrir ${bad.map((c) => c.name).join(', ')}. `;
     S.main = S.cams.findIndex((c) => !c.bad);
     pickRef();
@@ -699,11 +699,28 @@
     const close = () => bg.remove();
     no.onclick = close;
     bg.onclick = (e) => { if (e.target === bg) close(); };
-    ok.onclick = () => {
+    ok.onclick = async () => {
       if (/\/folders\//.test(ta.value) && !driveItems(ta.value).length) { msg.textContent = 'Ese es el enlace de una carpeta: Drive no deja leerla desde la página. Abre la carpeta, selecciona los videos y copia sus enlaces (clic derecho → Compartir → Copiar enlaces).'; return; }
       const items = driveItems(ta.value);
-      if (!items.length) { msg.textContent = 'No encontré enlaces de videos de Drive en lo que pegaste.'; return; }
+      if (!items.length) { msg.textContent = 'No encontré enlaces de videos de Drive en lo que pegaste. Cada enlace debe verse así: https://drive.google.com/file/d/…'; return; }
       store.set('cofsimple:links', ta.value);
+      // Antes de abrirlos se revisa cada enlace (unos pocos bytes): así se dice qué pasa con cada uno en vez de fallar todo.
+      ok.disabled = true;
+      msg.textContent = `Revisando ${items.length} enlace${items.length === 1 ? '' : 's'}…`;
+      const bad = [];
+      await Promise.all(items.map(async (it, k) => {
+        try {
+          const r = await fetch(it.remote, { headers: { Range: 'bytes=0-15' }, signal: AbortSignal.timeout(20000) });
+          const ct = r.headers.get('content-type') || '';
+          if (!r.ok) bad.push(`video ${k + 1}: Drive respondió ${r.status}${r.status === 403 || r.status === 404 ? ' (no está compartido con «cualquier persona con el enlace», o el enlace está mal copiado)' : r.status === 429 ? ' (Drive lo frenó por muchas descargas: espera un rato)' : ''}`);
+          else if (/text\/html/.test(ct)) bad.push(`video ${k + 1}: Drive devolvió una página en vez del video (no está compartido con «cualquier persona con el enlace», o Drive pide iniciar sesión)`);
+          else if (!/video|octet-stream|mp4|quicktime|webm/.test(ct)) bad.push(`video ${k + 1}: no es un video (${ct || 'tipo desconocido'})`);
+        } catch (e) {
+          bad.push(`video ${k + 1}: no se pudo conectar con Drive (${e.name === 'TimeoutError' ? 'no respondió' : 'bloqueado por el navegador o sin internet'})`);
+        }
+      }));
+      ok.disabled = false;
+      if (bad.length) { msg.textContent = `No se pudo abrir: ${bad.join(' · ')}.`; return; }
       close();
       pick(items);
     };
