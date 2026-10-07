@@ -79,6 +79,11 @@
   .cam-chip { flex: none; border: 1px solid #3a4652; background: #1b2530; color: #d6dee5; border-radius: 99px; padding: 5px 12px; font: 600 13px system-ui, sans-serif; cursor: pointer; white-space: nowrap; }
   .cam-chip small { font-weight: 400; color: #9fb0bf; margin-left: 4px; }
   .cam-chip.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .links-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 50; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .links-box { background: #fff; color: #1f2328; border-radius: 12px; padding: 16px; width: min(640px, 100%); display: flex; flex-direction: column; gap: 10px; }
+  .links-box textarea { width: 100%; font: 13px ui-monospace, monospace; border: 1px solid #d0d7de; border-radius: 8px; padding: 8px; resize: vertical; }
+  .links-msg { font-size: 13px; color: #57606a; }
+  .links-bar { display: flex; gap: 8px; justify-content: flex-end; }
   .cam-chip-wrap { flex: none; display: inline-flex; align-items: center; gap: 4px; }
   .cam-role { border: 1px solid #3a4652; background: #1b2530; color: #d6dee5; border-radius: 99px; padding: 4px 6px; font: 12px system-ui, sans-serif; cursor: pointer; }
   .cam-chip.on small { color: #4a3500; }
@@ -260,6 +265,7 @@
   <h1>COF Vision <small class="ver" id="ver"></small></h1>
   <span class="file" id="fileName">Elige los videos para empezar</span>
   <span class="spacer"></span>
+  <button class="btn ghost" id="btnLinks" type="button" title="Ver los videos directo desde Google Drive, sin descargarlos">🔗 Enlaces de Drive</button>
   <button class="btn" id="btnPick" type="button">Elegir videos</button>
   <a class="btn ghost small" id="btnOut" href="salir" hidden>Salir</a>
   <input type="file" id="fileInput" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v" multiple hidden>
@@ -450,7 +456,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.06-5';
+  const VERSION = '2026.10.07-1';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -564,7 +570,11 @@
   function makeVideo(url, hiddenProbe) {
     const v = document.createElement('video');
     v.playsInline = true;
-    v.preload = hiddenProbe ? 'auto' : 'metadata';
+    // Videos de Drive: se leen por partes desde internet (sin descargar el archivo entero) y con permiso para
+    // analizar sus fotos (crossOrigin).
+    const remote = /^https?:/.test(url);
+    if (remote) v.crossOrigin = 'anonymous';
+    v.preload = hiddenProbe && !remote ? 'auto' : 'metadata';
     v.src = url;
     if (hiddenProbe) {
       v.muted = true;
@@ -588,23 +598,23 @@
   }
 
   async function pick(list) {
-    let files = [...list].filter((f) => /^video\//.test(f.type) || /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(f.name));
+    let files = [...list].filter((f) => f.remote || /^video\//.test(f.type) || /\.(mp4|mov|avi|mkv|webm|m4v)$/i.test(f.name));
     if (!files.length) return;
     let warn = '';
     if (files.length > MAX_CAMS) { warn = `Elegiste ${files.length} videos: se usan los primeros ${MAX_CAMS}. `; files = files.slice(0, MAX_CAMS); }
     files.sort((a, b) => a.name.localeCompare(b.name, 'es', { numeric: true }));
     S.run++;
     const run = S.run;
-    for (const c of S.cams) { c.video.remove(); c.probe.remove(); URL.revokeObjectURL(c.url); }
+    for (const c of S.cams) { c.video.remove(); c.probe.remove(); if (/^blob:/.test(c.url)) URL.revokeObjectURL(c.url); }
     wall.querySelectorAll('.tile').forEach((t) => t.remove());
     $('#dropHint').hidden = true;
-    S.id = `cofsimple:v3:${files.map((f) => `${f.name}|${f.size}`).join('/')}`;
+    S.id = `cofsimple:v3:${files.map((f) => `${f.name}|${f.remote ? f.id : f.size}`).join('/')}`;
     const saved = store.get(S.id, null) || {};
     const cfg = saved.cams || {};
     S.cams = files.map((f, i) => {
-      const url = URL.createObjectURL(f);
-      const key = `${f.name}|${f.size}`;
-      const c = { key, name: f.name, label: chLabel(f.name, i), url, video: makeVideo(url, false), probe: makeVideo(url, true), off: 0, tipo: null, validador: null, desc: '', coords: null, manual: false, dur: 0, bad: false, ...(cfg[key] || {}), file: f };
+      const url = f.remote ? f.remote : URL.createObjectURL(f);
+      const key = `${f.name}|${f.remote ? f.id : f.size}`;
+      const c = { key, name: f.name, label: chLabel(f.name, i), url, video: makeVideo(url, false), probe: makeVideo(url, true), off: 0, tipo: null, validador: null, desc: '', coords: null, manual: false, dur: 0, bad: false, ...(cfg[key] || {}), file: f.remote ? null : f, remote: f.remote || null };
       // Líneas automáticas de la versión anterior (a veces quedaban arriba de la imagen): se vuelven a calcular.
       if (c.line && c.line.auto && c.line.v !== AUTO_V) c.line = null;
       const tile = el('div', 'tile');
@@ -660,6 +670,50 @@
     analyze(run);
   }
   $('#btnPick').onclick = () => $('#fileInput').click();
+  // Videos desde Google Drive: se pegan los enlaces de los videos (compartidos con «cualquier persona con el enlace»)
+  // y se ven y analizan directo desde Drive, sin descargarlos. Drive no deja leer una carpeta desde la página: hay que
+  // pegar el enlace de cada video (en Drive se pueden seleccionar todos y «Copiar enlaces»).
+  function driveItems(text) {
+    const out = [];
+    for (const line of String(text || '').split(/\s+(?=https?:)|\n+/)) {
+      for (const m of line.matchAll(/(?:\/d\/|[?&]id=)([-\w]{20,})/g)) {
+        if (out.some((x) => x.id === m[1])) continue;
+        const ch = line.match(/\bCH\s*0?(\d{1,2})\b/i);
+        out.push({ remote: `https://drive.usercontent.google.com/download?id=${m[1]}&export=download&confirm=t`, id: m[1], name: ch ? `CH${+ch[1]}` : `Video ${out.length + 1}`, size: 0 });
+      }
+    }
+    return out;
+  }
+  $('#btnLinks').onclick = () => {
+    const bg = el('div', 'links-bg');
+    const box = el('div', 'links-box');
+    const ta = el('textarea');
+    ta.rows = 6;
+    ta.placeholder = 'Pega aquí los enlaces de los videos de Google Drive (uno por línea).\nOpcional: escribe el canal antes del enlace, por ejemplo: CH4 https://drive.google.com/file/d/…';
+    ta.value = store.get('cofsimple:links', '') || '';
+    const msg = el('div', 'links-msg', 'Cada video debe estar compartido como «Cualquier persona con el enlace». En Drive: abre la carpeta, selecciona todos los videos (Ctrl/Cmd + A), clic derecho → Compartir → Copiar enlaces, y pégalos aquí. El enlace de la carpeta no sirve: Drive no deja leer su contenido desde la página.');
+    const ok = el('button', 'btn', 'Ver videos');
+    ok.type = 'button';
+    const no = el('button', 'btn ghost', 'Cancelar');
+    no.type = 'button';
+    const close = () => bg.remove();
+    no.onclick = close;
+    bg.onclick = (e) => { if (e.target === bg) close(); };
+    ok.onclick = () => {
+      if (/\/folders\//.test(ta.value) && !driveItems(ta.value).length) { msg.textContent = 'Ese es el enlace de una carpeta: Drive no deja leerla desde la página. Abre la carpeta, selecciona los videos y copia sus enlaces (clic derecho → Compartir → Copiar enlaces).'; return; }
+      const items = driveItems(ta.value);
+      if (!items.length) { msg.textContent = 'No encontré enlaces de videos de Drive en lo que pegaste.'; return; }
+      store.set('cofsimple:links', ta.value);
+      close();
+      pick(items);
+    };
+    const bar = el('div', 'links-bar');
+    bar.append(no, ok);
+    box.append(el('b', null, 'Videos desde Google Drive'), ta, msg, bar);
+    bg.append(box);
+    document.body.append(bg);
+    ta.focus();
+  };
   $('#fileInput').onchange = (e) => { pick(e.target.files); e.target.value = ''; };
   wall.addEventListener('dragover', (e) => { e.preventDefault(); wall.classList.add('over'); });
   wall.addEventListener('dragleave', () => wall.classList.remove('over'));
