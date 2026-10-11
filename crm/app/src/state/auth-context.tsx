@@ -1,4 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useQueryClient } from '@tanstack/react-query';
+import { router } from 'expo-router';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   api,
@@ -7,6 +9,7 @@ import {
   loadStoredModule,
   setAuthToken,
   setModule,
+  setUnauthorizedHandler,
   type AppModule,
 } from '@/api/client';
 import type { AuthUser } from '@/api/types';
@@ -34,6 +37,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [module, setModuleState] = useState<AppModule | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setAuthToken(null);
+      setUser(null);
+      queryClient.clear();
+      AsyncStorage.removeItem(STORAGE_KEY).catch(() => {});
+      router.replace('/login');
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [queryClient]);
 
   useEffect(() => {
     (async () => {
@@ -98,7 +113,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [user, isLoading, module],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  // Las pantallas no se muestran hasta recuperar la sesión guardada: si
+  // no, al abrir o recargar directo una página (ej. /case/new) las
+  // consultas salían sin token y la pantalla quedaba vacía.
+  return <AuthContext.Provider value={value}>{isLoading ? null : children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {

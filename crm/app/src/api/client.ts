@@ -73,6 +73,33 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+/**
+ * Sesión vencida o inválida (el token dura 7 días): antes la app seguía
+ * "logeada" pero cada pantalla quedaba vacía sin explicación (sin
+ * categorías, "Sin resultados" en patentes). Ahora se cierra la sesión y
+ * se vuelve al login — ver AuthProvider.
+ */
+let onUnauthorized: (() => void) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  onUnauthorized = handler;
+}
+
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (
+      axios.isAxiosError(error) &&
+      error.response?.status === 401 &&
+      authToken &&
+      !error.config?.url?.includes('/auth/login')
+    ) {
+      onUnauthorized?.();
+    }
+    return Promise.reject(error);
+  },
+);
+
 export function apiErrorMessage(error: unknown, fallback = 'Ocurrió un error inesperado'): string {
   if (axios.isAxiosError(error)) {
     return error.response?.data?.error ?? error.message ?? fallback;

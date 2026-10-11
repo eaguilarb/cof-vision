@@ -29,7 +29,13 @@ function toEquipment(bus: IntranetBus): Equipment {
 equipmentRouter.get('/', async (req, res) => {
   const db = loadDb();
   const module = req.query.module === 'glass' || req.query.module === 'tech' ? req.query.module : undefined;
-  const nonOperational = await getNonOperationalEquipmentIds(db, module);
+  // Si la intranet no responde los casos, igual se muestra la flota (sin
+  // marcar buses fuera de servicio). Antes el error quedaba sin respuesta y
+  // el buscador de patentes se quedaba "cargando" para siempre.
+  const nonOperational = await getNonOperationalEquipmentIds(db, module).catch((err) => {
+    console.error('No se pudo calcular el estado operativo de la flota:', err);
+    return new Set<string>();
+  });
   const allowedTerminals = allowedTerminalsFor(db, req.auth);
 
   if (isIntranetEnabled()) {

@@ -26,7 +26,12 @@ export function isIntranetEnabled(): boolean {
 }
 
 let sessionCookie: string | null = null;
+let sessionStartedAt = 0;
 let loginPromise: Promise<string> | null = null;
+
+// La sesión de la intranet dura 12 horas (src/lib/session.ts de la
+// intranet). Se renueva antes, para no llegar a usar una vencida.
+const SESSION_MAX_AGE_MS = 11 * 60 * 60 * 1000;
 
 async function login(): Promise<string> {
   const res = await fetch(`${BASE_URL}/api/login`, {
@@ -46,13 +51,15 @@ async function login(): Promise<string> {
 }
 
 async function getSessionCookie(): Promise<string> {
-  if (sessionCookie) return sessionCookie;
+  if (sessionCookie && Date.now() - sessionStartedAt < SESSION_MAX_AGE_MS) return sessionCookie;
+  sessionCookie = null;
   if (!loginPromise) {
     loginPromise = login().finally(() => {
       loginPromise = null;
     });
   }
   sessionCookie = await loginPromise;
+  sessionStartedAt = Date.now();
   return sessionCookie;
 }
 
@@ -62,7 +69,10 @@ async function intranetFetch(path: string, init: RequestInit = {}, allowRetry = 
     ...init,
     headers: { ...(init.headers || {}), Cookie: cookie },
   });
-  if (res.status === 401 && allowRetry) {
+  // Con la sesión vencida, unos endpoints responden 401 y otros 403
+  // (/api/flota): antes solo se reintentaba con 401, y al pasar 12 horas
+  // la flota (buscador de patentes) dejaba de cargar hasta reiniciar.
+  if ((res.status === 401 || res.status === 403) && allowRetry) {
     sessionCookie = null;
     return intranetFetch(path, init, false);
   }

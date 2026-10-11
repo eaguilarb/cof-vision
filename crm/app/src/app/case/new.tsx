@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { useRouter } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
 import { useConfig, useCreateCase, useEquipment, useTechnicians, useUploadCasePhoto } from '@/api/hooks';
 import { apiErrorMessage } from '@/api/client';
 import { PRIORITY_LABELS, type CasePriority } from '@/api/types';
@@ -29,7 +29,18 @@ interface PendingPhoto {
   mimeType: string;
 }
 
+/**
+ * Sin sesión (página abierta o recargada directo, o sesión cerrada) se va
+ * al login en vez de mostrar la pantalla vacía.
+ */
 export default function NewCaseScreen() {
+  const { user, module } = useAuth();
+  if (!user) return <Redirect href="/login" />;
+  if (!module) return <Redirect href="/module-select" />;
+  return <NewCaseForm />;
+}
+
+function NewCaseForm() {
   const router = useRouter();
   const { module } = useAuth();
   const configQuery = useConfig();

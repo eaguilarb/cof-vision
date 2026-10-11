@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Redirect, useLocalSearchParams, useRouter } from 'expo-router';
 import {
   useAddCaseNote,
   useAssignCase,
@@ -37,7 +37,18 @@ import { AuthImage } from '@/components/auth-image';
 const STATUSES = Object.keys(STATUS_LABELS) as CaseStatus[];
 const PRIORITIES = Object.keys(PRIORITY_LABELS) as CasePriority[];
 
+/**
+ * Sin sesión (página abierta o recargada directo, o sesión cerrada) se va
+ * al login en vez de mostrar la pantalla vacía.
+ */
 export default function CaseDetailScreen() {
+  const { user, module } = useAuth();
+  if (!user) return <Redirect href="/login" />;
+  if (!module) return <Redirect href="/module-select" />;
+  return <CaseDetail />;
+}
+
+function CaseDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { user, module } = useAuth();
