@@ -1,0 +1,4 @@
+{
+  "cleanUrls": true,
+  "rewrites": [{ "source": "/case/:id", "destination": "/case/[id].html" }]
+}
