@@ -342,7 +342,9 @@
       <label>Período <input id="mPer" placeholder="AM" size="4"></label>
     </div>
     <div class="exports">
-      <button class="btn small" id="btnXlsx" type="button">Informe Excel</button>
+      <button class="btn small" id="btnFull" type="button" title="Excel con todas las hojas (empresa, detalle de paradas, personas, minuto a minuto, paraderos no atendidos) y PDF con las fotos de cada paradero">📋 Informe completo (Excel + PDF)</button>
+      <button class="btn small ghost" id="btnStreet" type="button" title="Mira la cámara frontal para ver los paraderos con gente esperando donde el bus no se detiene">Paraderos con gente esperando</button>
+      <button class="btn small ghost" id="btnXlsx" type="button">Informe Excel</button>
       <button class="btn small ghost" id="btnPdf" type="button">Informe PDF</button>
       <button class="btn small ghost" id="btnDayAdd" type="button">+ Agregar al informe del día</button>
       <button class="btn small ghost" id="btnCsvPeople" type="button">Detalle por persona</button>
@@ -456,7 +458,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.07-2';
+  const VERSION = '2026.10.17-1';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -520,7 +522,7 @@
     key: SERVER ? 'servidor' : EMBED_KEY.startsWith('__') ? store.get('cofsimple:key', '') : EMBED_KEY,
     cams: [], main: 0, ref: 0, grid: false,
     id: null, run: 0, step: 4, D: 0,
-    moments: [], stops: [], track: [], cur: -1, curStop: null, open: null, addr: {}, meta: {},
+    moments: [], stops: [], track: [], cur: -1, curStop: null, open: null, addr: {}, meta: {}, esperan: null,
     zpPlaces: store.get('cofsimple:zp', []),
     // Control del análisis: rango a mirar, hasta dónde va, y si el video se reproduce solo.
     range: null, frontier: 0, running: false, paused: false,
@@ -548,7 +550,7 @@
     store.set('cofsimple:ai', 'haiku');
   }
   const save = () => store.set(S.id, {
-    v: 3, step: S.step, moments: S.moments, stops: S.stops, range: S.range, startManual: S.startManual, meta: S.meta,
+    v: 3, step: S.step, moments: S.moments, stops: S.stops, range: S.range, startManual: S.startManual, meta: S.meta, esperan: S.esperan,
     cams: Object.fromEntries(S.cams.map((c) => [c.key, { tipo: c.tipo, validador: c.validador, off: c.off, desc: c.desc, coords: c.coords, manual: c.manual, line: c.line || null, valz: c.valz || null, excl: c.excl || null }])),
   });
   const mainCam = () => S.cams[S.main] || null;
@@ -638,6 +640,7 @@
     });
     S.main = 0;
     S.moments = Array.isArray(saved.moments) ? saved.moments : [];
+    S.esperan = Array.isArray(saved.esperan) ? saved.esperan : null;
     S.stops = (Array.isArray(saved.stops) ? saved.stops : []).map((s) => (s.estado === 'listo' && s.v !== COUNT_V ? { ...s, estado: 'pendiente' } : s));
     S.provs = [];
     vivoPend.length = 0;
@@ -4641,7 +4644,9 @@
     }
     return bd <= maxKm ? best : null;
   }
-  const parOf = (s) => (s.lat != null ? nearestParadero(s.lat, s.lon, 0.1) : null);
+  const parOf = (s) => (s.lat != null ? nearestParadero(s.lat, s.lon, 0.1) : signParOf(s));
+  // Sin GPS en la pantalla: el paradero se reconoce por el letrero que lee la cámara frontal.
+  const signParOf = (s) => (s && s.signPar ? PAR.list.find((p) => p.c === s.signPar) || null : null);
   // Paraderos del servicio por los que el bus pasó (a menos de 60 m del recorrido) sin detenerse en ellos.
   setTimeout(() => { if (window.__cofDebug) window.__cofDebug.paraderos = () => ({ list: PAR.list.length, track: S.track.length, passed: passedParaderos().map((p) => p.par.c), stopped: S.stops.map((x) => { const p = parOf(x); return p ? p.c : null; }), near: S.track.length ? PAR.list.map((p) => [p.c, Math.round(1000 * Math.min(...S.track.map((q) => distKm(p, q))))]).filter((x) => x[1] < 400) : [] }); }, 0); // solo para pruebas
   function passedParaderos() {
@@ -5431,20 +5436,22 @@
       agg.set(key, a);
     };
     for (const s of done) {
-      const p = s.lat != null ? nearestParadero(s.lat, s.lon, 0.25) : null;
+      const p = s.lat != null ? nearestParadero(s.lat, s.lon, 0.25) : signParOf(s);
       if (p) add(p, s);
       else if (counts(s).suben) extra.push(s);
     }
     // Paraderos que quedaron dentro del tramo analizado (entre el primero y el último por donde pasó el bus).
     const seen = S.moments.filter((m) => m.lat != null && m.t >= meta.from - S.step && m.t <= meta.to + S.step)
-      .map((m) => nearestParadero(m.lat, m.lon, 0.15)).filter(Boolean).map((p) => p.o);
+      .map((m) => nearestParadero(m.lat, m.lon, 0.15)).filter(Boolean).map((p) => p.o)
+      .concat(done.map(signParOf).filter(Boolean).map((p) => p.o), (S.esperan || []).map((e) => e.par).filter(Boolean).map((c) => (PAR.list.find((p) => p.c === c) || {}).o).filter(Boolean));
     const lo = seen.length ? Math.min(...seen) : null;
     const hi = seen.length ? Math.max(...seen) : null;
     const rows = list.map((p) => {
       const a = agg.get(p) || { pagan: 0, evaden: 0, dudosos: 0, zp: false };
       const zp = a.zp || p.zp === true || (!!p.lat && S.zpPlaces.some((z) => distKm(z, p) < 0.08));
       const covered = lo != null && p.o >= lo && p.o <= hi;
-      const obs = [zp ? 'ZP' : '', a.dudosos ? `${a.dudosos} dudoso${a.dudosos === 1 ? '' : 's'}` : '', covered ? '' : 'No analizado'].filter(Boolean).join(' · ');
+      const na = (S.esperan || []).filter((e) => e.par === p.c && !e.recoge);
+      const obs = [zp ? 'ZP' : '', a.dudosos ? `${a.dudosos} dudoso${a.dudosos === 1 ? '' : 's'}` : '', ...na.map((e) => `${hhmm(horaAt(e.t)) || mmss(e.t)} ${e.esperando} esperando, no los recoge`), covered || na.length ? '' : 'No analizado'].filter(Boolean).join(' · ');
       return { n: p.o, code: p.c, name: shortName(p.n), pagan: a.pagan, evaden: a.evaden, obs };
     });
     // Sin servicio elegido, o detenciones lejos de un paradero del servicio: se listan aparte.
@@ -5581,6 +5588,355 @@
     try { await downloadXlsx([rep], `${PAR.sel.svc || 'informe'}_EVASION_${rep.sheet.replace(/\s+/g, '_')}_${fileDate()}.xlsx`); } catch (e) { status(e.message, null, true); }
   };
   $('#btnPdf').onclick = () => { if (ready()) printReports([buildReport()]); };
+  // ---------------------------------------------------------------- revisión de la calle (cámara frontal)
+  // Como en la revisión a mano: se mira la cámara frontal cada 3 s para ver los paraderos por donde pasa el bus, cuánta
+  // gente espera y si alguien hace señas; el letrero da el nombre del paradero cuando la pantalla no trae GPS.
+  const normTxt = (t) => String(t || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  function matchSign(txt, list) {
+    list = list || PAR.list;
+    if (!txt || !list.length) return null;
+    const code = String(txt).toUpperCase().replace(/\s+/g, '').match(/P[A-J]\d{1,4}/);
+    if (code) { const p = list.find((x) => x.c === code[0]); if (p) return p; }
+    const words = new Set(normTxt(txt).split(' ').filter((w) => w.length >= 4 && !['avenida', 'parada', 'esquina'].includes(w)));
+    if (!words.size) return null;
+    let best = null, bs = 0;
+    for (const p of list) {
+      const pw = normTxt(p.n).split(' ').filter((w) => w.length >= 4 && !['avenida', 'parada', 'esquina'].includes(w));
+      if (!pw.length) continue;
+      const sc = pw.filter((w) => words.has(w)).length / pw.length;
+      if (sc > bs) { bs = sc; best = p; }
+    }
+    return bs >= 0.5 ? best : null;
+  }
+  const velAt = (t) => { let b = null; for (const m of S.moments) if (m.vel != null && (!b || Math.abs(m.t - t) < Math.abs(b.t - t))) b = m; return b && Math.abs(b.t - t) <= 6 ? b.vel : null; };
+  const streetCam = () => S.cams.find((c) => !c.bad && c.tipo === 'exterior') || null;
+  const ESP_FOTOS = new Map();
+  async function reviewStreet(onProg) {
+    const c = streetCam();
+    if (!c) return null;
+    const run = S.run;
+    const to = Math.min(S.frontier || S.range.to, S.range.to);
+    const ts = [];
+    for (let t = Math.max(S.range.from, startT() === Infinity ? S.range.from : startT()); t <= to; t += 3) {
+      const v = velAt(t);
+      if (v == null || v <= 60) ts.push(+t.toFixed(1));
+    }
+    const hits = [];
+    const B = 6;
+    for (let i = 0; i < ts.length; i += B) {
+      if (run !== S.run) return null;
+      const batch = ts.slice(i, i + B);
+      const frames = [];
+      for (const t of batch) frames.push(await frameOf(c, t, 640));
+      const parts = [{ text: [
+        `Te envío ${batch.length} fotos de la cámara FRONTAL de un bus del transporte público de Santiago, en orden de tiempo (una cada 3 segundos).`,
+        'En cada foto busca un PARADERO de buses junto a la pista por donde va el bus: refugio con techo, poste o letrero de paradero, o andén con personas esperando el bus.',
+        'Para cada foto responde: "paradero": true si se ve un paradero a menos de unos 40 metros adelante o al lado; "esperando": cuántas personas están esperando en ese paradero (de pie o sentadas en el refugio o en el borde del andén; no cuentes a quien camina de paso por la vereda); "senas": true si alguien hace señas o estira el brazo para que pare el bus; "letrero": el texto del letrero del paradero si se alcanza a leer (calles y código tipo PD123), si no "".',
+        'Responde SOLO JSON: [{"n":1,"paradero":false,"esperando":0,"senas":false,"letrero":""}] con una entrada por foto.',
+      ].join('\n') }];
+      frames.forEach((f, k) => { if (f) parts.push({ text: `Foto ${k + 1}:` }, img(f, 0.8)); });
+      let arr = [];
+      try {
+        const txt = String((await gemini(parts, run, 'quick', { raw: true })) || '');
+        const m = txt.match(/\[[\s\S]*\]/);
+        arr = m ? JSON.parse(m[0]) : [];
+      } catch (e) { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; arr = []; }
+      for (const r of Array.isArray(arr) ? arr : []) {
+        const k = (num(r.n) || 0) - 1;
+        if (k < 0 || k >= batch.length || !truthy(r.paradero) && r.paradero !== 1) continue;
+        hits.push({ t: batch[k], esperando: Math.max(0, Math.round(num(r.esperando) || 0)), senas: truthy(r.senas), letrero: String(r.letrero || '').trim(), f: frames[k] });
+      }
+      if (onProg) onProg(Math.min(1, (i + B) / ts.length));
+    }
+    // Fotos seguidas del mismo paradero (menos de 8 s entre sí) son un solo paso.
+    const ev = [];
+    for (const h of hits) {
+      const last = ev[ev.length - 1];
+      if (last && h.t - last.t1 <= 8) { last.t1 = h.t; last.hits.push(h); } else ev.push({ t0: h.t, t1: h.t, hits: [h] });
+    }
+    // Sin GPS en la pantalla, el sentido del servicio sale de los letreros leídos (el que reconoce más paraderos).
+    const svc = PAR.services[PAR.sel.svc];
+    if (svc && PAR.sel.dir === 'auto' && !S.moments.some((m) => m.lat != null)) {
+      const signs = hits.map((h) => h.letrero).filter(Boolean);
+      let bd = null, bn = 0;
+      for (const [d, list] of Object.entries(svc)) {
+        const n = new Set(signs.map((x) => matchSign(x, list)).filter(Boolean).map((q) => q.c)).size;
+        if (n > bn) { bn = n; bd = d; }
+      }
+      if (bd && bd !== currentDir()) { PAR.auto = bd; applyService(); }
+    }
+    const front = S.cams.find((x) => !x.bad && hasValidator(x));
+    const out = [];
+    for (const e of ev) {
+      const esperando = Math.max(...e.hits.map((h) => h.esperando));
+      const senas = e.hits.some((h) => h.senas);
+      const sign = e.hits.map((h) => h.letrero).filter(Boolean).sort((a, b) => b.length - a.length)[0] || '';
+      const p = matchSign(sign);
+      // ¿Recoge? Se detiene cerca (hasta 20 s después de pasar el paradero) y la puerta delantera no estuvo cerrada.
+      const st = S.stops.filter((s) => s.t1 >= e.t0 - 3 && s.t0 <= e.t1 + 20);
+      const frontOpen = st.some((s) => s.estado === 'listo' && (s.personas.some((q) => front && q.cam === front.key && !q.staff) || (s.porCamara || []).some((x) => front && x.startsWith(camName(front)) && !/cerrada/.test(x))));
+      const best = e.hits.reduce((a, h) => (h.esperando >= a.esperando ? h : a), e.hits[0]);
+      const t = best.t;
+      const id = `${S.id}|esp|${t}`;
+      const fotos = [];
+      for (const dt of [-3, 0, 3]) {
+        const f = dt === 0 ? best.f : await frameOf(c, Math.max(0, t + dt), 640);
+        if (f) fotos.push(thumbOf(f));
+      }
+      ESP_FOTOS.set(id, fotos);
+      idb.set(id, fotos);
+      const v = velAt(t);
+      out.push({
+        t, t0: e.t0, t1: e.t1, esperando, senas, letrero: sign, par: p ? p.c : null, vel: v, id,
+        recoge: !esperando || frontOpen,
+        que: !esperando ? 'sin gente esperando' : frontOpen ? 'se detiene y abre la puerta delantera'
+          : st.length ? 'se detiene pero no abre la puerta delantera' : `pasa sin detenerse${v != null ? ` a ${v} km/h` : ''}`,
+      });
+      // Nombre del paradero para las detenciones sin GPS: el letrero leído justo antes o durante la detención.
+      if (p) for (const s of st) if (s.lat == null && !s.signPar) s.signPar = p.c;
+    }
+    S.esperan = out;
+    save();
+    return out;
+  }
+  async function espFotos(e) {
+    if (ESP_FOTOS.has(e.id)) return ESP_FOTOS.get(e.id);
+    const v = await idb.get(e.id);
+    const a = Array.isArray(v) ? v : [];
+    ESP_FOTOS.set(e.id, a);
+    return a;
+  }
+  // ---------------------------------------------------------------- informe completo: Excel con todas las hojas y PDF
+  const doneStops = () => S.stops.filter((s) => s.estado === 'listo' && inRange(s) && !beforeStart(s)).sort((a, b) => a.t0 - b.t0);
+  const placeOf = (s) => { const p = parOf(s); return p ? `N° ${p.o} · ${p.c} · ${shortName(p.n)}` : `Fuera de paradero conocido${s.dir ? ` · ${s.dir}` : ''}`; };
+  const hOf = (t) => horaAt(t) || mmss(t);
+  function balance() {
+    const st = doneStops();
+    let suben = 0, pagan = 0, evaden = 0, dudosos = 0, bajan = 0;
+    for (const s of st) { const c = counts(s); suben += c.suben; pagan += c.pagan; evaden += c.evaden; dudosos += c.dudosos; bajan += c.bajan; }
+    const dif = suben - bajan;
+    const nota = dif < -2 ? `Bajan ${bajan} y suben ${suben}: faltan ${-dif} subidas, o ya venían a bordo al empezar el video. Revisa los primeros paraderos.`
+      : dif > 2 ? `Suben ${suben} y bajan ${bajan}: ${dif} siguen a bordo al terminar el video o hay bajadas sin contar.` : `Cuadra: suben ${suben} y bajan ${bajan}.`;
+    return { suben, pagan, evaden, dudosos, bajan, dif, nota, paradas: st.length };
+  }
+  function sheetOf(X, rows, widths, opts) {
+    const ws = X.utils.aoa_to_sheet(rows);
+    const thin = { style: 'thin', color: { rgb: '000000' } };
+    const border = { top: thin, bottom: thin, left: thin, right: thin };
+    const hr = (opts && opts.header) || 0;
+    const range = X.utils.decode_range(ws['!ref']);
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const ref = X.utils.encode_cell({ r, c });
+        const cell = ws[ref];
+        if (!cell) continue;
+        const head = r === hr;
+        cell.s = { font: { name: 'Aptos Narrow', sz: 10, bold: head }, alignment: { vertical: 'center', wrapText: true, horizontal: head ? 'center' : undefined }, border: r >= hr && rows[r] && rows[r].length > 1 ? border : undefined, fill: head ? { patternType: 'solid', fgColor: { rgb: '92D050' } } : undefined };
+      }
+    }
+    ws['!cols'] = widths.map((w) => ({ wch: w }));
+    return ws;
+  }
+  async function fullXlsx() {
+    const X = await xlsxLib();
+    const rep = buildReport();
+    const wb = X.utils.book_new();
+    X.utils.book_append_sheet(wb, reportSheet(X, rep), rep.sheet);
+    const B = balance();
+    // Detalle de cada detención analizada.
+    const det = [['Hora inicio', 'Hora fin', 'Segundos', 'Paradero', 'Suben', 'Pagan', 'Evaden', 'Dudosos', 'Bajan', 'Zona paga', 'Qué pasó en cada cámara', 'Personal visto']];
+    for (const s of doneStops()) {
+      const c = counts(s);
+      det.push([hOf(s.t0), hOf(s.t1), Math.round(s.t1 - s.t0), placeOf(s), c.suben, c.pagan, c.evaden, c.dudosos, c.bajan, zpOf(s) ? 'Sí' : '', (s.porCamara || []).join('\n'), s.personal || '']);
+    }
+    det.push([], ['', '', '', 'TOTAL', B.suben, B.pagan, B.evaden, B.dudosos, B.bajan], [], [`Cuadratura: ${B.nota}`]);
+    X.utils.book_append_sheet(wb, sheetOf(X, det, [10, 10, 9, 42, 7, 7, 7, 8, 7, 9, 80, 30]), 'Detalle paradas');
+    // Cada persona contada, con el resultado.
+    const per = [['Hora', 'Paradero', 'Cámara', 'Resultado', 'Descripción']];
+    for (const s of doneStops()) for (const p of [...s.personas].sort((a, b) => a.t - b.t)) per.push([hOf(p.t), placeOf(s), personCam(p), resText(resOf(p, zpOf(s))), p.desc || '']);
+    X.utils.book_append_sheet(wb, sheetOf(X, per, [10, 42, 26, 22, 70]), 'Personas');
+    // Paraderos con gente esperando que el bus no recoge.
+    if (S.esperan && S.esperan.length) {
+      const na = [['Hora', 'Paradero', 'Personas esperando', 'Hacen señas', 'Velocidad (km/h)', 'Qué hace el bus', 'Letrero leído']];
+      for (const e of S.esperan.filter((x) => x.esperando > 0)) {
+        const p = PAR.list.find((x) => x.c === e.par);
+        na.push([hOf(e.t), p ? `N° ${p.o} · ${p.c} · ${shortName(p.n)}` : 'Paradero sin identificar', e.esperando, e.senas ? 'Sí' : '', e.vel == null ? '' : e.vel, e.recoge ? `Recoge: ${e.que}` : `NO LOS RECOGE: ${e.que}`, e.letrero]);
+      }
+      const nn = S.esperan.filter((x) => !x.recoge);
+      na.push([], [`Paraderos con gente esperando que el bus no recoge: ${nn.length} (${nn.reduce((a, x) => a + x.esperando, 0)} personas). Esos paraderos pueden ser de varios recorridos: no todos esperaban este servicio.`]);
+      X.utils.book_append_sheet(wb, sheetOf(X, na, [10, 42, 11, 9, 10, 46, 40]), 'Paraderos no atendidos');
+    }
+    // Minuto a minuto, como en la revisión a mano.
+    const key = (t) => (horaAt(t) ? horaAt(t).slice(0, 5) : `min ${Math.floor(t / 60)}`);
+    const M = new Map();
+    const row = (t) => { const k = key(t); if (!M.has(k)) M.set(k, { k, t, vmin: null, vmax: null, det: 0, suben: 0, pagan: 0, evaden: 0, dudosos: 0, bajan: 0, que: [] }); return M.get(k); };
+    const to = Math.min(S.frontier, S.range.to);
+    for (const m of S.moments.filter((x) => x.t >= S.range.from && x.t <= to).sort((a, b) => a.t - b.t)) {
+      const r = row(m.t);
+      if (m.vel != null) { r.vmin = r.vmin == null ? m.vel : Math.min(r.vmin, m.vel); r.vmax = r.vmax == null ? m.vel : Math.max(r.vmax, m.vel); }
+      if (m.detenido) r.det += S.step;
+    }
+    for (const s of doneStops()) {
+      const zp = zpOf(s);
+      for (const p of s.personas) {
+        const res = resOf(p, zp);
+        if (res === 'excluir') continue;
+        const r = row(p.t);
+        r.suben++;
+        if (res === 'paga' || res === 'zp') r.pagan++; else if (res === 'evade') r.evaden++; else r.dudosos++;
+      }
+      const c = counts(s);
+      const r = row(s.t0);
+      r.bajan += c.bajan;
+      if (c.suben || c.bajan) r.que.push(`${placeOf(s)}: suben ${c.suben}, bajan ${c.bajan}`);
+    }
+    for (const e of S.esperan || []) if (e.esperando && !e.recoge) row(e.t).que.push(`${e.esperando} esperando en ${(PAR.list.find((x) => x.c === e.par) || {}).n ? shortName(PAR.list.find((x) => x.c === e.par).n) : 'un paradero'}: no los recoge`);
+    const mm = [['Minuto', 'Velocidad mín-máx', 'Segundos detenido', 'Suben', 'Pagan', 'Evaden', 'Dudosos', 'Bajan', 'A bordo (desde el inicio)', 'Qué pasa']];
+    let bordo = 0;
+    for (const r of [...M.values()].sort((a, b) => a.t - b.t)) {
+      bordo += r.suben - r.bajan;
+      mm.push([r.k, r.vmin == null ? '' : `${r.vmin}-${r.vmax}`, Math.round(r.det), r.suben, r.pagan, r.evaden, r.dudosos, r.bajan, bordo, r.que.join(' · ') || (r.vmax != null && r.vmax > 3 ? 'En marcha' : r.det ? 'Detenido, sin subidas ni bajadas' : '')]);
+    }
+    mm.push([], ['A bordo = suben − bajan desde el inicio del video (no incluye a quienes ya venían arriba). Si queda negativo, faltan subidas o el bus no partió vacío.']);
+    X.utils.book_append_sheet(wb, sheetOf(X, mm, [9, 14, 10, 7, 7, 7, 8, 7, 12, 70]), 'Minuto a minuto');
+    X.writeFile(wb, `${PAR.sel.svc || 'informe'}_EVASION_${rep.sheet.replace(/\s+/g, '_')}_${fileDate()}_completo.xlsx`);
+  }
+  async function pdfLib() {
+    if (window.jspdf && window.jspdf.jsPDF) return window.jspdf.jsPDF;
+    await new Promise((ok, bad) => { const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'; sc.onload = ok; sc.onerror = () => bad(new Error('No se pudo cargar el generador de PDF. Revisa tu conexión.')); document.head.append(sc); });
+    return window.jspdf.jsPDF;
+  }
+  const pdfTxt = (t) => String(t == null ? '' : t).replace(/[−–—]/g, '-').replace(/[^\x00-\xFF]/g, '');
+  async function fullPdf(onProg) {
+    const J = await pdfLib();
+    const doc = new J({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+    const W = 297, H = 210, M = 10;
+    const rep = buildReport();
+    const B = balance();
+    const T = (txt, x, y, o) => doc.text(pdfTxt(txt), x, y, o);
+    const lines = (txt, w) => doc.splitTextToSize(pdfTxt(txt), w);
+    // Portada con los totales.
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
+    T(`Revisión de expedición · ${rep.plate}`, M, 18);
+    doc.setFontSize(11); doc.setFont('helvetica', 'normal');
+    T([rep.servicio, rep.periodo, rep.fechaHora].filter(Boolean).join('  ·  '), M, 26);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(14);
+    T(`Suben ${B.suben}   ·   Pagan ${B.pagan}   ·   Evaden ${B.evaden}   ·   Dudosos ${B.dudosos}   ·   Bajan ${B.bajan}`, M, 38);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+    let y = 46;
+    for (const l of lines(`Cuadratura: ${B.nota}`, W - 2 * M)) { T(l, M, y); y += 5; }
+    const nn = (S.esperan || []).filter((x) => !x.recoge);
+    if (S.esperan) { for (const l of lines(`Paraderos con gente esperando que el bus no recoge: ${nn.length} (${nn.reduce((a, x) => a + x.esperando, 0)} personas). Pueden esperar otros recorridos.`, W - 2 * M)) { T(l, M, y); y += 5; } }
+    else if (!streetCam()) { T('Sin cámara frontal marcada como «Exterior / calle»: no se revisaron los paraderos donde no se detuvo.', M, y); y += 5; }
+    y += 3;
+    doc.setFont('helvetica', 'bold');
+    const cols = [M, M + 22, M + 44, M + 160, M + 176, M + 192, M + 208, M + 226];
+    ['Hora', 'Seg.', 'Paradero', 'Suben', 'Pagan', 'Evaden', 'Dudosos', 'Bajan'].forEach((h, i) => T(h, cols[i], y));
+    doc.setFont('helvetica', 'normal');
+    y += 5;
+    const st = doneStops();
+    for (const s of st) {
+      if (y > H - 12) { doc.addPage(); y = 15; }
+      const c = counts(s);
+      [hOf(s.t0), String(Math.round(s.t1 - s.t0)), lines(placeOf(s), 110)[0], c.suben, c.pagan, c.evaden, c.dudosos, c.bajan].forEach((v, i) => T(String(v), cols[i], y));
+      y += 4.6;
+    }
+    // Una página por detención con movimiento: fotos de cada puerta y de cada persona contada.
+    // Las puertas (sin tipo asignado se toman todas las cámaras salvo la de la calle y la del conductor).
+    const doors = S.cams.filter((c) => !c.bad && (/^puerta_/.test(c.tipo) || c.validador || !c.tipo || c.tipo === 'otra'));
+    const act = st.filter((s) => s.personas.length || bajOf(s));
+    let k = 0;
+    for (const s of act) {
+      if (onProg) onProg(k++ / Math.max(1, act.length));
+      doc.addPage();
+      const c = counts(s);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(13);
+      T(`${hOf(s.t0)} - ${hOf(s.t1)} (${Math.round(s.t1 - s.t0)} s) · ${placeOf(s)}`, M, 12);
+      doc.setFontSize(11);
+      T(`Suben ${c.suben} · Pagan ${c.pagan} · Evaden ${c.evaden} · Dudosos ${c.dudosos} · Bajan ${c.bajan}${zpOf(s) ? ' · Zona paga' : ''}`, M, 19);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
+      y = 24;
+      for (const l of lines((s.porCamara || []).join(' | '), W - 2 * M).slice(0, 4)) { T(l, M, y); y += 3.4; }
+      y += 1;
+      const fw = (W - 2 * M - 3 * 3) / 4;
+      for (const cam of doors) {
+        let fh = fw * 0.52;
+        for (let i = 0; i < 4; i++) {
+          const t = s.t0 + ((s.t1 - s.t0) * i) / 3;
+          const f = await frameOf(cam, t, 480);
+          if (!f) continue;
+          const g = f.getContext('2d');
+          g.fillStyle = 'rgba(0,0,0,.6)'; g.fillRect(0, 0, f.width, 22);
+          g.fillStyle = '#4ade80'; g.font = 'bold 15px sans-serif'; g.fillText(`${camName(cam)} · ${hOf(t)}`, 6, 16);
+          fh = fw * (f.height / f.width);
+          if (y + fh > H - 4) { doc.addPage(); y = 12; }
+          doc.addImage(f.toDataURL('image/jpeg', 0.72), 'JPEG', M + i * (fw + 3), y, fw, fh);
+        }
+        y += fh + 2;
+      }
+      const th = thumbsOf(s) || (await idb.get(photoKey(s))) || [];
+      const ppl = [...s.personas].sort((a, b) => a.t - b.t);
+      if (ppl.length) {
+        if (y > H - 40) { doc.addPage(); y = 12; }
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(10); T('Personas contadas', M, y + 3); y += 6;
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
+        const pw = (W - 2 * M - 5 * 3) / 6;
+        let x = 0;
+        for (const [i, p] of ppl.entries()) {
+          let src = Array.isArray(th) ? th[p.img] : null;
+          if (!src && camByKey(p.cam)) { const f = await frameOf(camByKey(p.cam), p.t, 480); if (f) src = f.toDataURL('image/jpeg', 0.72); }
+          const ph = pw * 0.56;
+          if (x === 0 && y + ph + 9 > H - 4) { doc.addPage(); y = 12; }
+          if (src) doc.addImage(src, 'JPEG', M + x * (pw + 3), y, pw, ph);
+          const cap = lines(`${i + 1}. ${hOf(p.t)} · ${resText(resOf(p, zpOf(s)))} · ${p.desc || ''}`, pw);
+          cap.slice(0, 2).forEach((l, j) => T(l, M + x * (pw + 3), y + ph + 3 + j * 3));
+          x++;
+          if (x === 6) { x = 0; y += ph + 10; }
+        }
+      }
+    }
+    // Paraderos donde no recoge a quienes esperan.
+    for (const e of nn) {
+      doc.addPage();
+      const p = PAR.list.find((x) => x.c === e.par);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(13);
+      T(`${hOf(e.t)} · ${p ? `N° ${p.o} · ${p.c} · ${shortName(p.n)}` : 'Paradero sin identificar'}`, M, 12);
+      doc.setFontSize(11); doc.setTextColor(200, 0, 0);
+      T(`${e.esperando} persona${e.esperando === 1 ? '' : 's'} esperando${e.senas ? ', alguien hace señas' : ''} · NO LOS RECOGE: ${e.que}`, M, 19);
+      doc.setTextColor(0, 0, 0); doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+      if (e.letrero) T(`Letrero: ${e.letrero}`, M, 25);
+      let fotos = await espFotos(e);
+      if (!fotos.length && streetCam()) {
+        fotos = [];
+        for (const dt of [-3, 0, 3]) { const f = await frameOf(streetCam(), Math.max(0, e.t + dt), 640); if (f) fotos.push(f.toDataURL('image/jpeg', 0.72)); }
+      }
+      const fw = (W - 2 * M - 2 * 3) / 3;
+      fotos.forEach((src, i) => doc.addImage(src, 'JPEG', M + i * (fw + 3), 30, fw, fw * 0.56));
+    }
+    doc.save(`${PAR.sel.svc || 'informe'}_EXPEDICION_${rep.sheet.replace(/\s+/g, '_')}_${fileDate()}.pdf`);
+  }
+  $('#btnStreet').onclick = async () => {
+    if (!streetCam()) return status('Marca la cámara frontal (la que mira la calle) como «Exterior / calle» en la barra de cámaras.', null, true);
+    try {
+      status('Revisando la cámara frontal: paraderos con gente esperando…', 0);
+      const r = await reviewStreet((f) => status('Revisando la cámara frontal: paraderos con gente esperando…', f));
+      if (r) { const nn = r.filter((x) => !x.recoge); status(`Cámara frontal revisada: ${r.length} paraderos vistos, ${nn.length} con gente esperando que el bus no recoge (${nn.reduce((a, x) => a + x.esperando, 0)} personas).`, null); rebuild(); }
+    } catch (e) { status(e.message, null, true); }
+  };
+  $('#btnFull').onclick = async () => {
+    if (!ready()) return;
+    try {
+      if (streetCam() && !S.esperan) {
+        status('Revisando la cámara frontal: paraderos con gente esperando…', 0);
+        await reviewStreet((f) => status('Revisando la cámara frontal: paraderos con gente esperando…', f));
+      }
+      status('Armando el Excel completo…', null);
+      await fullXlsx();
+      status('Armando el PDF con las fotos de cada paradero…', 0);
+      await fullPdf((f) => status('Armando el PDF con las fotos de cada paradero…', f));
+      status('Listo: se descargaron el Excel completo y el PDF de la expedición.', null);
+    } catch (e) { status(e.message, null, true); }
+  };
   // Informe del día: se van sumando buses (una hoja cada uno) y se descarga todo junto.
   const DAY = { list: store.get('cofsimple:dia', []) };
   function renderDay() {
