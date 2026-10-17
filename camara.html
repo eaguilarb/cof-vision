@@ -447,7 +447,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 18;
+  const COUNT_V = 19;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -461,7 +461,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.17-9';
+  const VERSION = '2026.10.17-10';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -619,6 +619,7 @@
     S.id = `cofsimple:v3:${files.map((f) => `${f.name}|${f.remote ? f.id : f.size}`).join('/')}`;
     const saved = store.get(S.id, null) || {};
     const cfg = saved.cams || {};
+    S.gpsKey = null;
     S.cams = files.map((f, i) => {
       const url = f.remote ? f.remote : URL.createObjectURL(f);
       const key = `${f.name}|${f.remote ? f.id : f.size}`;
@@ -1760,12 +1761,17 @@
   // Puerta de cada cámara sin IA: en estos buses los canales son fijos (CH4 delantera con validador, CH5 central, CH7
   // trasera), y los archivos suelen traer la puerta en el nombre («primera_puerta», «puerta trasera»…).
   const FIXED = { CH4: ['puerta_delantera', true], CH5: ['puerta_central', false], CH7: ['puerta_trasera', false], CH2: ['exterior', false], CH3: ['pasillo', false], CH8: ['pasillo', false] };
-  // Los canales fijos son los del bus de 8 cámaras (CH4 puerta delantera con validador, CH5 central, CH7 trasera).
-  // Los buses chicos de 5 cámaras (STU, patentes LCSX) usan otros: CH2 conductor y puerta delantera, CH4 la puerta del
-  // medio, CH3 y CH5 el salón. Sin un canal 6 a 8 entre los videos, las cámaras las reconoce la IA.
+  // Canales fijos. Bus de 8 cámaras: CH4 puerta delantera con validador (se sube y se paga), CH5 central, CH7 trasera,
+  // CH2 calle. Bus chico STU de 5 cámaras (patentes LCSX): también se sube y se paga por la puerta de CH4 (con
+  // validador); CH2 mira al conductor y a la otra puerta, que es de bajada: quien sube por ahí no pasa por el validador
+  // y se cuenta como evasión; CH1 calle; CH3 y CH5 salón. (En la versión anterior las cámaras del bus chico las
+  // reconocía la IA y a veces dejaba sin puerta a CH4: no se contaba a nadie.)
   const eightCh = () => S.cams.some((x) => /^CH[678]$/.test(x.label || ''));
+  const stuBus = () => !eightCh() && S.cams.some((x) => x.label === 'CH3') && S.cams.some((x) => /^CH[12]$/.test(x.label || ''));
+  const FIXED5 = { CH4: ['puerta_delantera', true], CH2: ['puerta_trasera', false], CH1: ['exterior', false], CH3: ['pasillo', false], CH5: ['pasillo', false] };
   function doorGuess(c) {
-    if (FIXED[c.label] && eightCh()) return FIXED[c.label];
+    if (stuBus() && FIXED5[c.label]) return FIXED5[c.label];
+    if (FIXED[c.label]) return FIXED[c.label];
     const n = c.name.toLowerCase().replace(/[_\-.]+/g, ' ');
     if (/primera puerta|puerta (1|uno|delantera)|delantera/.test(n)) return FIXED.CH4;
     if (/segunda puerta|puerta (2|dos|central|media|del medio)|central/.test(n)) return FIXED.CH5;
@@ -1773,8 +1779,11 @@
     return null;
   }
   async function identify(run) {
+    // El canal manda sobre lo guardado antes (salvo lo que se eligió a mano): así un análisis hecho con la versión que
+    // dejaba a CH4 sin puerta se corrige solo al volver a abrir los mismos videos.
+    for (const c of S.cams) if (!c.bad && !c.manual) { const g = doorGuess(c); if (g && (c.tipo !== g[0] || c.validador !== g[1])) [c.tipo, c.validador] = g; }
     const cams = S.cams.filter((c) => !c.bad && !c.manual && c.tipo == null);
-    if (!cams.length) { orderCams(); renderCamBar(); return true; }
+    if (!cams.length) { pickRef(); orderCams(); renderCamBar(); return true; }
     // Si todas las puertas se conocen por el canal o el nombre, no se gasta una consulta a la IA (queda al instante).
     if (cams.every(doorGuess)) {
       for (const c of cams) [c.tipo, c.validador] = doorGuess(c);
@@ -1956,23 +1965,28 @@
   }
   const MOVE_MIN = 0.06;
   // Devuelve true (leído), false (se canceló) o 'sin' (la cámara no trae coordenadas que se puedan comparar).
-  // Cámara de la que se leen las coordenadas sin IA: la de referencia si sus letras se distinguen; si no (cámara
-  // infrarroja en blanco y negro, o con el fondo blanco detrás del texto, como la del conductor de los buses STU),
-  // otra cámara a color del mismo equipo. Todas las cámaras de un MDVR muestran las mismas coordenadas.
+  // Cámara de la que se leen las coordenadas (sin IA y con IA): todas las cámaras de un MDVR muestran las mismas, pero
+  // no todas se leen igual. En los buses STU la del conductor (CH2) pone el texto blanco sobre un fondo blanco y la IA
+  // no lo lee (no salían las coordenadas); la cámara del salón (CH3) lo muestra nítido. Se elige la que tiene más letras
+  // nítidas (blancas con borde oscuro) y a color; si ninguna sirve, la de referencia.
   async function gpsCam(times) {
-    const ref = refCam();
-    const order = [ref, ...S.cams.filter((c) => !c.bad && c !== ref)].filter(Boolean);
-    const k = Math.max(1, Math.floor(times.length / 5));
-    const probe = times.filter((_, i) => i % k === 0).slice(0, 5);
-    for (const c of order) {
-      let good = 0;
+    const known = S.cams.find((c) => c.key === S.gpsKey && !c.bad);
+    if (known) return known;
+    const ts = times && times.length ? times : gridTimes();
+    const k = Math.max(1, Math.floor(ts.length / 5));
+    const probe = ts.filter((_, i) => i % k === 0).slice(0, 5);
+    let best = null, bs = 0;
+    for (const c of S.cams.filter((x) => !x.bad)) {
+      let sc = 0;
       for (const t of probe) {
         const L = await coordStrip(c, t);
-        if (L && !L.mono && L.T.reduce((a, b) => a + b, 0) > 30) good++;
+        if (L) sc += L.T.reduce((a, b) => a + b, 0) * (L.mono ? 0.6 : 1);
       }
-      if (good * 2 >= probe.length) return c;
+      if (sc > bs) { bs = sc; best = c; }
     }
-    return null;
+    if (!best || bs < 30 * probe.length) return null;
+    S.gpsKey = best.key;
+    return best;
   }
   async function localPass(run) {
     const times = gridTimes();
@@ -2038,9 +2052,11 @@
     return [...out].filter((t) => t != null).sort((a, b) => a - b);
   }
   async function osdPass(run, only) {
-    const ref = refCam();
+    const ref = (await gpsCam()) || refCam();
     const times = only || gridTimes();
-    const done = new Set(S.moments.filter((m) => m.osd || (!only && (m.lat != null || m.vel != null))).map((m) => m.t));
+    // (Al leer solo los paraderos, una lectura anterior sin coordenadas se vuelve a intentar: antes quedaba marcada
+    // como leída y el paradero se quedaba sin ubicación aunque se cambiara la cámara de lectura.)
+    const done = new Set(S.moments.filter((m) => (m.osd && (!only || m.lat != null)) || (!only && (m.lat != null || m.vel != null))).map((m) => m.t));
     const todo = times.filter((t) => !done.has(t));
     const tried = new Set();
     // Con «only» (solo los paraderos) el recorrido ya se leyó: no se mueve el avance.
@@ -3932,10 +3948,11 @@
     if (n < 5) return null;
     const parts = [{ text: [
       'Mosaico de 9 fotos seguidas (1 a 9, cada 0,6 s) de la cámara de la PUERTA DELANTERA de un bus de Santiago, ampliada en el VALIDADOR: el aparato junto a la puerta, con una pantalla pequeña que se pone VERDE cuando se paga con tarjeta bip! o celular, y ROJA si rechaza.',
+      z ? '' : 'En este bus no se sabe dónde está el validador ni si tiene luz (en los buses chicos STU es un aparato junto a la puerta, sin luz verde visible): mira si la persona acerca la tarjeta o el celular a un aparato junto a la puerta antes de pasar; eso es pagar.',
       'Mira a la persona que está subiendo: ¿acerca una tarjeta, celular o la mano al validador? ¿se enciende la pantalla en verde?',
       'Responde SOLO JSON: {"hay_persona_subiendo":true,"acerca_tarjeta":true,"luz":"verde|roja|ninguna","foto_pago":4,"pago":"si|no|no_se","motivo":"breve"}.',
       '"pago":"si" si acerca la tarjeta o el celular y se ve verde, o si claramente valida; "no" solo si se ve claramente que pasa de largo sin acercar nada al validador; "no_se" si no se alcanza a ver.',
-    ].join('\n') }, img(m, 0.85)];
+    ].filter(Boolean).join('\n') }, img(m, 0.85)];
     let r = null;
     try {
       const txt = String((await gemini(parts, run, 'main', { raw: true })) || '');
