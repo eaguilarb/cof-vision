@@ -444,7 +444,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 16;
+  const COUNT_V = 17;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -458,7 +458,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.17-3';
+  const VERSION = '2026.10.17-4';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -2573,7 +2573,10 @@
   // YOLOv10 corre en el propio computador (tarjeta de video con WebGPU, o el procesador en un hilo aparte):
   // no gasta cupo de IA y detecta en cada foto a todas las personas con su recuadro. Se descarga una sola vez.
   const ORT_DIR = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
-  // Primero el modelo entrenado con videos de las cámaras de los buses (COF); si no se puede bajar, el modelo general.
+  // Detector de personas: RF-DETR Nano (transformer, más preciso que YOLO con gente amontonada en la puerta; en SKWD-57
+  // contó las 23 subidas exactas). Misma entrada y salida que el YOLO anterior: [1,3,640,640] → [1,300,6], clase 0 = persona.
+  // Si no se puede bajar, el YOLO entrenado con los videos COF y, si tampoco, el YOLO general.
+  const RFDETR_URL = 'https://eaguilarb.github.io/cof-vision/models/rfdetr-nano.onnx';
   const YOLO_COF = 'https://eaguilarb.github.io/cof-vision/models/cof-11n.onnx';
   const YOLO_URL = 'https://huggingface.co/onnx-community/yolov10s/resolve/main/onnx/model.onnx';
   const YOLO_IN = 640;
@@ -2604,7 +2607,8 @@
       if (!window.ort) await loadScript(`${ORT_DIR}ort.webgpu.min.js`);
       ort.env.wasm.wasmPaths = ORT_DIR;
       let buf = null;
-      try { buf = await modelBytes(YOLO_COF); Y.name = 'YOLO entrenado COF'; } catch { buf = null; }
+      try { buf = await modelBytes(RFDETR_URL); Y.name = 'RF-DETR'; } catch { buf = null; }
+      if (!buf) { try { buf = await modelBytes(YOLO_COF); Y.name = 'YOLO entrenado COF'; } catch { buf = null; } }
       if (!buf) { buf = await modelBytes(YOLO_URL); Y.name = 'YOLO general'; }
       // Se prueban la tarjeta gráfica (WebGPU) y el procesador con todos sus núcleos, y se queda el más rápido.
       // (Una imagen nueva en cada pasada: con «proxy» los datos se entregan al otro hilo y ya no se pueden reusar.)
@@ -2642,7 +2646,7 @@
     })().catch((e) => { Y.failed = String((e && e.message) || e); liveNote(''); return null; });
     return Y.load;
   }
-  const detSpeedText = () => (Y.sess && Y.ms ? `YOLO con ${Y.how} · ${(Y.ms / 1000).toFixed(2).replace('.', ',')} s por foto` : '');
+  const detSpeedText = () => (Y.sess && Y.ms ? `${Y.name || 'Detector'} con ${Y.how} · ${(Y.ms / 1000).toFixed(2).replace('.', ',')} s por foto` : '');
   setInterval(() => { const e = $('#detSpeed'); if (e) e.textContent = detSpeedText(); }, 3000);
   // Personas en una imagen (canvas o video): recuadros [ymin, xmin, ymax, xmax] de 0 a 1 y su confianza.
   // Cola del detector: la vista en vivo pasa antes que el conteo de fondo (si no, en vivo se atrasa varios segundos).
@@ -2667,6 +2671,8 @@
   async function yoloRaw(paint, live, model, minS = 0.2) {
     const sess = model || Y.sess || (await yolo());
     if (!sess) return null;
+    // RF-DETR deja copias de la misma persona con confianza baja (0,2-0,3): se cuentan desde 0,3.
+    if (!model && Y.name === 'RF-DETR' && minS < 0.3) minS = 0.3;
     // La vista en vivo no se acumula: si ya hay una pasada en vivo esperando, esta se salta.
     if (live && YQ.hi.length) return null;
     const cv = Y.cv || (Y.cv = newCanvas(YOLO_IN, YOLO_IN));
