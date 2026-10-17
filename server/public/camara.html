@@ -447,7 +447,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 19;
+  const COUNT_V = 20;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -461,7 +461,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.17-10';
+  const VERSION = '2026.10.17-11';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1763,8 +1763,8 @@
   const FIXED = { CH4: ['puerta_delantera', true], CH5: ['puerta_central', false], CH7: ['puerta_trasera', false], CH2: ['exterior', false], CH3: ['pasillo', false], CH8: ['pasillo', false] };
   // Canales fijos. Bus de 8 cámaras: CH4 puerta delantera con validador (se sube y se paga), CH5 central, CH7 trasera,
   // CH2 calle. Bus chico STU de 5 cámaras (patentes LCSX): también se sube y se paga por la puerta de CH4 (con
-  // validador); CH2 mira al conductor y a la otra puerta, que es de bajada: quien sube por ahí no pasa por el validador
-  // y se cuenta como evasión; CH1 calle; CH3 y CH5 salón. (En la versión anterior las cámaras del bus chico las
+  // validador); CH2 mira al conductor y a la otra puerta, que es de bajada: quien sube por ahí queda dudoso para revisar
+  // (evasión solo si la IA ve que no pasa por el validador; en zona paga, pagó en el paradero); CH1 calle; CH3 y CH5 salón. (En la versión anterior las cámaras del bus chico las
   // reconocía la IA y a veces dejaba sin puerta a CH4: no se contaba a nadie.)
   const eightCh = () => S.cams.some((x) => /^CH[678]$/.test(x.label || ''));
   const stuBus = () => !eightCh() && S.cams.some((x) => x.label === 'CH3') && S.cams.some((x) => /^CH[12]$/.test(x.label || ''));
@@ -4451,6 +4451,7 @@
         luz: pay === true || verde ? 'verde' : roja ? 'roja' : null,
         // Por una puerta sin validador, quien fue a validar adelante (verde que sobró) queda como pagado.
         valida: val ? v : pay === true ? true : null, sinValidador: !val, fueraZona: false, desdeAfuera: true,
+        evConf: !val && pay !== true && truthy(q.sin_validar_visto),
         staff: noSube || (!paid && (truthy(q.es_personal) || STAFF_RE.test(desc))), nosube: noSube && !truthy(q.es_personal) && !STAFF_RE.test(desc),
         // El recuadro se pinta del color del resultado (rojo evade, verde paga, amarillo dudoso, azul zona paga).
         img: allMeta.length - 1, box: b.box || null, linea: true,
@@ -4616,6 +4617,9 @@
     if (p.desdeAfuera === false && (p.valida === false || p.sinValidador || p.res === 'evade')) return 'dudoso';
     // Conteos antiguos (sin ese dato): quien «subió» por una puerta sin validador queda para revisar.
     if (p.desdeAfuera === undefined && p.sinValidador) return 'dudoso';
+    // Subir por una puerta sin validador no es evasión por sí solo (pudo ir a validar adelante, o pagar en el
+    // paradero): queda dudoso para revisar, salvo que la IA haya visto que sube y se queda sin pasar por el validador.
+    if (p.sinValidador && !p.evConf) return 'dudoso';
     if (p.valida === false || p.sinValidador) return 'evade';
     return p.res === 'evade' ? 'evade' : 'dudoso';
   }
