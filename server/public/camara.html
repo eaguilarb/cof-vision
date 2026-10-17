@@ -444,7 +444,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 14;
+  const COUNT_V = 15;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -458,7 +458,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.17-1';
+  const VERSION = '2026.10.17-2';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -990,8 +990,8 @@
     if (c.valBtn) {
       const v = door && hasValidator(c);
       c.valBtn.hidden = !v;
-      c.valBtn.classList.toggle('warn', v && (!c.valz || !!c.valz.auto));
-      c.valBtn.textContent = !c.valz ? (c.mono ? '💡 Cámara en blanco y negro: marca el validador' : '💡 Marcar el validador') : c.valz.auto ? '💡 ¿Es este el validador? Confírmalo' : '💡 Validador ✓';
+      c.valBtn.classList.toggle('warn', v && !valOk(c));
+      c.valBtn.textContent = !c.valz ? (c.mono ? '💡 Cámara en blanco y negro: marca el validador' : '💡 Marcar el validador') : c.valz.auto ? (valOk(c) ? '💡 Validador ubicado solo ✓' : '💡 ¿Es este el validador? Confírmalo') : '💡 Validador ✓';
     }
   }
   function renderCams() {
@@ -2287,7 +2287,7 @@
   // paradero y el comienzo del siguiente (hasta un minuto).
   const LATE_WIN = 60;
   async function lateGreens(c, t0, t1, run) {
-    if (!c.valz || c.valz.auto || t1 - t0 < 0.5) return [];
+    if (!valOk(c) || t1 - t0 < 0.5) return [];
     const times = [];
     for (let t = t0; t <= t1 + 1e-6; t += MOTION_STEP) times.push(t);
     const mot = [];
@@ -3103,12 +3103,17 @@
         if (sum > best) { best = sum; bx = x; by = y; }
       }
     }
-    if (best < 12) return;
+    if (best < VAL_TRUST) return;
     const cx = (bx + r / 2) / W, cy = (by + r / 2) / H;
-    c.valz = { x0: clamp(cx - 0.07, 0, 1), y0: clamp(cy - 0.09, 0, 1), x1: clamp(cx + 0.07, 0, 1), y1: clamp(cy + 0.09, 0, 1), auto: true };
+    c.valz = { x0: clamp(cx - 0.07, 0, 1), y0: clamp(cy - 0.09, 0, 1), x1: clamp(cx + 0.07, 0, 1), y1: clamp(cy + 0.09, 0, 1), auto: true, best: Math.round(best) };
+    rememberVal(c);
     tileLineBtn(c);
   }
   const VAL_MAX = 3.5;
+  // Validador en que se confía para decidir quién pagó: el marcado a mano, o el que el programa aprendió solo después
+  // de ver varios destellos de pago en el mismo lugar (no hace falta confirmarlo a mano).
+  const VAL_TRUST = 12;
+  const valOk = (c) => !!(c && c.valz && (!c.valz.auto || (c.valz.best || 0) >= VAL_TRUST));
   // Momentos en que el validador se puso verde (cada uno es un pago).
   // Blanco y negro: al pagar, un grupo de puntos del centro del recuadro del validador se ilumina de golpe (la pantalla
   // cambia) mientras el borde del recuadro sigue igual. Una mano que pasa tapa también el borde y no cuenta.
@@ -3201,7 +3206,7 @@
     const k = VAL_MEM(c);
     if (!k) return;
     const m = store.get(LINE_MEM, {}) || {};
-    if (c.valz && !c.valz.auto) m[k] = c.valz; else delete m[k];
+    if (valOk(c)) m[k] = c.valz; else delete m[k];
     store.set(LINE_MEM, m);
   }
   function recallVals() {
@@ -3322,7 +3327,7 @@
       g.setLineDash([]);
       const st = stopAtRef(c.video.currentTime - c.off) || provAt(c.video.currentTime - c.off);
       const cc = st && st.vivo && st.vivo.cams[c.key];
-      const conf = hasValidator(c) && c.valz && !c.valz.auto;
+      const conf = hasValidator(c) && valOk(c);
       // Con el paradero ya contado (conteo completo, con cabezas y revisión de la IA) se muestra ese resultado; si no, el
       // conteo en vivo, que es preliminar.
       const full = st && !st.prov && st.estado === 'listo' && Array.isArray(st.personas) ? st.personas.filter((p) => p.cam === c.key && resOf(p, zpOf(st)) !== 'excluir') : null;
@@ -3339,7 +3344,7 @@
       g.fillStyle = '#fff';
       g.fillText(txt, mx + 6 * dpr, my + 15 * dpr);
     }
-    if (c.valz && !c.valz.auto) {
+    if (valOk(c)) {
       const z = c.valz;
       const on = L && (L.gOn || L.payUntil > c.video.currentTime);
       g.lineWidth = 2 * dpr;
@@ -3526,7 +3531,7 @@
     // Cada verde es alguien que subió y pagó, aunque el detector no lo haya visto cruzar (solo con color).
     o.suben = Math.max(o.suben, o.pagan);
     // Con el validador confirmado: quien subió y no generó verde es posible evasión (en blanco y negro no se afirma).
-    const conf = S.cams.some((c) => c.valz && !c.valz.auto);
+    const conf = S.cams.some((c) => valOk(c));
     // El conteo en vivo es preliminar (la línea y los pagos se confirman en el conteo completo): no muestra evasiones.
     o.evaden = null;
     return o;
@@ -3678,7 +3683,7 @@
     if (!LIVE.on || document.hidden) return;
     for (const c of S.cams) {
       // Solo el validador confirmado por el fiscalizador, y solo con el bus detenido en un paradero.
-      if (!c.valz || c.valz.auto || c.bad || !c.tile || c.tile.hidden || c.video.readyState < 2) continue;
+      if (!valOk(c) || c.bad || !c.tile || c.tile.hidden || c.video.readyState < 2) continue;
       const L = c.live || (c.live = { T: makeTracker(), t: -9, dets: [] });
       const t = c.video.currentTime;
       const g = zoneGreen(c);
@@ -4130,7 +4135,7 @@
     }
     const valDoors = lineRes.filter((x) => hasValidator(x.c));
     // Solo un validador confirmado por el fiscalizador decide quién pagó; el que ubica el programa es una sugerencia.
-    const valKnown = valDoors.some((x) => x.c.valz && !x.c.valz.auto);
+    const valKnown = valDoors.some((x) => valOk(x.c));
     const greens = valDoors.flatMap((x) => x.greens || []).map((g) => ({ t: g.t, used: false })).sort((a, b) => a.t - b.t);
     const payOf = new Map();
     if (valKnown) {
@@ -4262,8 +4267,8 @@
     // Pagos con el bus ya en marcha: los verdes entre este paradero y el siguiente se asignan, en orden, a quienes
     // subieron aquí sin verde (primero por la puerta del validador, luego por las otras).
     // En blanco y negro no se cuentan pagos con el bus en marcha: la luz cambia mucho y el destello no es confiable.
-    if (valKnown && !valDoors.find((x) => x.c.valz && !x.c.valz.auto).c.mono) {
-      const vc0 = valDoors.find((x) => x.c.valz && !x.c.valz.auto).c;
+    if (valKnown && !valDoors.find((x) => valOk(x.c)).c.mono) {
+      const vc0 = valDoors.find((x) => valOk(x.c)).c;
       const next = S.stops.filter((x) => x.t0 > s.t1).sort((a, b) => a.t0 - b.t0)[0];
       const lt0 = s.t1 + 1;
       const lt1 = Math.min(next ? next.t0 - 4 : Infinity, s.t1 + LATE_WIN, S.running ? S.frontier : S.D);
@@ -4287,8 +4292,8 @@
     // Cada verde del validador es un pasajero que pagó: si el detector no siguió a esa persona (tapada por un
     // pasamanos o por otra persona), igual se cuenta, con la foto de ese momento.
     // En blanco y negro el destello solo confirma el pago de alguien que el detector vio subir: no crea pasajeros.
-    if (valKnown && !valDoors.find((x) => x.c.valz && !x.c.valz.auto).c.mono) {
-      const vc = valDoors.find((x) => x.c.valz && !x.c.valz.auto).c;
+    if (valKnown && !valDoors.find((x) => valOk(x.c)).c.mono) {
+      const vc = valDoors.find((x) => valOk(x.c)).c;
       for (const g of greens.filter((x) => !x.used)) {
         const f = await frameOf(vc, g.t, 640);
         if (run !== S.run) return false;
@@ -4330,8 +4335,8 @@
     for (const x of lineRes) {
       const ng = (x.greens || []).length;
       const luces = !hasValidator(x.c) ? '' : !x.c.valz ? ' · validador: márcalo con «💡 Marcar el validador» sobre la cámara para saber quién pagó'
-        : x.c.valz.auto ? ` · validador sin confirmar (${ng} posible${ng === 1 ? '' : 's'} ${ng === 1 ? 'luz' : 'luces'} verde${ng === 1 ? '' : 's'}): confírmalo con «💡» sobre la cámara`
-          : ` · validador: ${ng} ${ng === 1 ? 'luz' : 'luces'} verde${ng === 1 ? '' : 's'} (pagos)`;
+        : !valOk(x.c) ? ` · validador sin confirmar (${ng} posible${ng === 1 ? '' : 's'} ${ng === 1 ? 'luz' : 'luces'} verde${ng === 1 ? '' : 's'}): confírmalo con «💡» sobre la cámara`
+          : ` · validador${x.c.valz.auto ? ' (ubicado solo)' : ''}: ${ng} ${ng === 1 ? 'luz' : 'luces'} verde${ng === 1 ? '' : 's'} (pagos)`;
       const cab = x.heads ? ` · conteo por cabezas: entran ${x.heads.ins.length}, salen ${x.heads.outs.length} (${x.heads.frames} fotos)` : '';
       porCamara.push(`${camName(x.c)}: ${x.closed ? `la puerta estuvo cerrada (lo que cruzó la línea era gente moviéndose adentro): nadie sube${luces}` : x.quiet ? `sin movimiento, nadie sube${luces}` : `línea de conteo${x.c.line && x.c.line.auto ? ' automática' : ''} (${x.how}): cruzan hacia adentro ${x.boarders.length}, hacia afuera ${x.bajan}${(x.near || []).length ? `, ${x.near.length} más llegaron a la puerta` : ''} · ${x.tracks} personas seguidas en ${x.frames} fotos${cab}${luces}`}`);
       bajan += x.bajan;
