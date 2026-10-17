@@ -447,7 +447,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 17;
+  const COUNT_V = 18;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -461,7 +461,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.17-8';
+  const VERSION = '2026.10.17-9';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1760,8 +1760,12 @@
   // Puerta de cada cámara sin IA: en estos buses los canales son fijos (CH4 delantera con validador, CH5 central, CH7
   // trasera), y los archivos suelen traer la puerta en el nombre («primera_puerta», «puerta trasera»…).
   const FIXED = { CH4: ['puerta_delantera', true], CH5: ['puerta_central', false], CH7: ['puerta_trasera', false], CH2: ['exterior', false], CH3: ['pasillo', false], CH8: ['pasillo', false] };
+  // Los canales fijos son los del bus de 8 cámaras (CH4 puerta delantera con validador, CH5 central, CH7 trasera).
+  // Los buses chicos de 5 cámaras (STU, patentes LCSX) usan otros: CH2 conductor y puerta delantera, CH4 la puerta del
+  // medio, CH3 y CH5 el salón. Sin un canal 6 a 8 entre los videos, las cámaras las reconoce la IA.
+  const eightCh = () => S.cams.some((x) => /^CH[678]$/.test(x.label || ''));
   function doorGuess(c) {
-    if (FIXED[c.label]) return FIXED[c.label];
+    if (FIXED[c.label] && eightCh()) return FIXED[c.label];
     const n = c.name.toLowerCase().replace(/[_\-.]+/g, ' ');
     if (/primera puerta|puerta (1|uno|delantera)|delantera/.test(n)) return FIXED.CH4;
     if (/segunda puerta|puerta (2|dos|central|media|del medio)|central/.test(n)) return FIXED.CH5;
@@ -1952,10 +1956,27 @@
   }
   const MOVE_MIN = 0.06;
   // Devuelve true (leído), false (se canceló) o 'sin' (la cámara no trae coordenadas que se puedan comparar).
-  async function localPass(run) {
+  // Cámara de la que se leen las coordenadas sin IA: la de referencia si sus letras se distinguen; si no (cámara
+  // infrarroja en blanco y negro, o con el fondo blanco detrás del texto, como la del conductor de los buses STU),
+  // otra cámara a color del mismo equipo. Todas las cámaras de un MDVR muestran las mismas coordenadas.
+  async function gpsCam(times) {
     const ref = refCam();
+    const order = [ref, ...S.cams.filter((c) => !c.bad && c !== ref)].filter(Boolean);
+    const k = Math.max(1, Math.floor(times.length / 5));
+    const probe = times.filter((_, i) => i % k === 0).slice(0, 5);
+    for (const c of order) {
+      let good = 0;
+      for (const t of probe) {
+        const L = await coordStrip(c, t);
+        if (L && !L.mono && L.T.reduce((a, b) => a + b, 0) > 30) good++;
+      }
+      if (good * 2 >= probe.length) return c;
+    }
+    return null;
+  }
+  async function localPass(run) {
     const times = gridTimes();
-    if (!ref || !times.length) return 'sin';
+    if (!refCam() || !times.length) return 'sin';
     const byT = new Map(S.moments.map((m) => [m.t, m]));
     // Ya leído antes (por ejemplo, al reabrir los mismos videos): no se vuelve a leer.
     if (times.every((t) => byT.has(t))) return S.moments.some((m) => m.detenido) ? true : 'sin';
@@ -1970,14 +1991,16 @@
       return 'sin';
     };
     const doubtful = () => seen >= 12 && unsure / seen > 0.15;
+    const ref = await gpsCam(times);
+    if (run !== S.run) return false;
+    if (!ref) return giveUp();
     for (let i = 0; i < times.length; i++) {
       if (run !== S.run) return false;
       const t = times[i];
       const L = await coordStrip(ref, t);
       if (run !== S.run) return false;
-      // En blanco y negro no se distinguen las letras del fondo por el color: se lee con IA.
-      if (L && L.mono) return giveUp();
-      const ch = stripChange(prev, L);
+      // Un rato en blanco y negro (la cámara pasa a infrarrojo): esa lectura no se compara, pero no se abandona.
+      const ch = L && L.mono ? null : stripChange(prev, L);
       let m = byT.get(t);
       if (!m) { m = { t, lat: null, lon: null, hora: null, vel: null, detenido: false, puertas: false, subiendo: 0, descripcion: '', alerta: false }; S.moments.push(m); byT.set(t, m); }
       if (ch != null) {
@@ -1988,7 +2011,7 @@
         } else if (ch < MOVE_MIN) unsure++;
       }
       m.local = true;
-      prev = L;
+      prev = L && L.mono ? null : L;
       prevM = m;
       S.frontier = Math.min(t + S.step / 2, S.range.to);
       // Sin texto claro en las primeras 20 lecturas: esta cámara no trae coordenadas.
@@ -2187,7 +2210,10 @@
     // Varias detenciones seguidas en el mismo paradero (el bus avanza unos metros y vuelve a parar) son un solo
     // paradero: se juntan si están a menos de 2 minutos. Antes salía el mismo paradero en 2 o 3 filas.
     const parOfSeg = (g) => { const ll = g.filter((m) => m.lat != null); if (!ll.length) return null; const m = ll[ll.length >> 1]; return nearestParadero(m.lat, m.lon, 0.1); };
-    const kept = segs.filter((g) => g.some((m) => m.puertas || m.subiendo > 0) || g[g.length - 1].t - g[0].t + S.step >= 15 || g.some((m) => m.lat != null && nearestParadero(m.lat, m.lon, 0.1)));
+    // Con la lectura sin IA (cada 4 s) una parada corta queda en una o dos lecturas: en los buses STU la gente sube en
+    // 13 s (a las 03:48 subieron 7 en una detención que el GPS marcó quieta una sola vez) y antes se descartaba por
+    // durar menos de 15 s. Ahora basta con 8 s; un semáforo que quede como «paradero» se cuenta igual, sin nadie.
+    const kept = segs.filter((g) => g.some((m) => m.puertas || m.subiendo > 0) || g[g.length - 1].t - g[0].t + S.step >= (g.some((m) => m.local) ? 8 : 15) || g.some((m) => m.lat != null && nearestParadero(m.lat, m.lon, 0.1)));
     const joined = [];
     for (const g of kept) {
       const prev = joined[joined.length - 1];
@@ -2950,7 +2976,7 @@
     // 5 fotos por segundo, hasta 200 por puerta. Solo mientras hay gente moviéndose en la puerta (act): en una
     // detención larga, repartir las 200 fotos en toda la espera las dejaba muy separadas justo cuando subían.
     // (Desde 6 s antes del primer movimiento hasta que parte: en la cámara infrarroja el detector ve a pocos.)
-    const a0 = Math.max(0, s.t0 - 2, act ? act[0] - 6 : 0), a1 = s.t1 + 2;
+    const a0 = Math.max(0, s.t0 - DOOR_EARLY - 1, act ? act[0] - 6 : 0), a1 = s.t1 + 2;
     const span = a1 - a0, step = Math.max(HEAD_STEP, span / 200);
     const times = [];
     for (let t = a0; t <= a1 + 1e-6; t += step) times.push(+t.toFixed(2));
@@ -3860,7 +3886,7 @@
   async function onboardSigs(c, s, run) {
     if (!Y.sess || !c.line) return [];
     const ts = [];
-    for (let t = Math.max(0, s.t0 - 12); t <= s.t0 - 5 + 1e-6; t += 1) ts.push(t);
+    for (let t = Math.max(0, s.t0 - DOOR_EARLY - 12); t <= s.t0 - DOOR_EARLY - 5 + 1e-6; t += 1) ts.push(t);
     if (!ts.length) return [];
     const fr = await framesAt(c, ts);
     const out = [];
@@ -3927,12 +3953,16 @@
       motivo: String(r.motivo || '').trim(), thumb: t.toDataURL('image/jpeg', 0.72),
     };
   }
+  // La puerta se abre antes de que la pantalla marque 0 km/h: la velocidad y el GPS escritos van atrasados (en los buses
+  // STU la gente ya sube con «27KM/H» en pantalla) y el bus abre al terminar de frenar.
+  const DOOR_EARLY = 7;
   // Conteo de una puerta con línea: devuelve a quienes subieron (con fotos anotadas) o null si no se pudo.
   async function lineCount(s, c, run) {
     // Con el detector en el computador (sin costo) se miran más fotos por paradero.
     const keep = {};
-    // La puerta se abre mientras el bus frena y se cierra cuando ya parte: se mira desde 4 s antes hasta 2 s después.
-    const win = { t0: Math.max(0, s.t0 - 4), t1: s.t1 + 2 };
+    // La puerta se abre mientras el bus frena y se cierra cuando ya parte: se mira desde antes de que la pantalla marque
+    // 0 km/h (DOOR_EARLY) hasta 2 s después.
+    const win = { t0: Math.max(0, s.t0 - DOOR_EARLY - 3), t1: s.t1 + 2 };
     const times = await lineTimes(c, win, run, (await yolo()) ? 240 : 96, keep);
     if (run !== S.run) return null;
     // Luz del validador en esta detención (pagos), sin IA.
@@ -4001,14 +4031,14 @@
       }
       // Con el bus en marcha las puertas están cerradas: un cruce fuera de la detención es gente moviéndose adentro.
       const tx = frames[x.i] ? frames[x.i].t : s.t0;
-      if (tx < s.t0 - 1 || tx > s.t1 + 1) continue;
+      if (tx < s.t0 - DOOR_EARLY || tx > s.t1 + 1) continue;
       if (x.dir === 'out') { bajan++; continue; }
       const k = tr.boxes.findIndex((b) => b.i === x.i);
       const pick = [tr.boxes[0], tr.boxes[Math.max(0, k - 1)], tr.boxes[k], tr.boxes[tr.boxes.length - 1]].filter((v, j, a) => v && a.indexOf(v) === j);
       specs.push({ near: false, tr, at: x.i, d: 0, box: tr.boxes[k].box, pick, where: pick.map((b) => (lineSide(c.line, boxFoot(b.box)) === c.line.inside ? 'adentro' : 'afuera')) });
     }
     // Candidatos que llegan a la puerta con el bus en marcha (fuera de la detención): no suben, se descartan.
-    for (let k = specs.length - 1; k >= 0; k--) { const tt = frames[specs[k].at] ? frames[specs[k].at].t : s.t0; if (tt < s.t0 - 1 || tt > s.t1 + 1) specs.splice(k, 1); }
+    for (let k = specs.length - 1; k >= 0; k--) { const tt = frames[specs[k].at] ? frames[specs[k].at].t : s.t0; if (tt < s.t0 - DOOR_EARLY || tt > s.t1 + 1) specs.splice(k, 1); }
     // La misma persona seguida en dos tramos (se perdió un momento): el segundo tramo no se cuenta otra vez.
     const tOf = (i) => frames[i].t;
     const kept = [];
@@ -4797,7 +4827,48 @@
     }
     return bd <= maxKm ? best : null;
   }
-  const parOf = (s) => (s.lat != null ? nearestParadero(s.lat, s.lon, 0.1) : signParOf(s));
+  // Paraderos en el orden del recorrido. En un circuito (como el 116) la ida y la vuelta pasan por las mismas calles y
+  // el paradero más cercano puede ser el de la vereda de enfrente: antes salía N° 76, 9, 72, 14 en cuatro minutos. Se
+  // elige para todas las detenciones a la vez la serie de paraderos que avanza en el orden del servicio (a lo más un
+  // tercio del recorrido entre dos detenciones) y queda más cerca; una detención sin paradero que calce queda sin nombre.
+  const SEQ = { key: '', map: new Map() };
+  function seqMap() {
+    const L = PAR.list, n = L.length;
+    const st = S.stops.filter((x) => x.lat != null).sort((a, b) => a.t0 - b.t0);
+    const key = `${n}|${n ? L[0].c : ''}|${st.map((x) => `${x.t0}:${x.lat.toFixed(5)},${x.lon.toFixed(5)}`).join(';')}`;
+    if (key === SEQ.key) return SEQ.map;
+    SEQ.key = key;
+    SEQ.map = new Map();
+    if (n < 3 || !st.length) return SEQ.map;
+    // Entre dos detenciones seguidas el bus no se salta más de un tercio del recorrido (ni da la vuelta entera), y
+    // cada paradero saltado cuesta 3 m: entre el de ida y el de vuelta de la misma esquina gana el que sigue la serie.
+    const SKIP = 0.12, JUMP = Math.max(12, Math.round(n / 3));
+    // Estado: posición «desenrollada» del último paradero asignado (índice + n por cada vuelta) → costo y camino.
+    let states = new Map([[-1, { c: 0, path: [] }]]);
+    for (const x of st) {
+      const cand = [];
+      L.forEach((p, k) => { const d = distKm(p, x); if (d <= 0.15) cand.push([k, d]); });
+      const next = new Map();
+      const put = (pos, c, path) => { const o = next.get(pos); if (!o || c < o.c) next.set(pos, { c, path }); };
+      for (const [P, v] of states) {
+        put(P, v.c + SKIP, [...v.path, null]);
+        for (const [k, d] of cand) for (let w = 0; w < 3; w++) {
+          const pos = k + n * w;
+          if (P < 0 ? pos < n : pos >= P && pos - P <= JUMP) put(pos, v.c + d + (P < 0 ? 0 : (pos - P) * 0.003), [...v.path, k]);
+        }
+      }
+      states = next;
+    }
+    let best = null;
+    for (const v of states.values()) if (!best || v.c < best.c) best = v;
+    st.forEach((x, i) => SEQ.map.set(x, best.path[i] == null ? null : L[best.path[i]]));
+    return SEQ.map;
+  }
+  const parOf = (s) => {
+    if (s.lat == null) return signParOf(s);
+    const m = seqMap();
+    return m.has(s) ? m.get(s) : nearestParadero(s.lat, s.lon, 0.1);
+  };
   // Sin GPS en la pantalla: el paradero se reconoce por el letrero que lee la cámara frontal.
   const signParOf = (s) => (s && s.signPar ? PAR.list.find((p) => p.c === s.signPar) || null : null);
   // Paraderos del servicio por los que el bus pasó (a menos de 60 m del recorrido) sin detenerse en ellos.
@@ -4805,12 +4876,26 @@
   function passedParaderos() {
     if (!PAR.list.length || S.track.length < 2) return [];
     const stopped = new Set(S.stops.map(parOf).filter(Boolean));
+    // Orden del recorrido según las detenciones con paradero: un paradero solo cuenta como «pasado» en un momento en
+    // que el bus va por esa parte del recorrido (no el de la vereda de enfrente de un circuito).
+    const n = PAR.list.length;
+    const idx = new Map(PAR.list.map((p, k) => [p, k]));
+    const seq = S.stops.filter((x) => parOf(x)).sort((a, b) => a.t0 - b.t0).map((x) => ({ t: (x.t0 + x.t1) / 2, k: idx.get(parOf(x)) }));
+    const fits = (k, t) => {
+      if (seq.length < 2) return true;
+      let a = null, b = null;
+      for (const q of seq) { if (q.t <= t) a = q; else { b = q; break; } }
+      const ahead = (from, to) => (to - from + n) % n;
+      if (a && b) return ahead(a.k, k) <= ahead(a.k, b.k);
+      if (a) return ahead(a.k, k) <= n / 4;
+      return ahead(k, b.k) <= n / 4;
+    };
     const out = [];
     for (const p of PAR.list) {
       if (stopped.has(p)) continue;
       let best = null, bd = Infinity;
-      for (const q of S.track) { const d = distKm(p, q); if (d < bd) { bd = d; best = q; } }
-      if (best && bd <= 0.06 && (!S.range || inRange({ t0: best.t, t1: best.t }))) out.push({ pasado: true, par: p, t0: best.t, t1: best.t });
+      for (const q of S.track) { const d = distKm(p, q); if (d <= 0.06 && fits(idx.get(p), q.t) && d < bd) { bd = d; best = q; } }
+      if (best && (!S.range || inRange({ t0: best.t, t1: best.t }))) out.push({ pasado: true, par: p, t0: best.t, t1: best.t });
     }
     return out;
   }
