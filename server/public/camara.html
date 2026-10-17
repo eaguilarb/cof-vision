@@ -458,7 +458,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.17-5';
+  const VERSION = '2026.10.17-6';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -3416,6 +3416,21 @@
   // Una foto nueva de una cámara: se sigue a cada persona y se cuenta quien cruza la línea de la puerta.
   // Cabezas en vivo: se siguen como en el conteo completo y cada cabeza que entra rápido desde la puerta suma una
   // subida «por cabeza»; en el paradero vale el mayor entre lo que cruzó la línea y las cabezas (no se suman ambos).
+  const HEAD_SHOW = 0.35;
+  function stillFilter(c, t, dets) {
+    const st = c.still || (c.still = []);
+    const out = [];
+    for (const d of dets) {
+      const x = (d.box[1] + d.box[3]) / 2, y = (d.box[0] + d.box[2]) / 2;
+      let p = st.find((q) => Math.hypot(q.x - x, q.y - y) < 0.03);
+      if (!p) { p = { x, y, first: t, last: t, n: 0 }; st.push(p); }
+      if (t < p.first || t - p.last > 20) { p.first = t; p.n = 0; }
+      p.x = p.x * 0.8 + x * 0.2; p.y = p.y * 0.8 + y * 0.2; p.last = t; p.n++;
+      if (!(p.n >= 5 && t - p.first >= 6)) out.push(d);
+    }
+    c.still = st.filter((q) => Math.abs(t - q.last) <= 60);
+    return out;
+  }
   async function liveHeads(c, t) {
     const sess = await headModel();
     const v = c.video, W = v.videoWidth, H = v.videoHeight;
@@ -3426,8 +3441,11 @@
     const L = c.live, HL = L.H || (L.H = { tracks: [], t: -9 });
     if (t < HL.t || t - HL.t > 2.5) HL.tracks = [];
     HL.t = t;
-    L.heads = { t, dets: boxesIn(raw, 0, 0, W * sc, H * sc) };
-    const pts = L.heads.dets.map((d) => [(d.box[1] + d.box[3]) / 2, (d.box[0] + d.box[2]) / 2]).filter((p) => p[0] >= HEAD_X0 && p[0] <= HEAD_X1);
+    const all = boxesIn(raw, 0, 0, W * sc, H * sc);
+    // En pantalla solo las cabezas seguras que se mueven: los respaldos negros de los asientos, las manillas o alguien
+    // sentado quedan en el mismo lugar y no se dibujan (el conteo igual exige que la cabeza entre desde la puerta).
+    L.heads = { t, dets: stillFilter(c, t, all.filter((d) => d.s >= HEAD_SHOW)) };
+    const pts = all.map((d) => [(d.box[1] + d.box[3]) / 2, (d.box[0] + d.box[2]) / 2]).filter((p) => p[0] >= HEAD_X0 && p[0] <= HEAD_X1);
     const live = HL.tracks.filter((tr) => t - tr.t <= 1.5);
     const R = Math.min(0.25, HEAD_R * Math.max(1, (L.dt || 0.3) / 0.3));
     const C = live.map((tr) => pts.map((p) => Math.hypot(p[0] - tr.x, p[1] - tr.y)));
