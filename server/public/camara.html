@@ -444,7 +444,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 15;
+  const COUNT_V = 16;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -458,7 +458,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.17-2';
+  const VERSION = '2026.10.17-3';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -2248,11 +2248,12 @@
   // Verde intenso: la pantalla del validador cuando acepta la tarjeta.
   // La pantalla del validador es verde esmeralda muy saturado (tono ~150°); el pasto o los árboles que se ven por el
   // vidrio son verde amarillento y apagado (tono ~90°): así se distinguen aunque el bus vaya en movimiento.
+  // Con mucha luz la pantalla se ve deslavada (saturación 0,3-0,5) pero mantiene el tono esmeralda (140-155°).
   const isGreen = (r, g, b) => {
     const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-    if (mx !== g || g < 90 || mx - mn < mx * 0.55) return false;
+    if (mx !== g || g < 100 || mx - mn < mx * 0.3) return false;
     const h = (60 * (b - r)) / (mx - mn) + 120;
-    return h >= 125 && h <= 175;
+    return h >= 132 && h <= 168;
   };
   // Puntos verdes de una foto, solo en manchas compactas (una pantalla encendida): las líneas finas verdes en los
   // bordes de los fierros son ruido de la compresión del video y se descartan.
@@ -3792,6 +3793,54 @@
     }
     return out;
   }
+  // ¿Pagó esta persona? Se mira lo que hace frente al validador: 9 fotos ampliadas del validador y de sus manos, desde
+  // 2 s antes hasta 3 s después de que sube (probado en SKWD-57: 0 pagos inventados; junto con la luz medida, 17 de 18).
+  async function payCheck(b, run) {
+    const c = b.c, z = c.valz;
+    let x0, y0, x1, y1;
+    if (z) { const cx = (z.x0 + z.x1) / 2, cy = (z.y0 + z.y1) / 2; x0 = cx - 0.2; x1 = cx + 0.35; y0 = cy - 0.3; y1 = cy + 0.45; }
+    else if (b.box) { const [by0, bx0, by1, bx1] = b.box, w = bx1 - bx0, h = by1 - by0; x0 = bx0 - 0.6 * w; x1 = bx1 + 0.35 * w; y0 = by0 - 0.15 * h; y1 = by1 + 0.1 * h; }
+    else { x0 = 0.16; x1 = 0.65; y0 = 0.12; y1 = 0.88; }
+    x0 = clamp(x0, 0, 0.9); x1 = clamp(x1, x0 + 0.1, 1); y0 = clamp(y0, 0, 0.9); y1 = clamp(y1, y0 + 0.1, 1);
+    const TW = 360, TH = 288;
+    const m = document.createElement('canvas');
+    m.width = TW * 3; m.height = TH * 3;
+    const g = m.getContext('2d');
+    g.fillStyle = '#000'; g.fillRect(0, 0, m.width, m.height);
+    let n = 0;
+    for (let k = 0; k < 9; k++) {
+      const f = await frameOf(c, Math.max(0, b.t - 2 + k * 0.625), 960);
+      if (run !== S.run) return null;
+      if (!f) continue;
+      g.drawImage(f, x0 * f.width, y0 * f.height, (x1 - x0) * f.width, (y1 - y0) * f.height, (k % 3) * TW, Math.floor(k / 3) * TH, TW, TH);
+      g.font = 'bold 26px sans-serif'; g.lineWidth = 4; g.strokeStyle = '#000'; g.fillStyle = '#fff';
+      g.strokeText(String(k + 1), (k % 3) * TW + 6, Math.floor(k / 3) * TH + 28); g.fillText(String(k + 1), (k % 3) * TW + 6, Math.floor(k / 3) * TH + 28);
+      n++;
+    }
+    if (n < 5) return null;
+    const parts = [{ text: [
+      'Mosaico de 9 fotos seguidas (1 a 9, cada 0,6 s) de la cámara de la PUERTA DELANTERA de un bus de Santiago, ampliada en el VALIDADOR: el aparato junto a la puerta, con una pantalla pequeña que se pone VERDE cuando se paga con tarjeta bip! o celular, y ROJA si rechaza.',
+      'Mira a la persona que está subiendo: ¿acerca una tarjeta, celular o la mano al validador? ¿se enciende la pantalla en verde?',
+      'Responde SOLO JSON: {"hay_persona_subiendo":true,"acerca_tarjeta":true,"luz":"verde|roja|ninguna","foto_pago":4,"pago":"si|no|no_se","motivo":"breve"}.',
+      '"pago":"si" si acerca la tarjeta o el celular y se ve verde, o si claramente valida; "no" solo si se ve claramente que pasa de largo sin acercar nada al validador; "no_se" si no se alcanza a ver.',
+    ].join('\n') }, img(m, 0.85)];
+    let r = null;
+    try {
+      const txt = String((await gemini(parts, run, 'main', { raw: true })) || '');
+      const j = txt.match(/\{[\s\S]*\}/);
+      r = j ? JSON.parse(j[0]) : null;
+    } catch (e) { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; r = null; }
+    if (!r) return null;
+    const t = document.createElement('canvas');
+    t.width = 720; t.height = 576;
+    t.getContext('2d').drawImage(m, 0, 0, 720, 576);
+    return {
+      pago: /^s/i.test(String(r.pago || '')) ? 'si' : /^no$/i.test(String(r.pago || '').trim()) ? 'no' : 'no_se',
+      acerca: r.acerca_tarjeta === true || r.acerca_tarjeta === 'true',
+      verde: /verde|green/i.test(String(r.luz || '')), roja: /roj|red/i.test(String(r.luz || '')),
+      motivo: String(r.motivo || '').trim(), thumb: t.toDataURL('image/jpeg', 0.72),
+    };
+  }
   // Conteo de una puerta con línea: devuelve a quienes subieron (con fotos anotadas) o null si no se pudo.
   async function lineCount(s, c, run) {
     // Con el detector en el computador (sin costo) se miran más fotos por paradero.
@@ -4157,6 +4206,19 @@
       // Sin verde = posible evasión (con su foto, para que el fiscalizador lo confirme).
       for (const b of front) if (!payOf.has(b)) payOf.set(b, false);
     }
+    // Pago persona por persona en la puerta con validador: a quien no tiene una luz verde medida se le revisa lo que
+    // hace frente al validador (fotos ampliadas). Con la IA apagada no se revisa.
+    if (S.iaRev) {
+      for (const b of [...boarders, ...headB].filter((x) => hasValidator(x.c) && !x.onboard && payOf.get(x) !== true)) {
+        const r = await payCheck(b, run);
+        if (run !== S.run) return false;
+        if (!r) continue;
+        b.payAI = r;
+        // Acercar la tarjeta o el celular al validador es pagar (salvo que quede en rojo), aunque la pantalla no se alcance a ver.
+        if (r.pago === 'si' || r.verde || (r.acerca && !r.roja)) payOf.set(b, true);
+        else if (r.pago === 'no' && !r.acerca && !r.roja) payOf.set(b, false);
+      }
+    }
     // Revisión con IA (Qwen) solo de quienes cruzaron la línea y NO tienen un pago medido: son los que quedarían como
     // evasión. La IA mira las fotos y dice si de verdad subió, si es personal y si se ve la luz verde. A quienes solo
     // llegaron a la puerta no se los manda (la IA tiende a «confirmarlos» y sumaba gente que no subió).
@@ -4250,9 +4312,9 @@
       const how = b.onboard ? 'ya iba a bordo antes del paradero (agente, o alguien que bajó y volvió a subir): no se cuenta' : b.cabeza ? (noSube ? 'contado por su cabeza, pero la IA revisó y NO subió' : 'contado por su cabeza (el detector de personas no lo siguió entero)') : noSube ? 'cruzó la línea, pero la IA revisó y NO subió (ya estaba adentro o se bajó)' : b.near ? `llegó desde afuera hasta la puerta${pay ? ' y pagó' : sube ? ' y la IA vio que sube' : ''}` : 'cruzó la línea';
       const light = pay === true ? (b.c.mono ? ' · destello en el validador (cámara en blanco y negro)' : ' · luz verde en el validador') : pay === false ? ' · NO se vio luz verde en el validador' : monoNo ? ' · cámara en blanco y negro: no se vio el destello del validador, revisar' : '';
       if (b.near) nearKept.push(b);
-      allMeta.push({ cam: b.c.key, t: b.t, thumb: b.thumb });
+      allMeta.push({ cam: b.c.key, t: b.t, thumb: b.payAI && b.payAI.thumb ? b.payAI.thumb : b.thumb });
       personas.push({
-        t: b.t, cam: b.c.key, desc: `${desc} · ${how}${light} (#${b.tr.id})`,
+        t: b.t, cam: b.c.key, desc: `${desc} · ${how}${light}${b.payAI ? ` · validador revisado: ${b.payAI.pago === 'si' || b.payAI.verde ? 'PAGÓ' : b.payAI.acerca && !b.payAI.roja ? 'acercó la tarjeta al validador: PAGÓ' : b.payAI.pago === 'no' ? 'NO validó' : 'no se alcanza a ver'}${b.payAI.motivo ? ` (${b.payAI.motivo})` : ''}` : ''} (#${b.tr.id})`,
         luz: pay === true || verde ? 'verde' : roja ? 'roja' : null,
         // Por una puerta sin validador, quien fue a validar adelante (verde que sobró) queda como pagado.
         valida: val ? v : pay === true ? true : null, sinValidador: !val, fueraZona: false, desdeAfuera: true,
@@ -4260,7 +4322,7 @@
         // El recuadro se pinta del color del resultado (rojo evade, verde paga, amarillo dudoso, azul zona paga).
         img: allMeta.length - 1, box: b.box || null, linea: true,
         // Sin validador confirmado no se sabe si pagó (ni adelante ni atrás): queda para revisar.
-        revisar: b.cabeza && !b.review ? !zpOf(s) : monoNo || (pay === null && (checked.has(b) ? false : !valKnown)),
+        revisar: b.payAI && (b.payAI.pago !== 'no_se' || (b.payAI.acerca && !b.payAI.roja)) ? false : b.cabeza && !b.review ? !zpOf(s) : monoNo || (pay === null && (checked.has(b) ? false : !valKnown)),
         res: v === true ? 'paga' : v === false ? 'evade' : val ? 'dudoso' : 'evade',
       });
     });
