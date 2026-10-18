@@ -17,7 +17,7 @@ from conteo import Detector, contar_puerta
 
 TOKEN = os.environ.get('WORKER_TOKEN', '')
 GKEY = os.environ.get('GOOGLE_API_KEY', '')
-MODELOS = [p for p in os.environ.get('MODELOS', '/app/models/cof-11n.onnx').split(',') if p]
+MODELOS = [p for p in os.environ.get('MODELOS', '/app/models/rfdetr-nano.onnx').split(',') if p]
 ORIGENES = os.environ.get('ORIGENES', 'https://eaguilarb.github.io').split(',')
 
 app = FastAPI(title='COF conteo')
