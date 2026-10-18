@@ -7,6 +7,7 @@ Variables de entorno:
   GOOGLE_API_KEY  clave de Google para bajar videos de Drive (si la página no manda la suya)
   MODELOS         rutas de los .onnx separadas por coma (por defecto los de /app/models)
   ORIGENES        orígenes permitidos para la página (por defecto el sitio publicado)
+  HILOS           núcleos que usa el detector (0 = todos)
 """
 import os, re, uuid, shutil, threading, subprocess, tempfile, time, traceback
 import cv2
@@ -73,7 +74,7 @@ def correr(jid, job: Trabajo):
         with LOCK:
             J['estado'] = 'contando'
             if DET is None:
-                DET = Detector(MODELOS)
+                DET = Detector(MODELOS, threads=int(os.environ.get('HILOS', '0') or 0))
             gkey = job.gkey or GKEY
             for k, (t0, t1) in enumerate(job.tramos):
                 fila = {'t0': t0, 't1': t1}

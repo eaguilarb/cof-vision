@@ -1,0 +1,33 @@
+# COF Vision en el VPS (junto a la intranet). La página sale por el Caddy de la intranet; el conteo queda interno.
+# Uso: cd ~/cof && docker compose -f deploy/vps/docker-compose.yml --env-file .env up -d --build
+services:
+  cof-vision:
+    build: ../../server
+    restart: unless-stopped
+    environment:
+      APP_USER: ${APP_USER}
+      APP_PASSWORD: ${APP_PASSWORD}
+      APP_USERS: ${APP_USERS:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      CONTEO_URL: http://cof-conteo:8080
+      CONTEO_TOKEN: ${WORKER_TOKEN}
+    mem_limit: 256m
+    networks: [intranet]
+  cof-conteo:
+    build:
+      context: ../../worker
+      dockerfile: Dockerfile.vps
+    restart: unless-stopped
+    environment:
+      WORKER_TOKEN: ${WORKER_TOKEN}
+      ORIGENES: ${ORIGENES:-https://eaguilarb.github.io}
+      HILOS: "2"
+    # Servidor de 2 núcleos y 4 GB compartido con la intranet: el conteo usa a lo más 1,5 núcleos y 1,5 GB.
+    cpus: 1.5
+    mem_limit: 1536m
+    networks: [intranet]
+networks:
+  intranet:
+    external: true
+    name: ${RED_INTRANET:-intranet_default}
