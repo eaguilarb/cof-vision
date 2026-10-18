@@ -20,18 +20,18 @@ class Detector:
         self.sess = [ort.InferenceSession(p, so, providers=['CPUExecutionProvider']) for p in paths]
 
     def __call__(self, bgr, conf=0.3):
+        # La imagen se estira a 640x640 sin relleno (como hace rfdetr.predict): con relleno, una cámara 928x480
+        # quedaba en 640x331 y las personas se veían a la mitad de tamaño.
         H, W = bgr.shape[:2]
-        sc = 640 / max(W, H)
-        can = np.full((640, 640, 3), 114, np.uint8)
-        r = cv2.resize(bgr, (int(W * sc), int(H * sc)))
-        can[:r.shape[0], :r.shape[1]] = r
-        x = (cv2.cvtColor(can, cv2.COLOR_BGR2RGB).astype(np.float32) / 255).transpose(2, 0, 1)[None]
+        sx, sy = 640 / W, 640 / H
+        x = (cv2.cvtColor(cv2.resize(bgr, (640, 640)), cv2.COLOR_BGR2RGB).astype(np.float32) / 255).transpose(2, 0, 1)[None]
         outs = []
         for s in self.sess:
             o = s.run(None, {s.get_inputs()[0].name: x})[0][0]
             outs.append(o[(o[:, 5] == 0) & (o[:, 4] >= conf)])
         o = np.concatenate(outs) if outs else np.zeros((0, 6), np.float32)
-        d = sv.Detections(xyxy=(o[:, :4] / sc).astype(np.float32), confidence=o[:, 4].astype(np.float32),
+        xyxy = o[:, :4] / np.array([sx, sy, sx, sy], np.float32)
+        d = sv.Detections(xyxy=xyxy.astype(np.float32), confidence=o[:, 4].astype(np.float32),
                           class_id=np.zeros(len(o), int))
         # Con dos detectores, la misma persona sale dos veces: se deja la caja de mayor confianza.
         return d.with_nms(threshold=0.6) if len(self.sess) > 1 and len(d) else d
