@@ -138,6 +138,18 @@ queda solo en el servidor.
    - `APP_USERS` (opcional): más personas, `ana:clave1,pedro:clave2`.
    - `SESSION_SECRET` (opcional): texto largo al azar para firmar las sesiones.
 4. En *Settings → Networking*: *Generate Domain*.
+5. (Conteo en el servidor) `CONTEO_URL` y `CONTEO_TOKEN`: dirección y clave del servicio `worker/`.
+
+### Servicio de conteo (`worker/`)
+
+Python con supervision (ByteTrack + LineZone) sobre RF-DETR Nano en ONNX. Recibe los enlaces de Drive
+y la línea de cada puerta, baja solo los tramos de cada detención con ffmpeg y devuelve, por puerta,
+cuántos suben y bajan, cuándo y con qué recuadro. En el LCSX54 contó 27 de 30 subidas (conteo a mano).
+
+1. En el mismo proyecto de Railway: servicio nuevo con *Root Directory* = `worker` (Dockerfile en dos
+   etapas: la primera exporta RF-DETR a ONNX).
+2. Variables: `WORKER_TOKEN` (clave que usa el servidor de la página) y `ORIGENES`.
+3. En el servicio de la página: `CONTEO_URL` = dirección pública del servicio y `CONTEO_TOKEN` = la misma clave.
 
 Para probarlo en el computador:
 

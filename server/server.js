@@ -7,6 +7,8 @@
 //   APP_PASSWORD     contraseña para entrar
 //   APP_USERS        (opcional) más usuarios: "ana:clave1,pedro:clave2"
 //   SESSION_SECRET   (opcional) secreto para firmar la sesión; si falta se deriva de lo anterior
+//   CONTEO_URL       (opcional) dirección del servicio de conteo (worker/, supervision + RF-DETR)
+//   CONTEO_TOKEN     clave de ese servicio (su WORKER_TOKEN); nunca llega al navegador
 //   PORT             lo define Railway
 import { createServer } from 'node:http'
 import { readFileSync } from 'node:fs'
@@ -26,13 +28,16 @@ for (const pair of (process.env.APP_USERS || '').split(',')) {
 const SECRET = process.env.SESSION_SECRET || createHash('sha256').update(`cof|${KEY}|${[...USERS].flat().join('|')}`).digest('hex')
 const SESSION_DAYS = 30
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/models'
+const CONTEO = (process.env.CONTEO_URL || '').trim().replace(/\/+$/, '')
+const CONTEO_TOKEN = (process.env.CONTEO_TOKEN || '').trim()
 const MAX_BODY = 40 * 1024 * 1024
 
 if (!KEY) console.warn('Falta GEMINI_API_KEY: la página cargará pero no podrá analizar.')
 if (!USERS.size) console.warn('Faltan APP_USER y APP_PASSWORD: nadie podrá entrar.')
 
 // La página se lee al arrancar; se le avisa que la clave la pone el servidor.
-const page = readFileSync(join(here, 'public', 'camara.html'), 'utf8').replace('<script>\n(() => {', '<script>window.COF_SERVER = true;</script>\n<script>\n(() => {')
+// Con servicio de conteo configurado, la página cuenta a las personas allá (supervision + RF-DETR) y no en el teléfono.
+const page = readFileSync(join(here, 'public', 'camara.html'), 'utf8').replace('<script>\n(() => {', `<script>window.COF_SERVER = true;${CONTEO && CONTEO_TOKEN ? ' window.COF_CONTEO = true;' : ''}</script>\n<script>\n(() => {`)
 
 // ---------------------------------------------------------------- sesión
 const sign = (v) => createHmac('sha256', SECRET).update(v).digest('base64url')
@@ -176,6 +181,23 @@ async function handle(req, res) {
     const text = await r.text()
     const extra = r.headers.get('retry-after') ? { 'Retry-After': r.headers.get('retry-after') } : {}
     return send(res, r.status, text, 'application/json', extra)
+  }
+
+  // Servicio de conteo: el servidor agrega su clave. /api/conteo (estado), /api/conteo/trabajos (crear y consultar).
+  const k = path.match(/^\/api\/conteo(\/trabajos(?:\/([a-f0-9]{6,32}))?)?$/)
+  if (k) {
+    if (!user) return send(res, 401, JSON.stringify({ detail: 'Tu sesión terminó. Vuelve a entrar.' }), 'application/json')
+    if (!CONTEO || !CONTEO_TOKEN) return send(res, 503, JSON.stringify({ detail: 'Falta configurar CONTEO_URL y CONTEO_TOKEN en Railway.' }), 'application/json')
+    const target = `${CONTEO}${k[1] || '/'}`
+    const post = req.method === 'POST' && k[1] === '/trabajos'
+    if (!post && req.method !== 'GET') return send(res, 405, 'Método no permitido')
+    let r
+    try {
+      r = await fetch(target, { method: post ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${CONTEO_TOKEN}` }, body: post ? await readBody(req, 1_000_000) : undefined, signal: AbortSignal.timeout(30000) })
+    } catch (e) {
+      return send(res, 502, JSON.stringify({ detail: `No se pudo conectar con el servicio de conteo: ${e.message}` }), 'application/json')
+    }
+    return send(res, r.status, await r.text(), 'application/json')
   }
 
   if (path === '/' || path === '/index.html' || path === '/camara.html') {

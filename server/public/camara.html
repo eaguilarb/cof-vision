@@ -447,7 +447,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 22;
+  const COUNT_V = 23;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -461,7 +461,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.17-13';
+  const VERSION = '2026.10.18-1';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -4021,6 +4021,44 @@
       motivo: String(r.motivo || '').trim(), thumb: t.toDataURL('image/jpeg', 0.72),
     };
   }
+  // Conteo en el servidor (servicio cof-conteo: supervision + ByteTrack + LineZone con RF-DETR, calibrado con el LCSX54:
+  // 27 de 30 subidas). Solo con videos de Drive (el servidor los baja directo) y en la versión con usuario y contraseña.
+  const CONTEO = { ok: !!window.COF_CONTEO, fallas: 0 };
+  async function workerCount(s, c, win, run) {
+    const L = c.line;
+    // El servicio cuenta «adentro» a la derecha de la línea recorrida de a→b: se da vuelta si el adentro está al otro lado.
+    const [a, b] = L.inside === 1 ? [L.a, L.b] : [L.b, L.a];
+    const body = { puertas: { [c.label]: { video: c.remote, linea: [a[0], a[1], b[0], b[1]], off: c.off || 0, fps: 12, ancla: L.anchor === 'center' ? 'center' : 'bottom' } }, tramos: [[+win.t0.toFixed(2), +win.t1.toFixed(2)]] };
+    const r0 = await fetch('api/conteo/trabajos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (!r0.ok) throw new Error(`servicio de conteo: ${r0.status} ${(await r0.text()).slice(0, 160)}`);
+    const { id } = await r0.json();
+    const until = Date.now() + 15 * 60e3;
+    let j = null;
+    while (Date.now() < until) {
+      await nap(2500);
+      if (run !== S.run) return null;
+      const r = await fetch(`api/conteo/trabajos/${id}`);
+      if (!r.ok) throw new Error(`servicio de conteo: ${r.status}`);
+      j = await r.json();
+      if (j.estado === 'listo' || j.estado === 'error') break;
+    }
+    if (!j || j.estado !== 'listo') throw new Error(j && j.error ? j.error : 'el servicio de conteo no respondió a tiempo');
+    const res = (j.resultados[0] || {})[c.label];
+    if (!res) throw new Error('el servicio de conteo no devolvió esa cámara');
+    const boarders = [];
+    for (const [k, x] of (res.cajas_suben || res.t_suben.map((t, i) => ({ t, id: i, caja: null }))).entries()) {
+      const f = await frameOf(c, x.t, 640);
+      if (run !== S.run) return null;
+      if (!f) continue;
+      // Recuadro en el formato de la página: [y0, x0, y1, x1] en fracción de la imagen.
+      const box = x.caja ? [x.caja[1], x.caja[0], x.caja[3], x.caja[2]] : null;
+      const tr = { id: 9000 + (x.id != null ? x.id : k), boxes: [] };
+      const fr = { f, dets: box ? [{ id: tr.id, box }] : [] };
+      const thumb = annotate(fr, L, tr, [fr], '#00e5ff');
+      boarders.push({ c, tr, t: x.t, d: 0, near: false, fromOut: true, box, onboard: false, thumb: thumb.toDataURL('image/jpeg', 0.8), views: [thumb], where: ['adentro'] });
+    }
+    return { c, boarders, near: [], bajan: res.bajan, frames: 0, tracks: res.suben + res.bajan, how: 'servidor: supervision + RF-DETR', heads: null, ir: false };
+  }
   // La puerta se abre antes de que la pantalla marque 0 km/h: la velocidad y el GPS escritos van atrasados (en los buses
   // STU la gente ya sube con «27KM/H» en pantalla) y el bus abre al terminar de frenar.
   const DOOR_EARLY = 7;
@@ -4031,10 +4069,10 @@
     // La puerta se abre mientras el bus frena y se cierra cuando ya parte: se mira desde antes de que la pantalla marque
     // 0 km/h (DOOR_EARLY) hasta 2 s después.
     const win = { t0: Math.max(0, s.t0 - DOOR_EARLY - 3), t1: s.t1 + 2 };
-    // Con la línea cenital (centro de la persona) se mira a 10 fotos por segundo, como en la calibración con supervision:
-    // a 2 por segundo una persona pasaba la línea entre dos fotos y el seguimiento se perdía.
+    // Con la línea cenital (centro de la persona) se mira a 5 fotos por segundo: a 2 por segundo una persona pasaba la
+    // línea entre dos fotos y el seguimiento se perdía (con el servicio de conteo se miran 12 por segundo allá).
     const dense = c.line && c.line.anchor === 'center' && (await yolo());
-    const times = await lineTimes(c, win, run, dense ? 450 : (await yolo()) ? 240 : 96, keep, dense ? 0.1 : LINE_STEP);
+    const times = await lineTimes(c, win, run, dense ? 300 : (await yolo()) ? 240 : 96, keep, dense ? 0.2 : LINE_STEP);
     if (run !== S.run) return null;
     // Luz del validador en esta detención (pagos), sin IA.
     // Cámara en blanco y negro en este paradero (modo noche/infrarrojo): el pago se ve como destello.
@@ -4045,6 +4083,18 @@
     if (c.valz && greens.length) c.valz.hits = (c.valz.hits || 0) + greens.length;
     if (window.__cofDebug && keep.mot && keep.mot.green) (window.__cofDebug.greens = window.__cofDebug.greens || []).push({ cam: c.label, valz: c.valz, W: keep.mot.W, H: keep.mot.H, n: keep.mot.green.length, t: keep.mot.green.map((g) => +g.t.toFixed(2)), px: keep.mot.green.map((g) => g.idx.length), greens }); // solo para pruebas
     if (!times.length) return { c, quiet: true, boarders: [], bajan: 0, greens };
+    // Con el servicio de conteo, las personas se cuentan allá; si falla (o el video no es de Drive), se cuenta aquí.
+    if (CONTEO.ok && c.remote && c.line && CONTEO.fallas < 3) {
+      try {
+        const w = await workerCount(s, c, win, run);
+        if (run !== S.run) return null;
+        if (w) { CONTEO.fallas = 0; return { ...w, greens }; }
+      } catch (e) {
+        CONTEO.fallas++;
+        console.warn('conteo en el servidor', e);
+        if (CONTEO.fallas >= 3) status(`El servicio de conteo falló 3 veces (${e.message}); se sigue contando en este equipo.`, null, true);
+      }
+    }
     // Detector YOLO en el computador; si no se pudo cargar, la IA rápida marca a las personas.
     let frames = (await yolo()) ? await yoloFrames(c, times, run, s) : null;
     const how = frames ? `detector ${Y.name || 'YOLO'}` : 'IA';

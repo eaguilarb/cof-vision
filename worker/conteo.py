@@ -37,9 +37,10 @@ class Detector:
         return d.with_nms(threshold=0.6) if len(self.sess) > 1 and len(d) else d
 
 
-def contar_puerta(video, t0, t1, linea, det, fps_det=12, conf=0.4):
+def contar_puerta(video, t0, t1, linea, det, fps_det=12, conf=0.4, ancla='center'):
     """Cuenta en una puerta entre t0 y t1 (segundos del video). linea = (x0, y0, x1, y1) en píxeles, con el
-    interior del bus al lado derecho al recorrerla de (x0,y0) a (x1,y1), como en supervision.LineZone."""
+    interior del bus al lado derecho al recorrerla de (x0,y0) a (x1,y1). ancla: 'center' (cámara cenital, los pies
+    quedan fuera de la imagen) o 'bottom' (cámara de lado: cuentan los pies, como la línea dibujada en el escalón)."""
     v = cv2.VideoCapture(video)
     fps = v.get(cv2.CAP_PROP_FPS) or 25
     tr = trackers.ByteTrackTracker(lost_track_buffer=int(fps_det * 2), frame_rate=fps_det,
@@ -47,13 +48,14 @@ def contar_puerta(video, t0, t1, linea, det, fps_det=12, conf=0.4):
                                    high_conf_det_threshold=conf)
     # LineZone cuenta «in» hacia el lado izquierdo de start→end: se le pasa la línea al revés para que «in» = adentro.
     lz = sv.LineZone(start=sv.Point(linea[2], linea[3]), end=sv.Point(linea[0], linea[1]),
-                     triggering_anchors=[sv.Position.CENTER], minimum_crossing_threshold=2)
+                     triggering_anchors=[sv.Position.CENTER if ancla == 'center' else sv.Position.BOTTOM_CENTER],
+                     minimum_crossing_threshold=2)
     xa, xb = min(linea[0], linea[2]) - 40, max(linea[0], linea[2]) + 40
     (ax, ay), (bx, by) = linea[:2], linea[2:]
     lado = lambda x, y: (bx - ax) * (y - ay) - (by - ay) * (x - ax) > 0  # True = adentro
     i = int(t0 * fps)
     v.set(cv2.CAP_PROP_POS_FRAMES, i)
-    nxt, side, suben_t, prev = float(i), {}, [], 0
+    nxt, side, suben_t, cajas = float(i), {}, [], []
     while i <= t1 * fps:
         if not v.grab():
             break
@@ -65,17 +67,20 @@ def contar_puerta(video, t0, t1, linea, det, fps_det=12, conf=0.4):
             d = tr.update(det(f))
             if d.tracker_id is not None:
                 d = d[d.tracker_id >= 0]
-            lz.trigger(d)
+            cin, _ = lz.trigger(d)
             t = round(i / fps, 1)
-            if lz.in_count > prev:
-                suben_t += [t] * (lz.in_count - prev)
-                prev = lz.in_count
+            H, W = f.shape[:2]
+            # Quién cruzó hacia adentro en esta foto, con su recuadro (en fracción de la imagen) para la foto de evidencia.
+            for k in np.flatnonzero(cin):
+                x0, y0, x1, y1 = d.xyxy[k]
+                suben_t.append(t)
+                cajas.append({'t': t, 'id': int(d.tracker_id[k]), 'caja': [round(float(x0) / W, 4), round(float(y0) / H, 4), round(float(x1) / W, 4), round(float(y1) / H, 4)]})
             if d.tracker_id is not None:
                 for (x0, y0, x1, y1), tid in zip(d.xyxy, d.tracker_id):
-                    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+                    cx, cy = (x0 + x1) / 2, ((y0 + y1) / 2 if ancla == 'center' else y1)
                     if xa <= cx <= xb:
                         side.setdefault(int(tid), []).append((t, lado(cx, cy)))
         i += 1
     bajan_t = sorted(h[-1][0] for h in side.values()
                      if len(h) >= 3 and h[0][1] and h[1][1] and not h[-1][1] and not h[-2][1])
-    return {'suben': lz.in_count, 'bajan': len(bajan_t), 't_suben': suben_t, 't_bajan': bajan_t}
+    return {'suben': len(suben_t), 'bajan': len(bajan_t), 't_suben': suben_t, 't_bajan': bajan_t, 'cajas_suben': cajas}
