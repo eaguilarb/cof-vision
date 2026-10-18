@@ -1,0 +1,8 @@
+fastapi==0.115.6
+uvicorn==0.34.0
+pydantic>=2.8
+onnxruntime==1.20.1
+opencv-python-headless==4.10.0.84
+supervision==0.31.0
+trackers==2.6.1
+numpy>=1.26,<2.3
