@@ -9,6 +9,8 @@
 //   SESSION_SECRET   (opcional) secreto para firmar la sesión; si falta se deriva de lo anterior
 //   CONTEO_URL       (opcional) dirección del servicio de conteo (worker/, supervision + RF-DETR)
 //   CONTEO_TOKEN     clave de ese servicio (su WORKER_TOKEN); nunca llega al navegador
+//   QWEN_API_KEY     (opcional) clave de Qwen: la IA se usa desde el servidor y no se pide en la página
+//   GOOGLE_API_KEY   (opcional) clave de Google para leer Drive; se entrega a la página solo con sesión iniciada
 //   PORT             lo define Railway
 import { createServer } from 'node:http'
 import { readFileSync } from 'node:fs'
@@ -30,6 +32,9 @@ const SESSION_DAYS = 30
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/models'
 const CONTEO = (process.env.CONTEO_URL || '').trim().replace(/\/+$/, '')
 const CONTEO_TOKEN = (process.env.CONTEO_TOKEN || '').trim()
+const QWEN_KEY = (process.env.QWEN_API_KEY || '').trim()
+const QWEN_URL = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions'
+const GKEY = (process.env.GOOGLE_API_KEY || '').trim()
 const MAX_BODY = 40 * 1024 * 1024
 
 if (!KEY) console.warn('Falta GEMINI_API_KEY: la página cargará pero no podrá analizar.')
@@ -37,7 +42,10 @@ if (!USERS.size) console.warn('Faltan APP_USER y APP_PASSWORD: nadie podrá entr
 
 // La página se lee al arrancar; se le avisa que la clave la pone el servidor.
 // Con servicio de conteo configurado, la página cuenta a las personas allá (supervision + RF-DETR) y no en el teléfono.
-const page = readFileSync(join(here, 'public', 'camara.html'), 'utf8').replace('<script>\n(() => {', `<script>window.COF_SERVER = true;${CONTEO && CONTEO_TOKEN ? ' window.COF_CONTEO = true;' : ''}</script>\n<script>\n(() => {`)
+// Con QWEN_API_KEY la IA pasa por el servidor (la página no pide clave); la clave de Google va en la página porque
+// el navegador lee los videos de Drive directamente (solo la ve quien inició sesión).
+const flags = [CONTEO && CONTEO_TOKEN ? 'window.COF_CONTEO = true;' : '', QWEN_KEY ? 'window.COF_QWEN = true;' : '', GKEY ? `window.COF_GKEY = ${JSON.stringify(GKEY)};` : ''].filter(Boolean).join(' ')
+const page = readFileSync(join(here, 'public', 'camara.html'), 'utf8').replace('<script>\n(() => {', `<script>window.COF_SERVER = true; ${flags}</script>\n<script>\n(() => {`)
 
 // ---------------------------------------------------------------- sesión
 const sign = (v) => createHmac('sha256', SECRET).update(v).digest('base64url')
@@ -181,6 +189,22 @@ async function handle(req, res) {
     const text = await r.text()
     const extra = r.headers.get('retry-after') ? { 'Retry-After': r.headers.get('retry-after') } : {}
     return send(res, r.status, text, 'application/json', extra)
+  }
+
+  // Qwen: el servidor agrega la clave (la página manda el mismo cuerpo que mandaría a Alibaba).
+  if (path === '/api/qwen' && req.method === 'POST') {
+    if (!user) return send(res, 401, JSON.stringify({ error: { message: 'Tu sesión terminó. Vuelve a entrar.' } }), 'application/json')
+    if (!QWEN_KEY) return send(res, 503, JSON.stringify({ error: { message: 'Falta configurar QWEN_API_KEY en el servidor.' } }), 'application/json')
+    const body = await readBody(req, MAX_BODY)
+    let r
+    try {
+      r = await fetch(QWEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${QWEN_KEY}` }, body, signal: AbortSignal.timeout(150000) })
+    } catch (e) {
+      return send(res, 502, JSON.stringify({ error: { message: `No se pudo conectar con Qwen: ${e.message}` } }), 'application/json')
+    }
+    const text = await r.text()
+    // Una clave rechazada por Alibaba se informa como error del servidor, no como «tu clave»: la página no la pide.
+    return send(res, r.status === 401 || r.status === 403 ? 502 : r.status, text, 'application/json')
   }
 
   // Servicio de conteo: el servidor agrega su clave. /api/conteo (estado), /api/conteo/trabajos (crear y consultar).

@@ -444,6 +444,8 @@
   const PRICE = (m) => (/qwen3-vl-plus/.test(m) ? [0.2, 1.6] : /qwen3\.\d-plus/.test(m) ? [0.4, 1.6] : /qwen/.test(m) ? [0.05, 0.4] : /haiku/.test(m) ? [1, 5] : /sonnet/.test(m) ? [2, 10] : /gemma/.test(m) ? [0, 0] : /pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
   // En Railway la página la entrega el servidor, que agrega la clave: el navegador nunca la ve.
   const SERVER = !!window.COF_SERVER;
+  // Página con usuario y contraseña que trae la IA incluida: Qwen se usa a través del servidor, sin pedir clave.
+  const QWEN_SRV = SERVER && !!window.COF_QWEN;
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
@@ -461,7 +463,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.18-1';
+  const VERSION = '2026.10.18-2';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -534,7 +536,7 @@
     // Una copia personal puede traer la clave de Claude incorporada: entonces cuenta con Claude Haiku salvo que se elija otra IA.
     ai: ({ flash: 'flash', pro: 'pro', haiku: 'haiku', sonnet: 'sonnet', gratis: 'gratis', qwen: 'qwen' })[store.get('cofsimple:ai', EMBED_CKEY.startsWith('__') && !store.get('cofsimple:ckey', '') ? 'gratis' : 'haiku')] || 'gratis',
     ckey: store.get('cofsimple:ckey', '') || (EMBED_CKEY.startsWith('__') ? '' : EMBED_CKEY),
-    qkey: store.get('cofsimple:qkey', ''),
+    qkey: QWEN_SRV ? 'servidor' : store.get('cofsimple:qkey', ''),
     tope: store.get('cofsimple:tope', 1),
     spend: store.get('cofsimple:gasto', null),
     staff: store.get('cofsimple:staff2', 'Agentes de la empresa con uniforme negro (chaqueta y pantalón negros con franjas reflectantes, a menudo gorro negro), que suben al bus en el terminal antes de iniciar el recorrido o se paran en las puertas mientras el bus está detenido'),
@@ -684,7 +686,7 @@
   // de otro sitio), pero sí por su API oficial con una clave de Google: con ella se ven y analizan los videos directo
   // desde Drive (por partes, sin descargarlos) y también se puede pegar el enlace de una carpeta.
   const GAPI = 'https://www.googleapis.com/drive/v3/files';
-  const gkey = () => store.get('cofsimple:gkey', '') || '';
+  const gkey = () => store.get('cofsimple:gkey', '') || (SERVER && window.COF_GKEY) || '';
   const driveUrl = (id) => `${GAPI}/${id}?alt=media&supportsAllDrives=true&key=${encodeURIComponent(gkey())}`;
   function driveItems(text) {
     const out = [];
@@ -1231,6 +1233,9 @@
     const sp = S.spend && S.spend.dia === today() ? S.spend : null;
     $('#claudeKey').hidden = true;
     $('#qwenKey').hidden = false;
+    // Con la IA incluida en el servidor no se muestra el campo de la clave (queda el tope diario de gasto).
+    $('#qkeyInput').hidden = QWEN_SRV;
+    $('#btnQkey').hidden = QWEN_SRV;
     $('#costInfo').textContent = !S.qkey ? 'Pega tu clave de Qwen (Alibaba Cloud Model Studio, empieza con sk-) y presiona Guardar.' : isClaude(S.ai) && !S.ckey ? 'Pega tu clave de Claude (empieza con sk-ant-) y presiona Guardar.' : S.ai === 'gratis' ? 'Sin costo: usa los cupos diarios gratuitos de Google (se renuevan cada noche).' : sp ? `Gasto estimado hoy: US$ ${sp.usd.toFixed(2)} en ${sp.n} consultas${isClaude(S.ai) ? ' (se descuenta de tu crédito de Claude)' : ' (solo se cobra si tu clave tiene facturación activa)'}.` : '';
   }
   // Saca el JSON de la respuesta. Algunos modelos (Gemma) escriben antes su razonamiento: se prueba el
@@ -1324,10 +1329,10 @@
         if (run !== S.run) return null;
         let res;
         try {
-          res = await fetch(QWEN.url, {
-            signal: AbortSignal.timeout(120000),
+          res = await fetch(QWEN_SRV ? 'api/qwen' : QWEN.url, {
+            signal: AbortSignal.timeout(150000),
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${S.qkey}` },
+            headers: QWEN_SRV ? { 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json', Authorization: `Bearer ${S.qkey}` },
             body: JSON.stringify({ model, temperature: 0.1, ...(/-vl-/.test(model) ? {} : { enable_thinking: false }), messages: [{ role: 'user', content }] }),
           });
         } catch (e) {
@@ -1346,6 +1351,8 @@
           continue;
         }
         const msg = (body.error && body.error.message) || body.message || res.statusText;
+        if (QWEN_SRV && res.status === 401) throw new Error('Tu sesión terminó: vuelve a entrar con tu usuario y contraseña.');
+        if (QWEN_SRV && res.status === 503) throw new Error(msg);
         if (res.status === 401 || res.status === 403) {
           const err = new Error(`Alibaba rechazó la clave de Qwen (${msg}). Revisa que esté bien copiada y que Model Studio esté activado en la región Singapur.`);
           err.qwenKey = true;

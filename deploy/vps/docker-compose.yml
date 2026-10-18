@@ -10,6 +10,8 @@ services:
       APP_USERS: ${APP_USERS:-}
       SESSION_SECRET: ${SESSION_SECRET:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      QWEN_API_KEY: ${QWEN_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
       CONTEO_URL: http://cof-conteo:8080
       CONTEO_TOKEN: ${WORKER_TOKEN}
     mem_limit: 256m
