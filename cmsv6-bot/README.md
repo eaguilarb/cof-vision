@@ -132,6 +132,19 @@ El instalador:
    ```
 3. Envía `/vehiculos` y luego prueba con `/video PLACA 1 hoy 10:00 10:05`.
 
+## Actualización automática
+
+El instalador deja programada una revisión cada 10 minutos: si hay una versión
+nueva en GitHub, el VPS la baja y reinicia el bot solo. Para activarla en una
+instalación anterior:
+
+```bash
+cd ~/cof-vision/cmsv6-bot && git pull && sudo bash autoupdate.sh --instalar
+```
+
+Ver qué actualizaciones se aplicaron: `cat /var/log/cmsv6-bot-update.log`.
+Desactivarla: `sudo rm /etc/cron.d/cmsv6-bot-update`.
+
 ## Mantenimiento
 
 ```bash

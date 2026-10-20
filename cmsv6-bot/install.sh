@@ -61,6 +61,7 @@ docker compose run --rm --no-deps bot python -m app.diagnostico || {
 
 say "5/5 Iniciando el bot"
 docker compose up -d
+bash autoupdate.sh --instalar
 echo
 echo "Listo. Abre tu bot en Telegram y envía /miid."
 echo "Luego agrega tu ID en ALLOWED_USERS dentro de $(pwd)/.env y ejecuta: docker compose up -d"
