@@ -242,9 +242,28 @@ async def test_single_sign_on_message(monkeypatch):
 def test_split_mode():
     from app.main import _split_mode
     assert _split_mode(["X", "todos", "hoy", "10:00", "10:02", "juntas"]) == (
-        ["X", "todos", "hoy", "10:00", "10:02"], True)
+        ["X", "todos", "hoy", "10:00", "10:02"], True, False)
     assert _split_mode(["X", "1,3", "hoy", "10:00", "10:02", "Separadas"])[1] is False
-    assert _split_mode(["X", "1", "hoy", "10:00", "10:02"])[1] is False
+    assert _split_mode(["X", "1", "hoy", "10:00", "10:02"])[1:] == (False, False)
+    assert _split_mode(["X", "1,3", "hoy", "10:00", "10:02", "juntas", "rápido"]) == (
+        ["X", "1,3", "hoy", "10:00", "10:02"], True, True)
+
+
+def test_pick_stream_avoids_double_download():
+    from app.cmsv6 import _pick_stream
+    main_ = RecFile("D", 0, 100, 250, "m1", 900, 1, "", stream_type=0)
+    sub_ = RecFile("D", 0, 100, 250, "s1", 200, 1, "", stream_type=1)
+    nxt = RecFile("D", 0, 250, 400, "m2", 900, 1, "", stream_type=0)
+    assert [f.path for f in _pick_stream([sub_, main_, nxt], False)] == ["m1", "m2"]
+    # La liviana solo cubre la mitad del horario → se usa la principal
+    assert [f.path for f in _pick_stream([sub_, main_, nxt], True)] == ["m1", "m2"]
+    sub2 = RecFile("D", 0, 250, 400, "s2", 200, 1, "", stream_type=1)
+    assert [f.path for f in _pick_stream([sub_, main_, nxt, sub2], True)] == ["s1", "s2"]
+    # Sin streamtype: dos archivos del mismo tramo → uno solo
+    a = RecFile("D", 0, 100, 250, "a", 900, 1, "")
+    b = RecFile("D", 0, 101, 249, "b", 300, 1, "")
+    assert [f.path for f in _pick_stream([a, b], False)] == ["a"]
+    assert [f.path for f in _pick_stream([a, b], True)] == ["b"]
 
 
 @pytest.mark.asyncio

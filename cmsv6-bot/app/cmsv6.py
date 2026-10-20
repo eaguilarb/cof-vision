@@ -49,6 +49,7 @@ class RecFile:
     chns: tuple[int, ...] = ()  # todos los canales que contiene (archivos multicanal)
     task_url: str = ""  # DownTaskUrl: descarga por tramos del equipo al servidor
     segment_only: bool = False  # stream=1: el archivo solo se puede bajar por tramos
+    stream_type: int | None = None  # streamtype: 0 = calidad principal, 1 = secundaria (liviana)
 
     def has_channel(self, chn: int) -> bool:
         return chn in (self.chns or (self.chn,))
@@ -215,12 +216,13 @@ class CMSV6:
                 down_url=str(f.get("DownUrl") or f.get("downUrl") or "").strip(),
                 task_url=str(f.get("DownTaskUrl") or "").strip(),
                 segment_only=f.get("stream") == 1,
+                stream_type=None if f.get("streamtype") is None else int(f["streamtype"]),
             ))
         files.sort(key=lambda x: (x.chn, x.beg))
         return files
 
     async def find_recordings(self, v: Vehicle, day: date, chn: int, start: int, stop: int,
-                              locations: list[int]) -> list[RecFile]:
+                              locations: list[int], prefer_sub: bool = False) -> list[RecFile]:
         """Busca en cada ubicación (servidor primero) y devuelve la primera que tenga datos."""
         last_err: Exception | None = None
         for loc in locations:
@@ -231,7 +233,7 @@ class CMSV6:
                 continue
             hits = [f for f in files if f.has_channel(chn) and f.covers(start, stop)]
             if hits:
-                return hits
+                return _pick_stream(hits, prefer_sub)
         if last_err:
             raise last_err
         return []
@@ -361,6 +363,31 @@ class CMSV6:
             raise CMSV6Error(f"CMSV6 devolvió un archivo vacío o un error: {body!r}")
         tmp.rename(dest)
         return dest
+
+
+def _pick_stream(files: list[RecFile], prefer_sub: bool) -> list[RecFile]:
+    """Muchos equipos graban cada cámara dos veces (calidad principal y secundaria).
+    Se usa una sola: si no, se bajaría el mismo minuto dos veces."""
+    types = {f.stream_type for f in files}
+    if len(types) > 1:
+        want = 1 if prefer_sub else 0
+        dur = lambda fs: sum(f.end - f.beg for f in fs)
+        chosen = [f for f in files if f.stream_type == want]
+        others = [f for f in files if f.stream_type != want]
+        # Solo si esa calidad cubre el horario; si no, se usa la otra
+        files = chosen if dur(chosen) >= 0.9 * dur(others) else others
+    kept: list[RecFile] = []
+    for f in sorted(files, key=lambda x: x.beg):
+        prev = kept[-1] if kept else None
+        overlap = (min(prev.end, f.end) - max(prev.beg, f.beg)) if prev else 0
+        if prev and overlap > 0.5 * min(prev.end - prev.beg, f.end - f.beg):
+            # Dos archivos del mismo tramo: el más liviano si se pidió rapidez, si no el mejor
+            better = (f.size < prev.size) if prefer_sub else (f.size > prev.size)
+            if better:
+                kept[-1] = f
+            continue
+        kept.append(f)
+    return kept
 
 
 def _own_task(infos: list[dict], tag: str) -> dict:

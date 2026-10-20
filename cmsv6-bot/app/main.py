@@ -26,7 +26,8 @@ log = logging.getLogger("bot")
 
 cms = CMSV6(config.cmsv6_url, config.cmsv6_user, config.cmsv6_password,
             config.data_dir / ".jsession")
-jobs = asyncio.Semaphore(config.max_parallel_jobs)
+# Limita solo el trabajo de CPU (ffmpeg); las descargas desde los buses van todas en paralelo
+cpu = asyncio.Semaphore(config.max_parallel_jobs)
 WORK_HOURS = 6  # cuánto se guardan las grabaciones originales descargadas (caché)
 
 AYUDA = """\
@@ -35,7 +36,7 @@ AYUDA = """\
 /enlinea [<i>texto</i>] — buses encendidos ahora (ej. /enlinea SPB)
 /vehiculos <i>texto</i> — busca vehículos (ej. /vehiculos SVD), cámaras y si están en línea
 /grabaciones <i>placa</i> [<i>fecha</i>] — qué horas hay grabadas
-/video <i>placa canal fecha inicio fin</i> [juntas] — clip comprimido
+/video <i>placa canal fecha inicio fin</i> [juntas] [rapido] — clip comprimido
 /foto <i>placa canal fecha hora</i> [juntas] — imagen de ese instante
 /miid — tu ID de Telegram
 
@@ -50,6 +51,7 @@ AYUDA = """\
 
 Fecha: hoy, ayer, 19/10 o 19/10/2026. Canal: 1, 2, 1,3 o todos.
 Con varias cámaras: sin nada al final llegan separadas; con «juntas», en mosaico.
+«rapido» al final usa la grabación liviana del bus (menos calidad, llega mucho antes).
 Máximo {max} minutos por video."""
 
 
@@ -155,20 +157,24 @@ async def cmd_grabaciones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 JUNTAS = ("juntas", "juntos", "junta", "mosaico", "unidas")
 SEPARADAS = ("separadas", "separados", "separada")
+RAPIDO = ("rapido", "rápido", "rapida", "rápida", "liviano")
 
 
-def _split_mode(args: list[str]) -> tuple[list[str], bool]:
-    """Quita la palabra final «juntas»/«separadas» y dice si se pidió mosaico."""
-    if args and args[-1].lower() in JUNTAS:
-        return args[:-1], True
-    if args and args[-1].lower() in SEPARADAS:
-        return args[:-1], False
-    return args, False
+def _split_mode(args: list[str]) -> tuple[list[str], bool, bool]:
+    """Quita las palabras finales «juntas»/«separadas»/«rapido» (en cualquier orden).
+
+    Devuelve (resto, juntas, rápido)."""
+    together = fast = False
+    while args and args[-1].lower() in JUNTAS + SEPARADAS + RAPIDO:
+        word = args.pop().lower()
+        together = together or word in JUNTAS
+        fast = fast or word in RAPIDO
+    return args, together, fast
 
 
 @authorized
 async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    args, together = _split_mode(list(ctx.args))
+    args, together, fast = _split_mode(list(ctx.args))
     if len(args) == 4:  # sin fecha → hoy
         args.insert(2, "hoy")
     if len(args) != 5:
@@ -186,27 +192,26 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     msg = update.effective_message
     if together and len(chans) > 1:
-        await _video_together(msg, v, chans, day, start, stop, when)
+        await _video_together(msg, v, chans, day, start, stop, when, fast)
         return
     async def one(chn: int) -> None:
         status = await msg.reply_text(
             f"⏳ {v.plate} {v.channel_label(chn)} {day:%d/%m} {fmt_hms(start)}–{fmt_hms(stop)}: en cola…")
         stats: dict = {}
-        async with jobs:
-            try:
-                out = await make_clip(v, chn, day, start, stop, status, stats)
-            except (CMSV6Error, video.FFmpegError) as e:
-                await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
-                return
+        try:
+            out = await make_clip(v, chn, day, start, stop, status, stats, fast)
+        except (CMSV6Error, video.FFmpegError) as e:
+            await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
+            return
         await deliver(msg, status, out,
                       f"🎥 {v.plate} {v.channel_label(chn)} · {when}{_timing(stats)}")
 
-    # Las cámaras se piden a la vez (hasta MAX_PARALLEL_JOBS); cada una llega cuando está lista
+    # Las cámaras se piden todas a la vez; cada una llega cuando está lista
     await asyncio.gather(*(one(c) for c in chans))
 
 
 async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
-                          start: int, stop: int, when: str) -> None:
+                          start: int, stop: int, when: str, fast: bool = False) -> None:
     status = await msg.reply_text(
         f"⏳ {v.plate} {len(chans)} cámaras juntas, {when}: en cola…")
     t0 = time.monotonic()
@@ -217,8 +222,7 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
         # Mensaje de estado propio por cámara para no pisar el progreso de las otras
         sub = await msg.reply_text(f"⏳ {v.channel_label(chn)}: en cola…")
         try:
-            async with jobs:
-                clip = await make_clip(v, chn, day, start, stop, sub)
+            clip = await make_clip(v, chn, day, start, stop, sub, None, fast)
             return chn, clip, ""
         except (CMSV6Error, video.FFmpegError) as e:
             return chn, None, f"{v.channel_label(chn)}: {e}"
@@ -241,7 +245,8 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
     out = links.files_dir() / _name(v, -1, day, start, stop, ".mp4", "camaras" + "-".join(
         str(c + 1) for c in ok))
     try:
-        await video.mosaic(clips, out)
+        async with cpu:
+            await video.mosaic(clips, out)
     finally:
         for c in clips:
             c.unlink(missing_ok=True)
@@ -255,7 +260,7 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
 
 @authorized
 async def cmd_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    args, together = _split_mode(list(ctx.args))
+    args, together, fast = _split_mode(list(ctx.args))
     if len(args) == 3:
         args.insert(2, "hoy")
     if len(args) != 4:
@@ -275,15 +280,14 @@ async def cmd_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             status = await msg.reply_text(f"⏳ Buscando imagen {v.plate} {v.channel_label(chn)}…")
         else:
             await _edit(status, f"⏳ Buscando imagen {v.plate} {v.channel_label(chn)}…")
-        async with jobs:
-            try:
-                out = await make_photo(v, chn, day, at, status)
-            except (CMSV6Error, video.FFmpegError) as e:
-                if together:
-                    failed.append(f"{v.channel_label(chn)}: {e}")
-                else:
-                    await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
-                continue
+        try:
+            out = await make_photo(v, chn, day, at, status)
+        except (CMSV6Error, video.FFmpegError) as e:
+            if together:
+                failed.append(f"{v.channel_label(chn)}: {e}")
+            else:
+                await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
+            continue
         if together:
             photos.append(out)
             ok.append(chn)
@@ -298,7 +302,8 @@ async def cmd_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     out = links.files_dir() / _name(v, -1, day, at, None, ".jpg", "camaras" + "-".join(
         str(c + 1) for c in ok))
-    await video.mosaic(photos, out, image=True)
+    async with cpu:
+        await video.mosaic(photos, out, image=True)
     caption = f"📷 {v.plate} · cámaras {', '.join(str(c + 1) for c in ok)} · {when}"
     if failed:
         caption += "\n⚠️ Sin imagen: " + "; ".join(failed)
@@ -312,7 +317,8 @@ async def make_photo(v: Vehicle, chn: int, day: date, at: int, status: Message) 
         raise CMSV6Error(f"No hay grabación de {v.channel_label(chn)} a las {fmt_hms(at)}.")
     raw, beg, stream, _ = await fetch(v, recs[0], chn, day, at, at + 2, status)
     out = links.files_dir() / _name(v, chn, day, at, None, ".jpg")
-    await video.extract_frame(raw, out, at - beg, stream)
+    async with cpu:
+        await video.extract_frame(raw, out, at - beg, stream)
     return out
 
 
@@ -324,35 +330,41 @@ async def _edit(status: Message, text: str) -> None:
 
 
 async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
-                    status: Message, stats: dict | None = None) -> Path:
-    """Arma el clip de una cámara. En stats deja cuánto tardó cada etapa (para el mensaje)."""
+                    status: Message, stats: dict | None = None, fast: bool = False) -> Path:
+    """Arma el clip de una cámara. En stats deja cuánto tardó cada etapa (para el mensaje).
+
+    Las partes (archivos de grabación) se piden todas a la vez al bus y se comprimen a
+    medida que llegan; fast usa la grabación liviana (secundaria) si el equipo la tiene."""
     stats = stats if stats is not None else {}
     t0 = time.monotonic()
     await _edit(status, f"🔎 Buscando grabaciones de {v.plate} {v.channel_label(chn)}…")
-    recs = await cms.find_recordings(v, day, chn, start, stop, config.search_locations)
+    recs = await cms.find_recordings(v, day, chn, start, stop, config.search_locations, fast)
     if not recs:
         raise CMSV6Error(f"No hay grabaciones en ese horario ({fmt_hms(start)}–{fmt_hms(stop)}).")
     stats["buscar"] = time.monotonic() - t0
-    pieces = []
     work = _work_dir()
-    for i, rec in enumerate(recs, 1):
+
+    async def part(i: int, rec: RecFile) -> Path:
         a, b = max(start, rec.beg), min(stop, rec.end)
         prefix = f"({i}/{len(recs)}) " if len(recs) > 1 else ""
         t1 = time.monotonic()
         raw, beg, stream, how = await fetch(v, rec, chn, day, a, b, status, prefix)
-        stats["bajar"] = stats.get("bajar", 0) + time.monotonic() - t1
+        stats["bajar"] = max(stats.get("bajar", 0), time.monotonic() - t1)
         stats["metodo"] = how
-        t2 = time.monotonic()
-        await _edit(status, f"🗜️ {prefix}Comprimiendo {v.channel_label(chn)}…")
         piece = work / f"{raw.stem}_{a}_{b}.mp4"
-        await video.compress_piece(raw, piece, a - beg, b - a, stream)
-        stats["comprimir"] = stats.get("comprimir", 0) + time.monotonic() - t2
-        pieces.append(piece)
+        async with cpu:
+            t2 = time.monotonic()
+            await _edit(status, f"🗜️ {prefix}Comprimiendo {v.channel_label(chn)}…")
+            await video.compress_piece(raw, piece, a - beg, b - a, stream)
+            stats["comprimir"] = stats.get("comprimir", 0) + time.monotonic() - t2
+        return piece
+
+    pieces = await asyncio.gather(*(part(i, r) for i, r in enumerate(recs, 1)))
     out = links.files_dir() / _name(v, chn, day, start, stop, ".mp4")
-    await video.concat(pieces, out)
+    await video.concat(list(pieces), out)
     out.chmod(0o644)
     stats["total"] = time.monotonic() - t0
-    log.info("Clip %s cam%d %s: %s", v.plate, chn + 1, out.name,
+    log.info("Clip %s cam%d %s (%d partes): %s", v.plate, chn + 1, out.name, len(recs),
              {k: (round(x) if isinstance(x, float) else x) for k, x in stats.items()})
     return out
 
