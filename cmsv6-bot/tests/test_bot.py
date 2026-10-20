@@ -237,3 +237,36 @@ async def test_single_sign_on_message(monkeypatch):
     monkeypatch.setattr(cms, "_raw", AsyncMock(return_value={"result": 34}))
     with pytest.raises(Exception, match="inicio de sesión único"):
         await cms.login()
+
+
+def test_split_mode():
+    from app.main import _split_mode
+    assert _split_mode(["X", "todos", "hoy", "10:00", "10:02", "juntas"]) == (
+        ["X", "todos", "hoy", "10:00", "10:02"], True)
+    assert _split_mode(["X", "1,3", "hoy", "10:00", "10:02", "Separadas"])[1] is False
+    assert _split_mode(["X", "1", "hoy", "10:00", "10:02"])[1] is False
+
+
+@pytest.mark.asyncio
+async def test_mosaic_video_and_photo(tmp_path):
+    clips = []
+    for i, size in enumerate(["1280x720", "704x576", "640x480", "1280x720", "1280x720"]):
+        p = tmp_path / f"c{i}.mp4"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                        f"testsrc=size={size}:rate=15:duration=4", "-c:v", "libx264",
+                        "-preset", "ultrafast", str(p)], check=True)
+        clips.append(p)
+    out = await video.mosaic(clips, tmp_path / "m.mp4")  # 5 cámaras → 3x2 con una celda negra
+    dims = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                           "stream=width,height", "-of", "csv=p=0", str(out)],
+                          capture_output=True, text=True).stdout.strip()
+    assert dims == "1920,720"
+    assert 3.5 <= await video.probe_duration(out) <= 4.5
+
+    jpgs = []
+    for i, c in enumerate(clips[:2]):
+        jpgs.append(await video.extract_frame(c, tmp_path / f"f{i}.jpg", 1))
+    img = await video.mosaic(jpgs, tmp_path / "m.jpg", image=True)  # 2 cámaras → 2x1
+    dims = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height",
+                           "-of", "csv=p=0", str(img)], capture_output=True, text=True).stdout.strip()
+    assert dims == "1280,360"

@@ -19,8 +19,11 @@ Corre en el VPS (Ubuntu 24.04) con Docker.
 | `/vehiculos SVD` | Busca vehículos por parte de la placa, con cámaras y estado en línea |
 | `/grabaciones ABC123 ayer` | Muestra las horas grabadas por cámara |
 | `/video ABC123 1 hoy 14:00 14:10` | Clip de la cámara 1, comprimido |
-| `/video ABC123 todos 19/10 08:30 08:35` | Un clip por cada cámara |
+| `/video ABC123 todos 19/10 08:30 08:35` | Un clip por cada cámara (separadas) |
+| `/video ABC123 todos 19/10 08:30 08:35 juntas` | Todas las cámaras en un solo video (mosaico) |
+| `/video ABC123 1,3 hoy 08:30 08:35 juntas` | Cámaras 1 y 3 lado a lado |
 | `/foto ABC123 2 hoy 14:05:30` | Imagen de ese instante |
+| `/foto ABC123 todos hoy 14:05:30 juntas` | Una imagen con todas las cámaras |
 | `/miid` | Tu ID de Telegram (para autorizarte) |
 
 Solo las personas cuyo ID está en `ALLOWED_USERS` pueden pedir videos.

@@ -34,18 +34,21 @@ AYUDA = """\
 
 /vehiculos <i>texto</i> — busca vehículos (ej. /vehiculos SVD), cámaras y si están en línea
 /grabaciones <i>placa</i> [<i>fecha</i>] — qué horas hay grabadas
-/video <i>placa canal fecha inicio fin</i> — clip comprimido
-/foto <i>placa canal fecha hora</i> — imagen de ese instante
+/video <i>placa canal fecha inicio fin</i> [juntas] — clip comprimido
+/foto <i>placa canal fecha hora</i> [juntas] — imagen de ese instante
 /miid — tu ID de Telegram
 
 <b>Ejemplos</b>
 <code>/video ABC123 1 hoy 14:00 14:10</code>
-<code>/video ABC123 todos ayer 08:30 08:35</code>
+<code>/video ABC123 todos ayer 08:30 08:35</code> (un video por cámara)
+<code>/video ABC123 todos ayer 08:30 08:35 juntas</code> (todas en una pantalla)
+<code>/video ABC123 1,3 hoy 08:30 08:35 juntas</code>
 <code>/video ABC123 2 19/10 22:15 22:20</code>
 <code>/foto ABC123 todos hoy 14:05:30</code>
 <code>/grabaciones ABC123 ayer</code>
 
 Fecha: hoy, ayer, 19/10 o 19/10/2026. Canal: 1, 2, 1,3 o todos.
+Con varias cámaras: sin nada al final llegan separadas; con «juntas», en mosaico.
 Máximo {max} minutos por video."""
 
 
@@ -133,13 +136,26 @@ async def cmd_grabaciones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _send_long(update.effective_message, "\n".join(out))
 
 
+JUNTAS = ("juntas", "juntos", "junta", "mosaico", "unidas")
+SEPARADAS = ("separadas", "separados", "separada")
+
+
+def _split_mode(args: list[str]) -> tuple[list[str], bool]:
+    """Quita la palabra final «juntas»/«separadas» y dice si se pidió mosaico."""
+    if args and args[-1].lower() in JUNTAS:
+        return args[:-1], True
+    if args and args[-1].lower() in SEPARADAS:
+        return args[:-1], False
+    return args, False
+
+
 @authorized
 async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    args = list(ctx.args)
+    args, together = _split_mode(list(ctx.args))
     if len(args) == 4:  # sin fecha → hoy
         args.insert(2, "hoy")
     if len(args) != 5:
-        raise ParseError("Uso: /video placa canal fecha inicio fin\n"
+        raise ParseError("Uso: /video placa canal fecha inicio fin [juntas]\n"
                          "Ejemplo: /video ABC123 1 hoy 14:00 14:10")
     v = await cms.find_vehicle(args[0])
     chans = parse_channels(args[1], v.channels)
@@ -149,8 +165,12 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         raise ParseError("La hora de fin debe ser posterior a la de inicio (mismo día).")
     if stop - start > config.max_clip_minutes * 60:
         raise ParseError(f"Máximo {config.max_clip_minutes} minutos por video.")
+    when = f"{day:%d/%m/%Y} {fmt_hms(start)}–{fmt_hms(stop)}"
 
     msg = update.effective_message
+    if together and len(chans) > 1:
+        await _video_together(msg, v, chans, day, start, stop, when)
+        return
     for chn in chans:
         status = await msg.reply_text(
             f"⏳ {v.plate} {v.channel_label(chn)} {day:%d/%m} {fmt_hms(start)}–{fmt_hms(stop)}: en cola…")
@@ -160,38 +180,108 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except (CMSV6Error, video.FFmpegError) as e:
                 await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
                 continue
-        await deliver(msg, status, out, f"🎥 {v.plate} {v.channel_label(chn)} · "
-                                        f"{day:%d/%m/%Y} {fmt_hms(start)}–{fmt_hms(stop)}")
+        await deliver(msg, status, out, f"🎥 {v.plate} {v.channel_label(chn)} · {when}")
+
+
+async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
+                          start: int, stop: int, when: str) -> None:
+    status = await msg.reply_text(
+        f"⏳ {v.plate} {len(chans)} cámaras juntas, {when}: en cola…")
+    clips, ok, failed = [], [], []
+    async with jobs:
+        for i, chn in enumerate(chans, 1):
+            await _edit(status, f"⏳ Cámara {i} de {len(chans)} ({v.channel_label(chn)})…")
+            try:
+                clips.append(await make_clip(v, chn, day, start, stop, status))
+                ok.append(chn)
+            except (CMSV6Error, video.FFmpegError) as e:
+                failed.append(f"{v.channel_label(chn)}: {e}")
+        if not clips:
+            await status.edit_text("⚠️ No se pudo obtener ninguna cámara.\n" + "\n".join(failed))
+            return
+        await _edit(status, f"🧩 Armando el mosaico de {len(clips)} cámaras…")
+        out = links.files_dir() / _name(v, -1, day, start, stop, ".mp4", "camaras" + "-".join(
+            str(c + 1) for c in ok))
+        try:
+            await video.mosaic(clips, out)
+        finally:
+            for c in clips:
+                c.unlink(missing_ok=True)
+        out.chmod(0o644)
+    caption = f"🎥 {v.plate} · cámaras {', '.join(str(c + 1) for c in ok)} juntas · {when}"
+    if failed:
+        caption += "\n⚠️ Sin video: " + "; ".join(failed)
+    await deliver(msg, status, out, caption)
 
 
 @authorized
 async def cmd_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    args = list(ctx.args)
+    args, together = _split_mode(list(ctx.args))
     if len(args) == 3:
         args.insert(2, "hoy")
     if len(args) != 4:
-        raise ParseError("Uso: /foto placa canal fecha hora\nEjemplo: /foto ABC123 1 hoy 14:05:30")
+        raise ParseError("Uso: /foto placa canal fecha hora [juntas]\n"
+                         "Ejemplo: /foto ABC123 1 hoy 14:05:30")
     v = await cms.find_vehicle(args[0])
     chans = parse_channels(args[1], v.channels)
     day = parse_date(args[2])
     at = seconds_of_day(parse_time(args[3]))
+    when = f"{day:%d/%m/%Y} {fmt_hms(at)}"
     msg = update.effective_message
+    together = together and len(chans) > 1
+    photos, ok, failed = [], [], []
+    status = None
     for chn in chans:
-        status = await msg.reply_text(f"⏳ Buscando imagen {v.plate} {v.channel_label(chn)}…")
+        if status is None or not together:
+            status = await msg.reply_text(f"⏳ Buscando imagen {v.plate} {v.channel_label(chn)}…")
+        else:
+            await _edit(status, f"⏳ Buscando imagen {v.plate} {v.channel_label(chn)}…")
         async with jobs:
             try:
-                recs = await cms.find_recordings(v, day, chn, at, at + 1, config.search_locations)
-                if not recs:
-                    raise CMSV6Error(f"No hay grabación de {v.channel_label(chn)} a las {fmt_hms(at)}.")
-                raw, beg, stream = await fetch(v, recs[0], chn, day, at, at + 2, status)
-                out = links.files_dir() / _name(v, chn, day, at, None, ".jpg")
-                await video.extract_frame(raw, out, at - beg, stream)
+                out = await make_photo(v, chn, day, at, status)
             except (CMSV6Error, video.FFmpegError) as e:
-                await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
+                if together:
+                    failed.append(f"{v.channel_label(chn)}: {e}")
+                else:
+                    await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
                 continue
+        if together:
+            photos.append(out)
+            ok.append(chn)
+            continue
         await msg.reply_photo(photo=out.read_bytes(),
-                              caption=f"📷 {v.plate} {v.channel_label(chn)} · {day:%d/%m/%Y} {fmt_hms(at)}")
+                              caption=f"📷 {v.plate} {v.channel_label(chn)} · {when}")
         await status.delete()
+    if not together:
+        return
+    if not photos:
+        await status.edit_text("⚠️ No se pudo obtener ninguna cámara.\n" + "\n".join(failed))
+        return
+    out = links.files_dir() / _name(v, -1, day, at, None, ".jpg", "camaras" + "-".join(
+        str(c + 1) for c in ok))
+    await video.mosaic(photos, out, image=True)
+    caption = f"📷 {v.plate} · cámaras {', '.join(str(c + 1) for c in ok)} · {when}"
+    if failed:
+        caption += "\n⚠️ Sin imagen: " + "; ".join(failed)
+    await msg.reply_photo(photo=out.read_bytes(), caption=caption)
+    await status.delete()
+
+
+async def make_photo(v: Vehicle, chn: int, day: date, at: int, status: Message) -> Path:
+    recs = await cms.find_recordings(v, day, chn, at, at + 1, config.search_locations)
+    if not recs:
+        raise CMSV6Error(f"No hay grabación de {v.channel_label(chn)} a las {fmt_hms(at)}.")
+    raw, beg, stream = await fetch(v, recs[0], chn, day, at, at + 2, status)
+    out = links.files_dir() / _name(v, chn, day, at, None, ".jpg")
+    await video.extract_frame(raw, out, at - beg, stream)
+    return out
+
+
+async def _edit(status: Message, text: str) -> None:
+    try:
+        await status.edit_text(text)
+    except Exception:
+        pass  # Telegram rechaza ediciones con el mismo texto
 
 
 async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
@@ -279,12 +369,13 @@ async def deliver(msg: Message, status: Message, out: Path, caption: str) -> Non
                                "Configura PUBLIC_URL para recibir enlaces de descarga.")
 
 
-def _name(v: Vehicle, chn: int, day: date, start: int, stop: int | None, ext: str) -> str:
+def _name(v: Vehicle, chn: int, day: date, start: int, stop: int | None, ext: str,
+          cams: str | None = None) -> str:
     plate = re.sub(r"[^\w-]", "", v.plate) or v.dev_id
     t = fmt_hms(start).replace(":", "")
     if stop is not None:
         t += "-" + fmt_hms(stop).replace(":", "")
-    return f"{plate}_cam{chn + 1}_{day:%Y%m%d}_{t}{ext}"
+    return f"{plate}_{cams or f'cam{chn + 1}'}_{day:%Y%m%d}_{t}{ext}"
 
 
 def _work_dir() -> Path:

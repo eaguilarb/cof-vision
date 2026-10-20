@@ -69,6 +69,43 @@ async def extract_frame(src: Path, dest: Path, offset: float, stream: int = 0) -
     return dest
 
 
+TILE_W, TILE_H = 640, 360
+
+
+def _grid(n: int) -> tuple[int, int]:
+    """Columnas y filas del mosaico: 2 → 2x1, 3-4 → 2x2, 5-6 → 3x2, 7-9 → 3x3."""
+    cols = 1 if n == 1 else 2 if n <= 4 else 3
+    return cols, -(-n // cols)
+
+
+async def mosaic(inputs: list[Path], dest: Path, image: bool = False) -> Path:
+    """Une varios videos (o fotos) de distintas cámaras en una sola pantalla dividida."""
+    n = len(inputs)
+    cols, rows = _grid(n)
+    cells = cols * rows
+    tile = (f"scale={TILE_W}:{TILE_H}:force_original_aspect_ratio=decrease,"
+            f"pad={TILE_W}:{TILE_H}:(ow-iw)/2:(oh-ih)/2,setsar=1")
+    if not image:
+        tile += ",fps=15"
+    parts = [f"[{i}:v]{tile}[t{i}]" for i in range(n)]
+    # Las celdas sobrantes quedan en negro
+    for i in range(n, cells):
+        parts.append(f"color=c=black:s={TILE_W}x{TILE_H}:r=15[t{i}]")
+    layout = "|".join(f"{(i % cols) * TILE_W}_{(i // cols) * TILE_H}" for i in range(cells))
+    parts.append("".join(f"[t{i}]" for i in range(cells))
+                 + f"xstack=inputs={cells}:layout={layout}:shortest=1,format=yuv420p[v]")
+    args = [a for p in inputs for a in ("-i", str(p))]
+    args += ["-filter_complex", ";".join(parts), "-map", "[v]"]
+    if image:
+        args += ["-frames:v", "1", "-q:v", "2"]
+    else:
+        args += ["-map", "0:a:0?", "-c:v", "libx264", "-preset", config.video_preset,
+                 "-crf", str(config.video_crf), "-c:a", "aac", "-b:a", "64k",
+                 "-movflags", "+faststart"]
+    await _run(*args, str(dest))
+    return dest
+
+
 async def probe_duration(src: Path) -> float:
     proc = await asyncio.create_subprocess_exec(
         "ffprobe", "-v", "error", "-show_entries", "format=duration",
