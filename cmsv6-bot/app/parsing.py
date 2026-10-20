@@ -5,7 +5,7 @@ from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 import os
 
-TZ = ZoneInfo(os.environ.get("TZ", "America/Bogota"))
+TZ = ZoneInfo(os.environ.get("TZ", "America/Santiago"))
 
 
 class ParseError(ValueError):
