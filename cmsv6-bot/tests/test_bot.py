@@ -562,3 +562,45 @@ async def test_tracker_message():
     text = msg.edit_text.call_args.args[0]
     assert "70%" in text and "faltan 30%" in text and "~1:" in text
     assert "• cam1: 40%" in text and "• cam3: 100%" in text
+
+
+@pytest.mark.asyncio
+async def test_cancelar_stops_request_and_bus_task(monkeypatch, tmp_path):
+    """/cancelar detiene el pedido, borra la tarea en CMSV7 y marca el mensaje como cancelado."""
+    from app import main
+    from app import cmsv6 as m
+    object.__setattr__(main.config, "allowed_users", [7])
+    object.__setattr__(main.config, "data_dir", tmp_path)
+    deleted = []
+
+    async def call(action, params=None):
+        if "downloadTasklist" in action:
+            return {"infos": [{"lab": "x", "stu": 2}]}  # nunca termina
+        if "delDownloadTasklist" in action:
+            deleted.append(params["taskTag"])
+        return {"result": 0}
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(m.asyncio, "sleep", lambda s: real_sleep(0.01))
+    monkeypatch.setattr(main.cms, "call", call)
+    f = RecFile("D1", 0, 50400, 50600, "/r/x.264", 1, 1, "", task_url="http://x/add?did=D1")
+    monkeypatch.setattr(main.cms, "find_recordings", AsyncMock(return_value=[f]))
+    monkeypatch.setattr(main.cms, "find_vehicle",
+                        AsyncMock(return_value=main.Vehicle("SPBG22", "D1", 5, [])))
+    status = MagicMock(edit_text=AsyncMock(), chat_id=55)
+    msg = MagicMock(reply_text=AsyncMock(return_value=status))
+    chat = MagicMock(id=55)
+    upd = MagicMock(effective_user=MagicMock(id=7), effective_message=msg, effective_chat=chat)
+
+    job = asyncio.create_task(main.cmd_video(upd, MagicMock(args=["SPBG22", "1", "hoy", "14:00", "14:01"])))
+    for _ in range(50):
+        await real_sleep(0.02)
+        if main._trackers.get(55):
+            break
+    await main.cmd_cancelar(upd, MagicMock(args=[]))
+    await job
+    assert job.done() and not job.cancelled() or job.cancelled()
+    assert deleted and deleted[0].startswith("bot")
+    texts = [c.args[0] for c in status.edit_text.call_args_list]
+    assert any("Cancelado" in t for t in texts)
+    assert "Se detuvieron 1" in msg.reply_text.call_args.args[0]

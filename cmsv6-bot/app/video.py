@@ -18,10 +18,22 @@ async def _run(*args: str) -> None:
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", *args,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-    _, err = await proc.communicate()
+    try:
+        _, err = await proc.communicate()
+    except asyncio.CancelledError:
+        _kill(proc)  # pedido cancelado con /cancelar: no dejar ffmpeg trabajando
+        raise
     if proc.returncode != 0:
         msg = err.decode(errors="replace").strip()[-800:]
         raise FFmpegError(f"ffmpeg falló: {msg}")
+
+
+def _kill(proc: asyncio.subprocess.Process) -> None:
+    if proc.returncode is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
 
 
 def _scale_filter() -> str:
@@ -104,6 +116,9 @@ async def record_live(url: str, dest: Path, seconds: int) -> Path:
     except asyncio.TimeoutError:
         proc.kill()
         raise FFmpegError("El bus no envió video en vivo a tiempo (¿sin señal?).")
+    except asyncio.CancelledError:
+        _kill(proc)
+        raise
     finally:
         stopper.cancel()
     # Cortado por nosotros (SIGINT) ffmpeg termina con código 255: es normal
@@ -126,6 +141,9 @@ async def snapshot_live(url: str, dest: Path) -> Path:
     except asyncio.TimeoutError:
         proc.kill()
         raise FFmpegError("El bus no envió imagen a tiempo (¿sin señal?).")
+    except asyncio.CancelledError:
+        _kill(proc)
+        raise
     if proc.returncode != 0 or not dest.exists() or dest.stat().st_size < 1024:
         raise FFmpegError("No llegó imagen en vivo. " + err.decode(errors="replace").strip()[-200:])
     return dest

@@ -29,6 +29,7 @@ Corre en el VPS (Ubuntu 24.04) con Docker.
 | `/foto ABC123` o `/foto ABC123 1,3` | Foto de **ahora mismo** (en vivo, en segundos) |
 | `/foto ABC123 2 hoy 14:05:30` | Imagen de ese instante |
 | `/foto ABC123 todos hoy 14:05:30 juntas` | Una imagen con todas las cámaras |
+| `/cancelar` | Detiene los pedidos en curso de ese chat (y la descarga en el bus) |
 | `/miid` | Tu ID de Telegram (para autorizarte) |
 
 Solo las personas cuyo ID está en `ALLOWED_USERS` pueden pedir videos.

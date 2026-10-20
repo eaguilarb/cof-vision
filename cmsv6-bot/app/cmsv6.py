@@ -343,6 +343,44 @@ class CMSV6:
         started = time.monotonic()
         deadline = started + timeout_s
         info: dict = existing or {}
+        try:
+            info = await self._wait_task(f, own, tag, info, task_list, progress, started,
+                                         deadline, stall_s)
+        except asyncio.CancelledError:
+            # /cancelar: se borra la tarea para que el bus deje de enviar
+            if own[0] == "lab":
+                await asyncio.shield(self._delete_task(f.dev_id, tag))
+            raise
+        if info.get("stu") != 4:
+            raise CMSV6Error("El vehículo tardó demasiado en enviar el video "
+                             "(¿está apagado o sin señal?). La tarea sigue en CMSV6; intenta más tarde.")
+
+        url = str(info.get("downUrl") or "").strip()
+        if url:
+            base, q = self._fix_url(url)
+            q["jsession"] = self.jsession or ""
+            if not q.get("SAVENAME"):
+                q["SAVENAME"] = tag + ".mp4"
+            await self._download_url(f"{base}?{urlencode(q)}", dest, dl_progress,
+                                     int(info.get("len") or 0))
+            return dest, task_beg
+        # Sin enlace en la tarea: el archivo ya está en el servidor de almacenamiento
+        for rec in await self.search(v, day, chn=f.chn, loc=2):
+            if rec.has_channel(f.chn) and rec.covers(a, b):
+                await self.download(rec, dest)
+                return dest, rec.beg
+        raise CMSV6Error("La descarga terminó pero no encontré el archivo en el servidor.")
+
+    async def _delete_task(self, dev_id: str, tag: str) -> None:
+        try:
+            await self.call("StandardApiAction_delDownloadTasklist.action",
+                            {"devIdno": dev_id, "taskTag": tag})
+            log.info("Tarea %s cancelada en CMSV7", tag)
+        except Exception as e:
+            log.info("No se pudo cancelar la tarea %s: %s", tag, e)
+
+    async def _wait_task(self, f, own, tag, info, task_list, progress, started, deadline,
+                         stall_s) -> dict:
         first = True
         logged = False
         while info.get("stu") != 4 and time.monotonic() < deadline:
@@ -368,31 +406,9 @@ class CMSV6:
             if (stall_s is not None and own[0] == "lab" and stu in (None, 1)
                     and time.monotonic() - started > stall_s):
                 # Se cancela la tarea para que no compita por el 4G del bus con el plan B
-                try:
-                    await self.call("StandardApiAction_delDownloadTasklist.action",
-                                    {"devIdno": f.dev_id, "taskTag": tag})
-                except CMSV6Error as e:
-                    log.info("No se pudo cancelar la tarea %s: %s", tag, e)
+                await self._delete_task(f.dev_id, tag)
                 raise CMSV6Error(f"El vehículo no empezó a enviar el tramo en {stall_s} s.")
-        if info.get("stu") != 4:
-            raise CMSV6Error("El vehículo tardó demasiado en enviar el video "
-                             "(¿está apagado o sin señal?). La tarea sigue en CMSV6; intenta más tarde.")
-
-        url = str(info.get("downUrl") or "").strip()
-        if url:
-            base, q = self._fix_url(url)
-            q["jsession"] = self.jsession or ""
-            if not q.get("SAVENAME"):
-                q["SAVENAME"] = tag + ".mp4"
-            await self._download_url(f"{base}?{urlencode(q)}", dest, dl_progress,
-                                     int(info.get("len") or 0))
-            return dest, task_beg
-        # Sin enlace en la tarea: el archivo ya está en el servidor de almacenamiento
-        for rec in await self.search(v, day, chn=f.chn, loc=2):
-            if rec.has_channel(f.chn) and rec.covers(a, b):
-                await self.download(rec, dest)
-                return dest, rec.beg
-        raise CMSV6Error("La descarga terminó pero no encontré el archivo en el servidor.")
+        return info
 
     async def download(self, f: RecFile, dest: Path, progress=None) -> Path:
         if not self.jsession:

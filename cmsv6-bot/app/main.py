@@ -40,6 +40,7 @@ AYUDA = """\
 /video <i>placa canal fecha inicio fin</i> [juntas] [rapido] — clip comprimido
 /foto <i>placa</i> [<i>cámaras</i>] — foto de ahora mismo (rápida, en vivo)
 /foto <i>placa canal fecha hora</i> [juntas] — imagen de un momento pasado (más lenta)
+/cancelar — detiene los pedidos en curso de este chat
 /miid — tu ID de Telegram
 
 <b>Ejemplos</b>
@@ -78,6 +79,11 @@ def _set_busy(delta: int) -> None:
         pass
 
 
+# Pedidos en curso por chat, para poder detenerlos con /cancelar
+_running: dict[int, set[asyncio.Task]] = {}
+_trackers: dict[int, set["Tracker"]] = {}
+
+
 def authorized(handler):
     @functools.wraps(handler)
     async def wrapper(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -90,8 +96,14 @@ def authorized(handler):
                     "al administrador para que te agregue.")
             return
         _set_busy(+1)
+        chat = update.effective_chat.id if update.effective_chat else 0
+        task = asyncio.current_task()
+        if task and handler.__name__ != "cmd_cancelar":
+            _running.setdefault(chat, set()).add(task)
         try:
             await handler(update, ctx)
+        except asyncio.CancelledError:
+            log.info("Pedido cancelado en el chat %s", chat)
         except (ParseError, CMSV6Error, video.FFmpegError) as e:
             await update.effective_message.reply_text(f"⚠️ {e}")
         except Exception:
@@ -99,7 +111,25 @@ def authorized(handler):
             await update.effective_message.reply_text("⚠️ Ocurrió un error inesperado. Revisa los logs.")
         finally:
             _set_busy(-1)
+            if task:
+                _running.get(chat, set()).discard(task)
     return wrapper
+
+
+@authorized
+async def cmd_cancelar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Detiene todos los pedidos en curso de este chat (y sus descargas en los buses)."""
+    chat = update.effective_chat.id
+    tasks = [t for t in _running.get(chat, set()) if not t.done()]
+    for tr in list(_trackers.get(chat, set())):
+        tr.stop()
+        await _edit(tr.status, f"{tr.title}\n❌ Cancelado")
+    for t in tasks:
+        t.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    await update.effective_message.reply_text(
+        f"🛑 Se detuvieron {len(tasks)} pedido(s)." if tasks else "No hay pedidos en curso.")
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -524,6 +554,9 @@ class Tracker:
         self.t0 = time.monotonic()
         self._last = 0.0
         self._ticker: asyncio.Task | None = None
+        self._owner = asyncio.current_task()
+        self._chat = getattr(status, "chat_id", 0)
+        _trackers.setdefault(self._chat, set()).add(self)
 
     def cam(self, chn: int, label: str) -> "CamStatus":
         cs = CamStatus(self, label)
@@ -535,11 +568,14 @@ class Tracker:
     async def _tick(self) -> None:
         while True:
             await asyncio.sleep(5)
+            if self._owner is not None and self._owner.done():
+                return
             await self.render(force=True)
 
     def stop(self) -> None:
         if self._ticker:
             self._ticker.cancel()
+        _trackers.get(self._chat, set()).discard(self)
 
     def overall(self) -> tuple[float, float | None]:
         cams = list(self.cams.values())
@@ -863,6 +899,7 @@ def main() -> None:
     app.add_handler(CommandHandler("grabaciones", cmd_grabaciones))
     app.add_handler(CommandHandler(["enlinea", "en_linea"], cmd_enlinea))
     app.add_handler(CommandHandler(["vivo", "envivo"], cmd_vivo))
+    app.add_handler(CommandHandler(["cancelar", "detener", "parar"], cmd_cancelar))
     app.add_handler(CommandHandler("video", cmd_video))
     app.add_handler(CommandHandler("foto", cmd_foto))
     log.info("Bot iniciado (Bot API: %s)", config.bot_api_url or "nube de Telegram")
