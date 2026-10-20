@@ -41,6 +41,7 @@ cada uno con tus buses** y usa el más rápido (lo guarda en `data/velocidad.jso
 
 | Método | Cómo funciona | Ventaja |
 |---|---|---|
+| 📤 FTP (primero) | El bus sube el horario completo al FTP de CMSV7 en un archivo AVI, como en el aplicativo | Una sola tarea por cámara, lo más rápido |
 | ▶️ Reproducción remota | El bus transmite el tramo como un en vivo | Todas las cámaras a la vez |
 | 📡 Por tramos | El bus sube solo los minutos pedidos a CMSV7 | Menos datos |
 | ⬇️ Archivo completo | Se baja el archivo entero del bus | Sirve de respaldo |

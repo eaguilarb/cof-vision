@@ -704,3 +704,76 @@ async def test_adaptive_prefers_playback_and_falls_back(tmp_path, monkeypatch):
     assert main._choose_methods(rec, 50450, 50460)[0] == "tramos"
     await cms.close()
     await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_ftp_method_one_task_for_whole_range(tmp_path, monkeypatch):
+    """FTP (como en el aplicativo): una sola subida por cámara para todo el horario, aunque
+    la grabación esté repartida en varios archivos del bus."""
+    avi = tmp_path / "up.avi"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=640x360:rate=15:duration=300", "-c:v", "mpeg4", "-q:v", "8",
+                    str(avi)], check=True)
+    state = {"ftp": [], "polls": 0}
+
+    async def login(r):
+        return web.json_response({"result": 0, "jsession": "J1"})
+
+    async def search(r):
+        if r.query["LOC"] != "1":
+            return web.json_response({"result": 0, "files": []})
+        files = [{"beg": b, "end": b + 150, "chn": 2, "file": f"/r/{b}.264", "len": 10, "loc": 1,
+                  "DownTaskUrl": "http://x/add"} for b in (50400, 50550, 50700)]
+        return web.json_response({"result": 0, "files": files})
+
+    async def ftp_up(r):
+        state["ftp"].append(dict(r.query))
+        return web.json_response({"result": 0, "SEQUENCE": 77})
+
+    async def ftp_status(r):
+        assert r.query["seq"] == "77"
+        state["polls"] += 1
+        st = 1 if state["polls"] < 2 else 4
+        return web.json_response({"result": 0, "info": {
+            "status": st, "downloadUrl": f"http://10.0.0.9:{port}/3/5?DownType=3&FPATH=CH1.avi"
+                                         f"&FLENGTH={avi.stat().st_size}&SAVENAME=CH1.avi"}})
+
+    async def dl(r):
+        assert r.query["jsession"] == "J1"
+        return web.FileResponse(avi)
+
+    app = web.Application()
+    for path, h in [("/StandardApiAction_login.action", login),
+                    ("/StandardApiAction_getVideoFileInfo.action", search),
+                    ("/StandardApiAction_ftpUpload.action", ftp_up),
+                    ("/StandardApiAction_queryFtpStatus.action", ftp_status),
+                    ("/3/5", dl)]:
+        app.router.add_get(path, h)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+
+    from app import cmsv6 as cmsv6_mod, main
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(cmsv6_mod.asyncio, "sleep", lambda s: real_sleep(0.01))
+    object.__setattr__(main.config, "data_dir", tmp_path / "data")
+    (tmp_path / "data").mkdir()
+    object.__setattr__(main.config, "search_locations", [2, 1])
+    object.__setattr__(main.config, "download_method", "auto")
+    cms = CMSV6(f"http://127.0.0.1:{port}", "u", "p")
+    monkeypatch.setattr(main, "cms", cms)
+    status = MagicMock(edit_text=AsyncMock())
+    v = main.Vehicle(plate="SPBG22", dev_id="D1", channels=5, channel_names=[])
+
+    stats = {}
+    # 14:00:20–14:05:00 abarca 3 archivos del bus → una sola tarea FTP
+    out = await main.make_clip(v, 2, date(2026, 10, 20), 50420, 50700, status, stats)
+    assert stats["metodo"] == "ftp" and len(state["ftp"]) == 1
+    q = state["ftp"][0]
+    assert (q["DevIDNO"], q["CHN"], q["BEGSEC"], q["ENDSEC"]) == ("D1", "2", "50420", "50700")
+    assert 278 <= await video.probe_duration(out) <= 282
+    assert main._method_info("ftp")["vel"] > 0
+    await cms.close()
+    await runner.cleanup()

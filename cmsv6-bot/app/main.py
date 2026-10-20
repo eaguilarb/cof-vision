@@ -154,7 +154,18 @@ async def cmd_probar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
              if (m == "reproduccion" and rec.playback_url) or (m == "tramos" and rec.task_url)
              or (m == "directa" and (rec.down_url or rec.loc != 1))]
     names = {"reproduccion": "▶️ Reproducción remota", "tramos": "📡 Descarga por tramos",
-             "directa": "⬇️ Archivo completo"}
+             "directa": "⬇️ Archivo completo", "ftp": "📤 Subida por FTP"}
+    if rec.loc == 1:
+        await _edit(status, "\n".join(lines + [f"Probando {names['ftp']}…"]))
+        t = time.monotonic()
+        try:
+            raw = await fetch_ftp(v, chn, day, a, b, status)
+            took = time.monotonic() - t
+            lines.append(f"{names['ftp']}: {b - a} s de video en {took:.0f} s "
+                         f"→ {(b - a) / took:.2f}× tiempo real")
+        except Exception as e:
+            _learn_method("ftp", 0, 0, ok=False)
+            lines.append(f"{names['ftp']}: no funcionó ({str(e)[:150]})")
     for m in avail:
         await _edit(status, "\n".join(lines + [f"Probando {names[m]}…"]))
         t = time.monotonic()
@@ -170,7 +181,7 @@ async def cmd_probar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_video(video=out, caption="Video obtenido por reproducción remota")
         except Exception as e:
             lines.append(f"{names[m]}: no funcionó ({str(e)[:150]})")
-    best = _choose_methods(rec, a, b)
+    best = ["ftp"] if _ftp_first([rec]) else _choose_methods(rec, a, b)
     lines.append(f"✅ Desde ahora el bot usará primero: {names[best[0]] if best else '—'}")
     log.info("Prueba de métodos: %s", " | ".join(lines))
     await _edit(status, "\n".join(lines))
@@ -616,7 +627,7 @@ def _save_speed(sp: dict) -> None:
 
 
 # Velocidad supuesta (segundos de video por segundo real) mientras no haya mediciones
-_DEFAULT_VEL = {"reproduccion": 1.0, "tramos": 0.6, "directa": 0.6}
+_DEFAULT_VEL = {"ftp": 3.0, "reproduccion": 1.0, "tramos": 0.6, "directa": 0.6}
 _FAIL_COOLDOWN = 1800  # un método que falla se deja de lado 30 min
 
 
@@ -669,6 +680,21 @@ def _choose_methods(rec: RecFile, start: int, stop: int) -> list[str]:
         avail.remove(forced)
         avail.insert(0, forced)
     return avail
+
+
+def _ftp_first(recs: list[RecFile]) -> bool:
+    """¿Conviene el método FTP (una tarea por cámara para todo el horario)?"""
+    if not recs or all(r.loc != 1 for r in recs):
+        return False  # ya está en el servidor
+    if config.download_method == "ftp":
+        return True
+    if config.download_method != "auto":
+        return False
+    failed = time.time() - _method_info("ftp").get("fallo", 0) < _FAIL_COOLDOWN
+    if failed:
+        return False
+    rest = max(_method_vel(m) for m in ("reproduccion", "tramos", "directa"))
+    return _method_vel("ftp") >= rest
 
 
 def _bus_stream_slot(dev_id: str) -> asyncio.Semaphore:
@@ -787,10 +813,32 @@ async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
     recs = await cms.find_recordings(v, day, chn, start, stop, config.search_locations, fast)
     if not recs:
         raise CMSV6Error(f"No hay grabaciones en ese horario ({fmt_hms(start)}–{fmt_hms(stop)}).")
-    if isinstance(status, CamStatus):
-        status.parts = len(recs)
     stats["buscar"] = time.monotonic() - t0
     work = _work_dir()
+
+    if _ftp_first(recs):
+        try:
+            raw = await fetch_ftp(v, chn, day, start, stop, status, fast)
+            stats["bajar"] = time.monotonic() - t0 - stats["buscar"]
+            stats["metodo"] = "ftp"
+            out = links.files_dir() / _name(v, chn, day, start, stop, ".mp4")
+            async with cpu:
+                t2 = time.monotonic()
+                await _edit(status, "🗜️ comprimiendo", 92, 10)
+                await video.compress_piece(raw, out, 0, stop - start, 0, intermediate)
+                stats["comprimir"] = time.monotonic() - t2
+            out.chmod(0o644)
+            stats["total"] = time.monotonic() - t0
+            log.info("Clip %s cam%d %s (FTP): %s", v.plate, chn + 1, out.name,
+                     {k: (round(x) if isinstance(x, float) else x) for k, x in stats.items()})
+            return out
+        except (CMSV6Error, video.FFmpegError) as e:
+            _learn_method("ftp", 0, 0, ok=False)
+            log.info("Método FTP falló (%s); se usan los otros métodos", e)
+            await _edit(status, "🔁 FTP no funcionó, cambiando de método…")
+
+    if isinstance(status, CamStatus):
+        status.parts = len(recs)
 
     async def part(i: int, rec: RecFile) -> Path:
         a, b = max(start, rec.beg), min(stop, rec.end)
@@ -834,10 +882,40 @@ def _timing(stats: dict) -> str:
     if "total" not in stats:
         return ""
     how = {"cache": "ya estaba descargado", "tramos": "el bus subió el tramo",
+           "ftp": "el bus lo subió por FTP",
            "directa": "archivo completo", "reproduccion": "el bus lo transmitió"}.get(
         stats.get("metodo", ""), "")
     return (f"\n⏱ {_mmss(stats['total'])} (bajada {_mmss(stats.get('bajar', 0))}"
             f"{' · ' + how if how else ''}, compresión {_mmss(stats.get('comprimir', 0))})")
+
+
+async def fetch_ftp(v: Vehicle, chn: int, day: date, start: int, stop: int, status,
+                    fast: bool = False) -> Path:
+    """El bus sube [start, stop] por FTP a CMSV7 (un archivo) y se descarga."""
+    dest = _work_dir() / f"{v.dev_id}_{chn}_{day:%Y%m%d}_{start}_{stop}{'_l' if fast else ''}.avi"
+    if dest.exists():
+        dest.touch()
+        return dest
+    want = stop - start
+    exp = want / max(_method_vel("ftp"), 0.1) + 20
+
+    async def progress(state: str, st=None, elapsed: float = 0, task_pct=None) -> None:
+        frac = task_pct / 100 if task_pct is not None else min(0.95, elapsed / exp)
+        await _edit(status, f"📤 {state}", 5 + 75 * frac, max(10.0, exp - elapsed) + 10)
+
+    async def dl_progress(done: int, total: int, speed: float) -> None:
+        frac = done / total if total else 0
+        left = ((total - done) / speed if speed and total else 20) + 10
+        await _edit(status, f"⬇️ bajando del servidor {done / 1e6:.0f}"
+                            f"{f'/{total / 1e6:.0f}' if total else ''} MB", 80 + 10 * frac, left)
+
+    t = time.monotonic()
+    async with _bus_slot(v.dev_id):
+        await progress("pidiendo al bus que suba el video por FTP")
+        path = await cms.ftp_download(v.dev_id, chn, day, start, stop, dest, progress,
+                                      dl_progress, 1 if fast else 0)
+    _learn_method("ftp", want, time.monotonic() - t)
+    return path
 
 
 async def fetch(v: Vehicle, rec: RecFile, chn: int, day: date, start: int, stop: int,

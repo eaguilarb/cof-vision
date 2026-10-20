@@ -389,6 +389,74 @@ class CMSV6:
                 return dest, rec.beg
         raise CMSV6Error("La descarga terminó pero no encontré el archivo en el servidor.")
 
+    async def ftp_download(self, dev_id: str, chn: int, day: date, start: int, stop: int,
+                           dest: Path, progress=None, dl_progress=None, stream: int = 0,
+                           timeout_s: int = 1800) -> Path:
+        """Método FTP (como en el aplicativo): el bus sube el horario pedido directo al FTP de
+        CMSV7 en un solo archivo (AVI) y luego se descarga del servidor.
+
+        Una sola tarea por cámara para todo el horario (no una por archivo de grabación)."""
+        end = min(stop, 86399)
+        params = {"DevIDNO": dev_id, "CHN": chn,
+                  "BEGYEAR": day.year, "BEGMON": day.month, "BEGDAY": day.day, "BEGSEC": start,
+                  "ENDYEAR": day.year, "ENDMON": day.month, "ENDDAY": day.day, "ENDSEC": end,
+                  "ARM1": 0, "ARM2": 0, "RES": 0, "STREAM": stream, "STORE": 0,
+                  "NETMASK": 7}  # WiFi + LAN + 4G
+        data = await self.call("StandardApiAction_ftpUpload.action", params)
+        seq = data.get("SEQUENCE", data.get("sequence"))
+        if seq is None:
+            raise CMSV6Error(f"CMSV7 no devolvió número de tarea FTP: {data}")
+        log.info("Tarea FTP %s creada (equipo %s, cam%d, %s–%s)", seq, dev_id, chn + 1, start, end)
+        started = time.monotonic()
+        info: dict = {}
+        logged = False
+        try:
+            while time.monotonic() - started < timeout_s:
+                await asyncio.sleep(2)
+                data = await self.call("StandardApiAction_queryFtpStatus.action",
+                                       {"seq": seq, "devIdno": dev_id})
+                info = data.get("info") or {}
+                if isinstance(info, list):
+                    info = info[0] if info else {}
+                st = info.get("status", info.get("taskStatus"))
+                if not logged and st == 1:
+                    logged = True
+                    log.info("Tarea FTP en curso (campos de CMSV7): %s", info)
+                if progress:
+                    await progress({0: "en pausa", 1: "el bus está subiendo por FTP",
+                                    4: "listo"}.get(st, "esperando que el bus responda"),
+                                   st, time.monotonic() - started, _task_pct(info))
+                if st in (2, 3):
+                    log.warning("Tarea FTP %s terminó con estado %s: %s", seq, st, info)
+                    raise CMSV6Error("El bus no pudo subir el video por FTP"
+                                     + (" (cancelada)" if st == 2 else ""))
+                if st == 4 and info.get("downloadUrl"):
+                    break
+            else:
+                await self._ftp_cancel(dev_id, seq)
+                raise CMSV6Error("El bus tardó demasiado en subir el video por FTP.")
+        except asyncio.CancelledError:
+            await asyncio.shield(self._ftp_cancel(dev_id, seq))
+            raise
+        base, q = self._fix_url(str(info["downloadUrl"]))
+        q["jsession"] = self.jsession or ""
+        for attempt in range(4):
+            try:
+                return await self._download_url(f"{base}?{urlencode(q)}", dest, dl_progress,
+                                                int(q.get("FLENGTH") or 0))
+            except CMSV6Error as e:
+                log.info("Descarga del archivo FTP, intento %d: %s", attempt + 1, e)
+                await asyncio.sleep(5)
+        raise CMSV6Error("El video se subió por FTP pero no se pudo descargar del servidor.")
+
+    async def _ftp_cancel(self, dev_id: str, seq) -> None:
+        try:
+            await self.call("StandardApiAction_controllDownLoad.action",
+                            {"seq": seq, "devIdno": dev_id, "taskType": 2})
+            log.info("Tarea FTP %s cancelada", seq)
+        except Exception as e:
+            log.info("No se pudo cancelar la tarea FTP %s: %s", seq, e)
+
     async def _delete_task(self, dev_id: str, tag: str) -> None:
         try:
             await self.call("StandardApiAction_delDownloadTasklist.action",
