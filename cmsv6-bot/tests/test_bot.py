@@ -270,3 +270,18 @@ async def test_mosaic_video_and_photo(tmp_path):
     dims = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height",
                            "-of", "csv=p=0", str(img)], capture_output=True, text=True).stdout.strip()
     assert dims == "1280,360"
+
+
+@pytest.mark.asyncio
+async def test_enlinea(monkeypatch):
+    from app import main
+    vs = [main.Vehicle("SPBS42", "1", 5, []), main.Vehicle("SPBS40", "2", 5, []),
+          main.Vehicle("SRRX58", "3", 5, [])]
+    monkeypatch.setattr(main.cms, "vehicles", AsyncMock(return_value=vs))
+    monkeypatch.setattr(main.cms, "online_devices", AsyncMock(return_value={"1", "3"}))
+    object.__setattr__(main.config, "allowed_users", [7])
+    msg = MagicMock(reply_text=AsyncMock())
+    upd = MagicMock(effective_user=MagicMock(id=7), effective_message=msg)
+    await main.cmd_enlinea(upd, MagicMock(args=["spb"]))
+    text = msg.reply_text.call_args.args[0]
+    assert "1 de 2" in text and "SPBS42" in text and "SPBS40" not in text

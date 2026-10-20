@@ -32,6 +32,7 @@ WORK_HOURS = 6  # cuánto se guardan las grabaciones originales descargadas (cac
 AYUDA = """\
 <b>Comandos</b>
 
+/enlinea [<i>texto</i>] — buses encendidos ahora (ej. /enlinea SPB)
 /vehiculos <i>texto</i> — busca vehículos (ej. /vehiculos SVD), cámaras y si están en línea
 /grabaciones <i>placa</i> [<i>fecha</i>] — qué horas hay grabadas
 /video <i>placa canal fecha inicio fin</i> [juntas] — clip comprimido
@@ -109,6 +110,22 @@ async def cmd_vehiculos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         empresa = f" · {_esc(v.company)}" if v.company else ""
         lines.append(f"{mark} <b>{_esc(v.plate)}</b>{empresa} — {v.channels} cámaras")
     await _send_long(update.effective_message, "\n".join(lines))
+
+
+@authorized
+async def cmd_enlinea(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Lista compacta de los buses encendidos ahora (opcionalmente filtrados por placa)."""
+    vs = await cms.vehicles()
+    online = await cms.online_devices()
+    q = "".join(ctx.args).upper().replace("-", "")
+    on = sorted(v.plate for v in vs if v.dev_id in online
+                and (not q or q in v.plate.upper().replace("-", "")))
+    total = len([v for v in vs if not q or q in v.plate.upper().replace("-", "")])
+    head = f"🟢 <b>{len(on)} de {total}</b> buses en línea" + (f" con «{_esc(q)}»" if q else "")
+    if not on:
+        await update.effective_message.reply_text(head, parse_mode=ParseMode.HTML)
+        return
+    await _send_long(update.effective_message, head + "\n\n" + _esc(", ".join(on)))
 
 
 @authorized
@@ -471,6 +488,7 @@ def main() -> None:
     app.add_handler(CommandHandler("miid", cmd_miid))
     app.add_handler(CommandHandler("vehiculos", cmd_vehiculos))
     app.add_handler(CommandHandler("grabaciones", cmd_grabaciones))
+    app.add_handler(CommandHandler(["enlinea", "en_linea"], cmd_enlinea))
     app.add_handler(CommandHandler("video", cmd_video))
     app.add_handler(CommandHandler("foto", cmd_foto))
     log.info("Bot iniciado (Bot API: %s)", config.bot_api_url or "nube de Telegram")
