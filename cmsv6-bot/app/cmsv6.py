@@ -361,10 +361,16 @@ class CMSV6:
             q["jsession"] = self.jsession or ""
             if not q.get("SAVENAME"):
                 q["SAVENAME"] = tag + ".mp4"
-            await self._download_url(f"{base}?{urlencode(q)}", dest, dl_progress,
-                                     int(info.get("len") or 0))
-            return dest, task_beg
-        # Sin enlace en la tarea: el archivo ya está en el servidor de almacenamiento
+            # Recién terminada, CMSV7 a veces entrega el archivo vacío unos segundos: se reintenta
+            for attempt in range(4):
+                try:
+                    await self._download_url(f"{base}?{urlencode(q)}", dest, dl_progress,
+                                             int(info.get("len") or 0))
+                    return dest, task_beg
+                except CMSV6Error as e:
+                    log.info("Descarga del tramo terminado, intento %d: %s", attempt + 1, e)
+                    await asyncio.sleep(5)
+        # Sin enlace (o no responde): el archivo ya está en el servidor de almacenamiento
         for rec in await self.search(v, day, chn=f.chn, loc=2):
             if rec.has_channel(f.chn) and rec.covers(a, b):
                 await self.download(rec, dest)

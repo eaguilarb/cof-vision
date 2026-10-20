@@ -79,6 +79,16 @@ def _set_busy(delta: int) -> None:
         pass
 
 
+# Tramos pedidos a cada bus al mismo tiempo (ver BUS_PARALLEL)
+_bus_slots: dict[str, asyncio.Semaphore] = {}
+
+
+def _bus_slot(dev_id: str) -> asyncio.Semaphore:
+    if dev_id not in _bus_slots:
+        _bus_slots[dev_id] = asyncio.Semaphore(max(1, config.bus_parallel))
+    return _bus_slots[dev_id]
+
+
 # Pedidos en curso por chat, para poder detenerlos con /cancelar
 _running: dict[int, set[asyncio.Task]] = {}
 _trackers: dict[int, set["Tracker"]] = {}
@@ -327,6 +337,14 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     when = f"{day:%d/%m/%Y} {fmt_hms(start)}–{fmt_hms(stop)}"
 
     msg = update.effective_message
+    total_video = (stop - start) * len(chans)
+    if total_video >= 6 * 60:
+        sp = _speed()
+        eta = (sp["base"] * len(chans) + sp["ratio"] * total_video) / max(1, config.bus_parallel)
+        await msg.reply_text(
+            f"ℹ️ Son {total_video // 60} min de video que el bus debe enviar por su 4G "
+            f"({(stop - start) // 60} min × {len(chans)} cámaras). Estimado: ~{_mmss(eta)}.\n"
+            "Para recibirlo antes, pide menos minutos o menos cámaras; puedes detenerlo con /cancelar.")
     if together and len(chans) > 1:
         await _video_together(msg, v, chans, day, start, stop, when, fast)
         return
@@ -656,7 +674,14 @@ async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
         a, b = max(start, rec.beg), min(stop, rec.end)
         prefix = f"({i}/{len(recs)}) " if len(recs) > 1 else ""
         t1 = time.monotonic()
-        raw, beg, stream, how = await fetch(v, rec, chn, day, a, b, status, prefix, i - 1)
+        try:
+            raw, beg, stream, how = await fetch(v, rec, chn, day, a, b, status, prefix, i - 1)
+        except CMSV6Error as e:
+            # Un tramo que falla no debe tumbar la cámara completa: se reintenta una vez
+            log.info("Parte %d de cam%d falló (%s); se reintenta", i, chn + 1, e)
+            await _edit(status, f"🔁 {prefix}reintentando ({e})"[:120], None, None, i - 1)
+            await asyncio.sleep(5)
+            raw, beg, stream, how = await fetch(v, rec, chn, day, a, b, status, prefix, i - 1)
         stats["bajar"] = max(stats.get("bajar", 0), time.monotonic() - t1)
         stats["metodo"] = how
         piece = work / f"{raw.stem}_{a}_{b}.mp4"
@@ -741,13 +766,18 @@ async def fetch(v: Vehicle, rec: RecFile, chn: int, day: date, start: int, stop:
 
     async def by_segment(stall: int | None) -> tuple[Path, int, int, str]:
         nonlocal seg_started
-        seg_started = True
-        await seg_progress("pidiendo el tramo al bus")
-        t = time.monotonic()
-        path, beg = await cms.segment_download(v, rec, day, start, stop, seg_dest,
-                                               seg_progress, stall_s=stall,
-                                               dl_progress=dl_progress)
-        _learn_speed(stop - start, time.monotonic() - t)
+        slot = _bus_slot(v.dev_id)
+        if slot.locked():
+            await _edit(status, f"⏳ {prefix}en fila: el bus envía un tramo a la vez", 3,
+                        expected * 2 + 15, part)
+        async with slot:
+            seg_started = True
+            await seg_progress("pidiendo el tramo al bus")
+            t = time.monotonic()
+            path, beg = await cms.segment_download(v, rec, day, start, stop, seg_dest,
+                                                   seg_progress, stall_s=stall,
+                                                   dl_progress=dl_progress)
+            _learn_speed(stop - start, time.monotonic() - t)
         return path, beg, 0, "tramos"
 
     async def direct() -> tuple[Path, int, int, str]:

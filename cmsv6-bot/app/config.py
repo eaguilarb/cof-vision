@@ -49,6 +49,9 @@ class Config:
     segment_mode: str = os.environ.get("SEGMENT_MODE", "auto").lower()
     # Si la descarga por tramos no avanza en este tiempo, se usa la descarga directa
     segment_stall_s: int = int(os.environ.get("SEGMENT_STALL_SECONDS", "120"))
+    # Cuántos tramos se piden a la vez a un mismo bus: el equipo los envía de a uno por su
+    # 4G; pedir muchos juntos no acelera y hace que fallen
+    bus_parallel: int = int(os.environ.get("BUS_PARALLEL", "2"))
 
     @property
     def telegram_max_mb(self) -> int:
