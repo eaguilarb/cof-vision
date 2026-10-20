@@ -29,13 +29,16 @@ def _scale_filter() -> str:
     return f"scale=-2:'min({h},ih)':flags=bicubic,format=yuv420p"
 
 
-async def compress_piece(src: Path, dest: Path, offset: float, duration: float) -> Path:
-    """Recorta [offset, offset+duration] de src y lo comprime a MP4 H.264."""
+async def compress_piece(src: Path, dest: Path, offset: float, duration: float,
+                         stream: int = 0) -> Path:
+    """Recorta [offset, offset+duration] de src y lo comprime a MP4 H.264.
+
+    stream: índice del video dentro del archivo (en archivos con varias cámaras)."""
     # -ss después de -i: los .264 crudos de los MDVR no tienen índice y no admiten salto rápido
     await _run(
         "-fflags", "+genpts", "-i", str(src),
         "-ss", f"{max(0.0, offset):.3f}", "-t", f"{duration:.3f}",
-        "-map", "0:v:0", "-map", "0:a:0?",
+        "-map", f"0:v:{stream}", "-map", "0:a:0?",
         "-vf", _scale_filter(),
         "-c:v", "libx264", "-preset", config.video_preset, "-crf", str(config.video_crf),
         "-c:a", "aac", "-b:a", "64k", "-ac", "1",

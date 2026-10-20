@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import aiohttp
 
@@ -35,13 +35,17 @@ class Vehicle:
 @dataclass
 class RecFile:
     dev_id: str
-    chn: int
+    chn: int  # primer canal del archivo (0 = cámara 1)
     beg: int  # segundos desde las 00:00 del día
     end: int
     path: str
     size: int
     loc: int
     down_url: str
+    chns: tuple[int, ...] = ()  # todos los canales que contiene (archivos multicanal)
+
+    def has_channel(self, chn: int) -> bool:
+        return chn in (self.chns or (self.chn,))
 
     def covers(self, start: int, stop: int) -> bool:
         return self.beg < stop and self.end > start
@@ -150,12 +154,13 @@ class CMSV6:
         data = await self.call("StandardApiAction_getVideoFileInfo.action", params)
         files = []
         for f in data.get("files") or []:
-            f_beg, f_end = _sec_of_day(f.get("beg")), _sec_of_day(f.get("end"))
+            f_beg, f_end = int(f.get("beg") or 0), int(f.get("end") or 0)
             if f_end <= f_beg:
                 f_end = 86400
+            chns = _file_channels(f)
             files.append(RecFile(
                 dev_id=dev_id,
-                chn=_file_channel(f),
+                chn=chns[0], chns=tuple(chns),
                 beg=f_beg, end=f_end,
                 path=str(f.get("file", "")),
                 size=int(f.get("len") or 0),
@@ -175,7 +180,7 @@ class CMSV6:
             except CMSV6Error as e:
                 last_err = e
                 continue
-            hits = [f for f in files if f.chn == chn and f.covers(start, stop)]
+            hits = [f for f in files if f.has_channel(chn) and f.covers(start, stop)]
             if hits:
                 return hits
         if last_err:
@@ -183,21 +188,26 @@ class CMSV6:
         return []
 
     def download_url(self, f: RecFile) -> str:
+        """URL de descarga directa (DownUrl). La API la devuelve con jsession y SAVENAME vacíos."""
         if f.down_url:
             url = f.down_url
             if url.startswith("/"):
                 url = f"http://{self.host}:6611{url}"
             parts = urlsplit(url)
-            # CMSV6 suele devolver su IP interna; la reemplazamos por la pública
-            netloc = f"{self.host}:{parts.port}" if parts.port else self.host
-            url = urlunsplit((parts.scheme or "http", netloc, parts.path, parts.query, ""))
         else:
-            params = {"DownType": 3, "DevIDNO": f.dev_id, "FLENGTH": f.size, "FOFFSET": 0,
-                      "MTYPE": 1, "FPATH": f.path, "SAVENAME": os.path.basename(f.path)}
-            url = f"http://{self.host}:6611/3/5?{urlencode(params)}"
-        if "jsession" not in url.lower():
-            url += ("&" if "?" in url else "?") + urlencode({"jsession": self.jsession or ""})
-        return url
+            if f.loc != 1 and not f.path:
+                raise CMSV6Error("CMSV6 no entregó enlace de descarga para este archivo "
+                                 "(equipos JT/T 1078 solo permiten descarga por tareas).")
+            parts = urlsplit(f"http://{self.host}:6611/3/5?" + urlencode({
+                "DownType": 3, "DevIDNO": f.dev_id, "FLENGTH": f.size, "FOFFSET": 0,
+                "MTYPE": 1, "FPATH": f.path}))
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query["jsession"] = self.jsession or ""
+        if not query.get("SAVENAME"):
+            query["SAVENAME"] = os.path.basename(f.path.replace("\\", "/")) or "video"
+        # CMSV6 suele devolver su IP interna; la reemplazamos por la pública
+        netloc = f"{self.host}:{parts.port}" if parts.port else self.host
+        return urlunsplit((parts.scheme or "http", netloc, parts.path, urlencode(query), ""))
 
     async def download(self, f: RecFile, dest: Path) -> Path:
         if not self.jsession:
@@ -224,24 +234,9 @@ class CMSV6:
         return dest
 
 
-def _sec_of_day(v) -> int:
-    n = int(v or 0)
-    # Algunas versiones devuelven milisegundos o epoch; lo normalizamos a segundos del día
-    if n > 86400 * 1000:
-        n //= 1000
-    if n > 86400:
-        from datetime import datetime
-        dt = datetime.fromtimestamp(n)
-        n = dt.hour * 3600 + dt.minute * 60 + dt.second
-    return n
-
-
-def _file_channel(f: dict) -> int:
-    chn = f.get("chn")
-    if chn is not None and int(chn) >= 0:
-        return int(chn)
+def _file_channels(f: dict) -> list[int]:
+    """Según la documentación: primero se revisa chnMask (bit 0 = cámara 1); si es 0, se usa chn."""
     mask = int(f.get("chnMask") or 0)
-    for i in range(32):
-        if mask & (1 << i):
-            return i
-    return 0
+    if mask:
+        return [i for i in range(32) if mask & (1 << i)]
+    return [max(0, int(f.get("chn") or 0))]

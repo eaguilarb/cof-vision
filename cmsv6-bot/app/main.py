@@ -194,7 +194,8 @@ async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
         a, b = max(start, rec.beg), min(stop, rec.end)
         await status.edit_text(f"🗜️ Comprimiendo parte {i}/{len(recs)}…")
         piece = work / f"{raw.stem}_{a}_{b}.mp4"
-        await video.compress_piece(raw, piece, a - rec.beg, b - a)
+        stream = rec.chns.index(chn) if chn in rec.chns else 0
+        await video.compress_piece(raw, piece, a - rec.beg, b - a, stream)
         pieces.append(piece)
     out = links.files_dir() / _name(v, chn, day, start, stop, ".mp4")
     await video.concat(pieces, out)

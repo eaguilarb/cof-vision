@@ -55,16 +55,22 @@ corre su propio servidor de Telegram y el límite sube a 2 GB.
 
 ### Paso 3 — Verificar el acceso a CMSV6
 
-Necesitas un usuario y contraseña de CMSV6 que vea los vehículos. Lo ideal
-es crear un usuario solo para el bot. Desde tu PC, abre en el navegador:
+No hace falta el proveedor: CMSV6 trae una API web oficial incluida, la misma
+que usa su versión web, y se entra con **el mismo usuario y contraseña del
+programa CMSV6**. Pruébala desde el navegador de tu PC o del iMac:
 
-```
-http://47.88.25.163:8080
-```
+1. Página de inicio de sesión: `http://47.88.25.163:8080`
+2. Documentación de la API (viene dentro de tu propio servidor):
+   `http://47.88.25.163:8080/808gps/open/webApi.html`
+3. Prueba de inicio de sesión (cambia USUARIO y CLAVE):
+   `http://47.88.25.163:8080/StandardApiAction_login.action?account=USUARIO&password=CLAVE`
 
-Si carga la página de inicio de sesión de CMSV6, la API está disponible. Si no
-carga, pídele a tu proveedor de CMSV6 que habilite el acceso web (puerto 8080)
-y el de descargas (puerto 6611).
+   Si responde algo como `{"result":0,"jsession":"..."}`, la API funciona con
+   tu cuenta y el bot podrá conectarse.
+
+Si el puerto 8080 no carga, mira en el programa CMSV6 la pantalla de inicio de
+sesión (botón de configuración del servidor), que muestra la IP y los puertos
+que usa. Pásame esa captura.
 
 ### Paso 4 — Entrar al VPS por SSH
 

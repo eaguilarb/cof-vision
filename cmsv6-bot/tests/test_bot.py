@@ -9,7 +9,7 @@ import pytest
 from aiohttp import web
 
 from app import links, parsing, video
-from app.cmsv6 import CMSV6, RecFile, _sec_of_day
+from app.cmsv6 import CMSV6, RecFile, _file_channels
 
 
 def test_parse_date_and_time():
@@ -43,9 +43,21 @@ def test_links_sign_and_expire(monkeypatch):
     assert not links.verify("../x", int(exp), sig)
 
 
-def test_sec_of_day():
-    assert _sec_of_day(3600) == 3600
-    assert _sec_of_day(None) == 0
+def test_file_channels():
+    assert _file_channels({"chn": 2, "chnMask": 0}) == [2]
+    assert _file_channels({"chn": 0, "chnMask": 0b101}) == [0, 2]
+
+
+def test_download_url_fills_session_and_savename():
+    cms = CMSV6("http://47.88.25.163:8080", "u", "p")
+    cms.jsession = "J9"
+    # Formato exacto del ejemplo de la documentación de CMSV6
+    f = RecFile("1235", 1, 31044, 32842, "H20100628-083724P2N2P0.264", 23211837, 2,
+                "http://192.168.1.10:6604/3/5?DownType=3&jsession=&DevIDNO=1235&FLENGTH=23211837"
+                "&FOFFSET=0&MTYPE=1&FPATH=H20100628-083724P2N2P0.264&SAVENAME=")
+    url = cms.download_url(f)
+    assert url.startswith("http://47.88.25.163:6604/3/5?")
+    assert "jsession=J9" in url and "SAVENAME=H20100628-083724P2N2P0.264" in url
 
 
 def _make_raw(path: Path, seconds: int) -> None:
@@ -104,7 +116,7 @@ async def test_end_to_end_clip(tmp_path, monkeypatch):
     assert calls[0]["DevIDNO"] == "D1" and calls[0]["LOC"] == "2"
     # El DownUrl trae una IP interna (10.0.0.5): debe reemplazarse por la del servidor
     f = RecFile("D1", 0, 0, 60, "/x", 1, 2, "http://10.0.0.5:6611/3/5?a=1")
-    assert cms.download_url(f) == "http://127.0.0.1:6611/3/5?a=1&jsession=J1"
+    assert cms.download_url(f) == "http://127.0.0.1:6611/3/5?a=1&jsession=J1&SAVENAME=x"
 
     jpg = tmp_path / "f.jpg"
     await video.extract_frame(raw, jpg, 10)
