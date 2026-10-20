@@ -289,14 +289,15 @@ class CMSV6:
         while time.monotonic() < deadline:
             await asyncio.sleep(3)
             data = await self.call("StandardApiAction_downloadTasklist.action", {
-                "taskTag": tag, "begintime": fmt(0), "endtime": fmt(86399 + 86400)})
-            infos = data.get("infos") or []
-            info = infos[0] if infos else {}
+                "devIdno": f.dev_id, "taskTag": tag,
+                "begintime": fmt(0), "endtime": fmt(86399 + 86400)})
+            info = _own_task(data.get("infos") or [], tag)
             stu = info.get("stu")
             if progress:
                 await progress({1: "en espera", 2: "descargando del vehículo",
                                 4: "listo"}.get(stu, "en espera"))
             if stu == 3:
+                log.warning("Tarea %s fallida: %s", tag, info)
                 raise CMSV6Error(f"El vehículo no pudo enviar el video: {info.get('err') or 'sin detalle'}")
             if stu == 4:
                 break
@@ -360,6 +361,17 @@ class CMSV6:
             raise CMSV6Error(f"CMSV6 devolvió un archivo vacío o un error: {body!r}")
         tmp.rename(dest)
         return dest
+
+
+def _own_task(infos: list[dict], tag: str) -> dict:
+    """La lista de tareas puede traer tareas de otros pedidos (o ignorar el filtro):
+    se usa solo la que lleva nuestra etiqueta."""
+    mine = [i for i in infos if str(i.get("lab") or "") == tag]
+    if mine:
+        return mine[0]
+    if infos and all("lab" not in i for i in infos) and len(infos) == 1:
+        return infos[0]  # el servidor no informa etiquetas: si hay una sola, es la nuestra
+    return {}
 
 
 def _is_internal(host: str) -> bool:

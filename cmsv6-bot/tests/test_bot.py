@@ -362,3 +362,11 @@ async def test_prefers_partial_download_and_falls_back(tmp_path, monkeypatch):
     assert stats["metodo"] == "directa" and state["direct"] == 1
     await cms.close()
     await runner.cleanup()
+
+
+def test_own_task_ignores_other_tasks():
+    from app.cmsv6 import _own_task
+    infos = [{"lab": "", "stu": 3, "err": "viejo"}, {"lab": "botabc", "stu": 2}]
+    assert _own_task(infos, "botabc")["stu"] == 2
+    assert _own_task([{"lab": "otro", "stu": 3}], "botabc") == {}
+    assert _own_task([{"stu": 4}], "botabc")["stu"] == 4
