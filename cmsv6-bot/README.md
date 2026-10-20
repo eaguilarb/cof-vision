@@ -16,7 +16,7 @@ Corre en el VPS (Ubuntu 24.04) con Docker.
 
 | Comando | Qué hace |
 |---|---|
-| `/vehiculos` | Lista vehículos, cámaras y si están en línea |
+| `/vehiculos SVD` | Busca vehículos por parte de la placa, con cámaras y estado en línea |
 | `/grabaciones ABC123 ayer` | Muestra las horas grabadas por cámara |
 | `/video ABC123 1 hoy 14:00 14:10` | Clip de la cámara 1, comprimido |
 | `/video ABC123 todos 19/10 08:30 08:35` | Un clip por cada cámara |

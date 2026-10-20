@@ -65,6 +65,7 @@ class CMSV6:
         self.jsession: str | None = None
         self._lock = asyncio.Lock()
         self._session: aiohttp.ClientSession | None = None
+        self._vehicles: tuple[float, list[Vehicle]] | None = None
 
     async def _http(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -112,6 +113,9 @@ class CMSV6:
         raise AssertionError("unreachable")
 
     async def vehicles(self) -> list[Vehicle]:
+        # Con flotas grandes (más de 1000 vehículos) la lista pesa; se guarda 10 minutos
+        if self._vehicles and time.monotonic() - self._vehicles[0] < 600:
+            return self._vehicles[1]
         data = await self.call("StandardApiAction_queryUserVehicle.action")
         out = []
         for v in data.get("vehicles") or []:
@@ -120,6 +124,7 @@ class CMSV6:
                 out.append(Vehicle(plate=str(v.get("nm", "")), dev_id=str(d.get("id", "")),
                                    channels=int(d.get("cc") or len(names) or 1),
                                    channel_names=names))
+        self._vehicles = (time.monotonic(), out)
         return out
 
     async def online_status(self, dev_ids: list[str]) -> dict[str, bool]:

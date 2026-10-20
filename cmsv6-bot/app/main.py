@@ -31,7 +31,7 @@ WORK_HOURS = 6  # cuánto se guardan las grabaciones originales descargadas (cac
 AYUDA = """\
 <b>Comandos</b>
 
-/vehiculos — lista de vehículos, cámaras y si están en línea
+/vehiculos <i>texto</i> — busca vehículos (ej. /vehiculos SVD), cámaras y si están en línea
 /grabaciones <i>placa</i> [<i>fecha</i>] — qué horas hay grabadas
 /video <i>placa canal fecha inicio fin</i> — clip comprimido
 /foto <i>placa canal fecha hora</i> — imagen de ese instante
@@ -85,6 +85,18 @@ async def cmd_vehiculos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     vs = await cms.vehicles()
     if not vs:
         await update.effective_message.reply_text("Tu cuenta de CMSV6 no tiene vehículos.")
+        return
+    # Con un texto se filtra: /vehiculos SVD
+    q = "".join(ctx.args).upper().replace("-", "")
+    if q:
+        vs = [v for v in vs if q in v.plate.upper().replace("-", "") or q in v.dev_id.upper()]
+    if len(vs) > 60:
+        await update.effective_message.reply_text(
+            f"Hay {len(vs)} vehículos. Escribe parte de la placa para filtrar, "
+            "por ejemplo: /vehiculos SVD")
+        return
+    if not vs:
+        await update.effective_message.reply_text(f"Ningún vehículo coincide con «{q}».")
         return
     online = await cms.online_status([v.dev_id for v in vs])
     lines = []
