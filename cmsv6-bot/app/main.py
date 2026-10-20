@@ -278,6 +278,9 @@ def _split_mode(args: list[str]) -> tuple[list[str], bool, bool]:
 @authorized
 async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     args, together, fast = _split_mode(list(ctx.args))
+    if len(args) == 4 and not re.fullmatch(r"\d{1,2}(:\d{2}){0,2}h?", args[2]):
+        raise ParseError(f"Falta la hora de fin. Ejemplo: /video {args[0]} {args[1]} {args[2]} "
+                         f"{args[3]} HH:MM")
     if len(args) == 4:  # sin fecha → hoy
         args.insert(2, "hoy")
     if len(args) != 5:
@@ -298,14 +301,18 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await _video_together(msg, v, chans, day, start, stop, when, fast)
         return
     async def one(chn: int) -> None:
-        status = await msg.reply_text(
-            f"⏳ {v.plate} {v.channel_label(chn)} {day:%d/%m} {fmt_hms(start)}–{fmt_hms(stop)}: en cola…")
+        title = f"🎥 {v.plate} {v.channel_label(chn)} · {day:%d/%m} {fmt_hms(start)}–{fmt_hms(stop)}"
+        status = await msg.reply_text(f"{title}\n{_bar(0)} 0% · en cola…")
+        tracker = Tracker(status, title)
         stats: dict = {}
         try:
-            out = await make_clip(v, chn, day, start, stop, status, stats, fast)
+            out = await make_clip(v, chn, day, start, stop, tracker.cam(chn, v.channel_label(chn)),
+                                  stats, fast)
         except (CMSV6Error, video.FFmpegError) as e:
+            tracker.stop()
             await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
             return
+        tracker.stop()
         await deliver(msg, status, out,
                       f"🎥 {v.plate} {v.channel_label(chn)} · {when}{_timing(stats)}")
 
@@ -315,36 +322,29 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
                           start: int, stop: int, when: str, fast: bool = False) -> None:
-    status = await msg.reply_text(
-        f"⏳ {v.plate} {len(chans)} cámaras juntas, {when}: en cola…")
+    title = f"🎥 {v.plate} · cámaras {', '.join(str(c + 1) for c in chans)} juntas · {when}"
+    status = await msg.reply_text(f"{title}\n{_bar(0)} 0% · en cola…")
+    tracker = Tracker(status, title)
     t0 = time.monotonic()
-    done_count = 0
+    cam_status = {c: tracker.cam(c, v.channel_label(c)) for c in chans}
 
     async def one(chn: int) -> tuple[int, Path | None, str]:
-        nonlocal done_count
-        # Mensaje de estado propio por cámara para no pisar el progreso de las otras
-        sub = await msg.reply_text(f"⏳ {v.channel_label(chn)}: en cola…")
         try:
-            clip = await make_clip(v, chn, day, start, stop, sub, None, fast)
+            clip = await make_clip(v, chn, day, start, stop, cam_status[chn], None, fast)
             return chn, clip, ""
         except (CMSV6Error, video.FFmpegError) as e:
+            await cam_status[chn].set(f"⚠️ {e}", 100, 0)
             return chn, None, f"{v.channel_label(chn)}: {e}"
-        finally:
-            done_count += 1
-            await _edit(status, f"⏳ {v.plate}: {done_count} de {len(chans)} cámaras listas…")
-            try:
-                await sub.delete()
-            except Exception:
-                pass
 
     results = await asyncio.gather(*(one(c) for c in chans))
     clips = [r[1] for r in results if r[1]]
     ok = [r[0] for r in results if r[1]]
     failed = [r[2] for r in results if not r[1]]
+    tracker.stop()
     if not clips:
         await status.edit_text("⚠️ No se pudo obtener ninguna cámara.\n" + "\n".join(failed))
         return
-    await _edit(status, f"🧩 Armando el mosaico de {len(clips)} cámaras…")
+    await _edit(status, f"{title}\n{_bar(97)} 97% · 🧩 armando el mosaico…")
     out = links.files_dir() / _name(v, -1, day, start, stop, ".mp4", "camaras" + "-".join(
         str(c + 1) for c in ok))
     try:
@@ -472,25 +472,147 @@ async def make_photo(v: Vehicle, chn: int, day: date, at: int, status: Message) 
     return out
 
 
-async def _edit(status: Message, text: str) -> None:
+async def _edit(status, text: str, pct: float | None = None, left: float | None = None,
+                part: int = 0) -> None:
+    if isinstance(status, CamStatus):
+        await status.set(text, pct, left, part)
+        return
     try:
         await status.edit_text(text)
     except Exception:
         pass  # Telegram rechaza ediciones con el mismo texto
 
 
+# ---------- Avance (porcentaje y tiempo estimado) ----------
+
+_SPEED_FILE = "velocidad.json"
+
+
+def _speed() -> dict:
+    """Cuánto tarda el bus en enviar un tramo: base + ratio × segundos de video.
+    Se ajusta solo con cada descarga real."""
+    try:
+        return json.loads((config.data_dir / _SPEED_FILE).read_text())
+    except Exception:
+        return {"base": 30.0, "ratio": 1.3}
+
+
+def _learn_speed(seconds_video: float, seconds_taken: float) -> None:
+    if seconds_video <= 0:
+        return
+    sp = _speed()
+    sample = max(0.1, (seconds_taken - sp["base"]) / seconds_video)
+    sp["ratio"] = round(0.7 * sp["ratio"] + 0.3 * sample, 3)
+    try:
+        (config.data_dir / _SPEED_FILE).write_text(json.dumps(sp))
+    except OSError:
+        pass
+
+
+def _bar(pct: float) -> str:
+    n = int(round(pct / 10))
+    return "▰" * n + "▱" * (10 - n)
+
+
+class Tracker:
+    """Un solo mensaje con el avance de un pedido: barra, %, lo que falta y tiempo estimado.
+    Se refresca solo cada pocos segundos aunque el bus no informe nada."""
+
+    def __init__(self, status: Message, title: str):
+        self.status, self.title = status, title
+        self.cams: dict[int, "CamStatus"] = {}
+        self.t0 = time.monotonic()
+        self._last = 0.0
+        self._ticker: asyncio.Task | None = None
+
+    def cam(self, chn: int, label: str) -> "CamStatus":
+        cs = CamStatus(self, label)
+        self.cams[chn] = cs
+        if self._ticker is None:
+            self._ticker = asyncio.create_task(self._tick())
+        return cs
+
+    async def _tick(self) -> None:
+        while True:
+            await asyncio.sleep(5)
+            await self.render(force=True)
+
+    def stop(self) -> None:
+        if self._ticker:
+            self._ticker.cancel()
+
+    def overall(self) -> tuple[float, float | None]:
+        cams = list(self.cams.values())
+        pct = sum(c.pct() for c in cams) / max(len(cams), 1)
+        lefts = [c.left() for c in cams if c.pct() < 100 and c.left() is not None]
+        return pct, (max(lefts) if lefts else None)
+
+    async def render(self, force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last < 3:
+            return
+        self._last = now
+        pct, left = self.overall()
+        head = f"{_bar(pct)} {pct:.0f}% · faltan {100 - pct:.0f}%"
+        if left is not None:
+            head += f" (~{_mmss(left)})"
+        lines = [self.title, head, f"⏱ {_mmss(now - self.t0)} transcurrido"]
+        cams = list(self.cams.values())
+        if len(cams) == 1:
+            lines.append(cams[0].text)
+        else:
+            lines += [f"• {c.label}: {c.pct():.0f}% · {c.text}" for c in cams]
+        await _edit(self.status, "\n".join(lines))
+
+
+class CamStatus:
+    """Avance de una cámara (puede tener varias partes que se bajan a la vez)."""
+
+    def __init__(self, tracker: Tracker, label: str):
+        self.tracker, self.label = tracker, label
+        self.text = "en cola"
+        self.parts = 1
+        self._pct: dict[int, float] = {}
+        self._left: dict[int, float] = {}
+        self._t = time.monotonic()
+
+    def pct(self) -> float:
+        return sum(self._pct.get(i, 0) for i in range(self.parts)) / self.parts
+
+    def left(self) -> float | None:
+        if not self._left:
+            return None
+        # Lo que faltaba al último aviso, descontando el tiempo que pasó desde entonces
+        return max(0.0, max(self._left.values()) - (time.monotonic() - self._t))
+
+    async def set(self, text: str, pct: float | None = None, left: float | None = None,
+                  part: int = 0) -> None:
+        self.text = text
+        if pct is not None:
+            self._pct[part] = max(self._pct.get(part, 0), min(100.0, pct))
+        if left is not None:
+            self._left[part] = left
+            self._t = time.monotonic()
+        await self.tracker.render()
+
+    async def edit_text(self, text: str) -> None:
+        await self.set(text)
+
+
 async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
-                    status: Message, stats: dict | None = None, fast: bool = False) -> Path:
+                    status, stats: dict | None = None, fast: bool = False) -> Path:
     """Arma el clip de una cámara. En stats deja cuánto tardó cada etapa (para el mensaje).
 
     Las partes (archivos de grabación) se piden todas a la vez al bus y se comprimen a
     medida que llegan; fast usa la grabación liviana (secundaria) si el equipo la tiene."""
     stats = stats if stats is not None else {}
     t0 = time.monotonic()
-    await _edit(status, f"🔎 Buscando grabaciones de {v.plate} {v.channel_label(chn)}…")
+    await _edit(status, "🔎 buscando la grabación", 2)
     recs = await cms.find_recordings(v, day, chn, start, stop, config.search_locations, fast)
     if not recs:
         raise CMSV6Error(f"No hay grabaciones en ese horario ({fmt_hms(start)}–{fmt_hms(stop)}).")
+    if isinstance(status, CamStatus):
+        status.parts = len(recs)
     stats["buscar"] = time.monotonic() - t0
     work = _work_dir()
 
@@ -498,14 +620,15 @@ async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
         a, b = max(start, rec.beg), min(stop, rec.end)
         prefix = f"({i}/{len(recs)}) " if len(recs) > 1 else ""
         t1 = time.monotonic()
-        raw, beg, stream, how = await fetch(v, rec, chn, day, a, b, status, prefix)
+        raw, beg, stream, how = await fetch(v, rec, chn, day, a, b, status, prefix, i - 1)
         stats["bajar"] = max(stats.get("bajar", 0), time.monotonic() - t1)
         stats["metodo"] = how
         piece = work / f"{raw.stem}_{a}_{b}.mp4"
         async with cpu:
             t2 = time.monotonic()
-            await _edit(status, f"🗜️ {prefix}Comprimiendo {v.channel_label(chn)}…")
+            await _edit(status, f"🗜️ {prefix}comprimiendo", 92, 10, i - 1)
             await video.compress_piece(raw, piece, a - beg, b - a, stream)
+            await _edit(status, f"✅ {prefix}lista", 100, 0, i - 1)
             stats["comprimir"] = stats.get("comprimir", 0) + time.monotonic() - t2
         return piece
 
@@ -534,7 +657,7 @@ def _timing(stats: dict) -> str:
 
 
 async def fetch(v: Vehicle, rec: RecFile, chn: int, day: date, start: int, stop: int,
-                status: Message, prefix: str = "") -> tuple[Path, int, int, str]:
+                status, prefix: str = "", part: int = 0) -> tuple[Path, int, int, str]:
     """Consigue el video de [start, stop] (o lo reutiliza si ya está en caché).
 
     Devuelve (archivo, segundo del día en que empieza, índice del video dentro del archivo,
@@ -559,25 +682,36 @@ async def fetch(v: Vehicle, rec: RecFile, chn: int, day: date, start: int, stop:
     prefer_segment = can_segment and (not can_direct or config.segment_mode == "siempre"
                                       or small_part)
 
-    async def seg_progress(state: str) -> None:
-        await _edit(status, f"📡 {prefix}Pidiendo al bus solo {fmt_hms(start)}–{fmt_hms(stop)}: "
-                            f"{state}…")
+    sp = _speed()
+    expected = sp["base"] + sp["ratio"] * (stop - start)  # tiempo estimado del bus
+
+    async def seg_progress(state: str, stu=None, elapsed: float = 0, task_pct=None) -> None:
+        # Del 5 % al 75 %: lo que tarda el bus en enviar (estimado si CMSV7 no lo informa)
+        frac = task_pct / 100 if task_pct is not None else min(0.95, elapsed / expected)
+        pct = 5 + 70 * frac
+        left = max(10.0, expected - elapsed) + 15
+        await _edit(status, f"📡 {prefix}{state}", pct, left, part)
 
     async def dl_progress(done: int, total: int, speed: float) -> None:
-        if total and done < total:
-            left = (total - done) / speed if speed else 0
-            pct = (f" {done * 100 // total}% (faltan {100 - done * 100 // total}%"
-                   f"{f', ~{int(left) // 60}:{int(left) % 60:02d}' if left else ''})")
-        else:
-            pct = ""
-        await _edit(status, f"⬇️ {prefix}Bajando grabación{pct}: {done / 1e6:.0f}"
-                            f"{f'/{total / 1e6:.0f}' if total else ''} MB a {speed * 8 / 1e6:.1f} Mbps…")
+        # Bajando el archivo: del 75 % al 90 % (o del 5 % al 90 % si es descarga directa)
+        lo = 75 if seg_started else 5
+        frac = done / total if total else 0
+        left = ((total - done) / speed if speed and total else 30) + 10
+        mb = f"{done / 1e6:.0f}{f'/{total / 1e6:.0f}' if total else ''} MB"
+        await _edit(status, f"⬇️ {prefix}bajando {mb} a {speed * 8 / 1e6:.1f} Mbps",
+                    lo + (90 - lo) * frac, left, part)
+
+    seg_started = False
 
     async def by_segment(stall: int | None) -> tuple[Path, int, int, str]:
-        await seg_progress("enviando solicitud")
+        nonlocal seg_started
+        seg_started = True
+        await seg_progress("pidiendo el tramo al bus")
+        t = time.monotonic()
         path, beg = await cms.segment_download(v, rec, day, start, stop, seg_dest,
                                                seg_progress, stall_s=stall,
                                                dl_progress=dl_progress)
+        _learn_speed(stop - start, time.monotonic() - t)
         return path, beg, 0, "tramos"
 
     async def direct() -> tuple[Path, int, int, str]:

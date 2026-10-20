@@ -547,3 +547,18 @@ async def test_snapshot_live(tmp_path):
     out = await video.snapshot_live(str(src), tmp_path / "f.jpg")
     assert out.stat().st_size > 1024
 
+
+
+@pytest.mark.asyncio
+async def test_tracker_message():
+    from app import main
+    msg = MagicMock(edit_text=AsyncMock())
+    t = main.Tracker(msg, "🎥 SPBG22 · cámaras 1, 3 juntas")
+    c1, c3 = t.cam(0, "cam1"), t.cam(2, "cam3")
+    await c1.set("📡 el bus está enviando", 40, 90)
+    await c3.set("✅ lista", 100, 0)
+    await t.render(force=True)
+    t.stop()
+    text = msg.edit_text.call_args.args[0]
+    assert "70%" in text and "faltan 30%" in text and "~1:" in text
+    assert "• cam1: 40%" in text and "• cam3: 100%" in text

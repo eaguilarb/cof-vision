@@ -357,12 +357,10 @@ class CMSV6:
                 logged = True
                 log.info("Tarea en curso (campos de CMSV7): %s", info)
             if progress:
-                pct = _task_pct(info)
-                el = int(time.monotonic() - started)
-                await progress({1: "en espera del bus", 2: "el bus está enviando",
-                                4: "listo"}.get(stu, "en espera del bus")
-                               + (f" {pct}%" if pct is not None else "")
-                               + f" · {el // 60}:{el % 60:02d}")
+                # (texto, estado, segundos transcurridos, % informado por CMSV7 o None)
+                await progress({1: "esperando que el bus responda", 2: "el bus está enviando",
+                                4: "listo"}.get(stu, "esperando que el bus responda"),
+                               stu, time.monotonic() - started, _task_pct(info))
             if stu == 3:
                 log.warning("Tarea %s fallida: %s", own[1], info)
                 raise CMSV6Error(f"El vehículo no pudo enviar el video: {info.get('err') or 'sin detalle'}")
