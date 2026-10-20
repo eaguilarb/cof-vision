@@ -10,7 +10,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://cof-crm-backend-production.up.railway.app"
+        "EXPO_PUBLIC_API_URL": "https://crm.40-160-97-216.sslip.io/api"
       }
     },
     "preview": {

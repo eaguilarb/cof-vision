@@ -1,0 +1,37 @@
+# CRM en el servidor propio (OVH), en la misma red que la intranet.
+# Caddy (en ~/intranet) lo publica en https://crm.40-160-97-216.sslip.io:
+# /api/* va al backend y lo demás a la página web.
+#
+# Vive en ~/crm/deploy/vps/ y lo usa la actualización automática
+# (servidor/autodeploy.sh de la intranet). Las variables van en ~/crm/crm.env
+# y los datos en ~/crm/data.
+name: crm
+
+services:
+  crm-backend:
+    build: ../../backend
+    restart: unless-stopped
+    env_file:
+      - path: ../../crm.env
+        format: raw
+    environment:
+      PORT: "4000"
+      DATA_DIR: /data
+      INTRANET_BASE_URL: http://intranet:3000
+    volumes:
+      - ../../data:/data
+    mem_limit: 512m
+    networks: [intranet]
+
+  crm-web:
+    build:
+      context: ../../app
+      dockerfile: ../web.Dockerfile
+    restart: unless-stopped
+    mem_limit: 128m
+    networks: [intranet]
+
+networks:
+  intranet:
+    external: true
+    name: intranet_default

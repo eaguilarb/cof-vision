@@ -7,8 +7,11 @@ import axios from 'axios';
  * ni queda guardada en el dispositivo, para evitar que alguien apunte la
  * app a un servidor distinto (por error o con intención maliciosa, ej.
  * para capturar credenciales de técnicos/vidrieros).
+ *
+ * Servidor propio (ya no Railway): la página web y la API van en la misma
+ * dirección; Caddy manda /api/* al backend y lo demás a la página.
  */
-const API_BASE_URL = 'https://cof-crm-backend-production.up.railway.app';
+const API_BASE_URL = 'https://crm.40-160-97-216.sslip.io/api';
 
 export const api = axios.create({
   baseURL: API_BASE_URL,
