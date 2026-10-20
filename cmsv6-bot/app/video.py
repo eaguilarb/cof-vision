@@ -128,6 +128,31 @@ async def record_live(url: str, dest: Path, seconds: int) -> Path:
     return dest
 
 
+async def record_stream(url: str, dest: Path, wall_limit: int) -> tuple[Path, float]:
+    """Graba un flujo (p. ej. reproducción remota) hasta que termine o pasen wall_limit s.
+    Devuelve el archivo y los segundos reales que tardó."""
+    t0 = asyncio.get_running_loop().time()
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-rw_timeout", "20000000",
+        "-probesize", "65536", "-analyzeduration", "1500000", "-fflags", "+genpts",
+        "-i", url, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac",
+        "-movflags", "+faststart", str(dest),
+        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE)
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=wall_limit)
+    except asyncio.TimeoutError:
+        proc.send_signal(signal.SIGINT)
+        _, err = await proc.communicate()
+    except asyncio.CancelledError:
+        _kill(proc)
+        raise
+    took = asyncio.get_running_loop().time() - t0
+    if not dest.exists() or dest.stat().st_size < 1024:
+        raise FFmpegError("No llegó video: " + err.decode(errors="replace").strip()[-300:])
+    return dest, took
+
+
 async def snapshot_live(url: str, dest: Path) -> Path:
     """Foto del momento actual: toma el primer cuadro completo (clave) del video en vivo."""
     proc = await asyncio.create_subprocess_exec(

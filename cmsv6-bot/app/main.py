@@ -127,6 +127,60 @@ def authorized(handler):
 
 
 @authorized
+async def cmd_probar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Mide qué método es más rápido con un bus real: /probar placa cámara fecha hora."""
+    args = list(ctx.args)
+    if len(args) == 3:
+        args.insert(2, "hoy")
+    if len(args) != 4:
+        raise ParseError("Uso: /probar placa cámara fecha hora   (ej. /probar SPBG22 1 hoy 13:30)")
+    v = await cms.find_vehicle(args[0])
+    chn = parse_channels(args[1], v.channels)[0]
+    day = parse_date(args[2])
+    at = seconds_of_day(parse_time(args[3]))
+    msg = update.effective_message
+    recs = await cms.find_recordings(v, day, chn, at, at + 60, config.search_locations)
+    if not recs:
+        raise CMSV6Error("No hay grabación en ese horario.")
+    rec = recs[0]
+    a, b = max(at, rec.beg), min(at + 60, rec.end)
+    lines = [f"🧪 Prueba con {v.plate} {v.channel_label(chn)}, {b - a} s de video desde {fmt_hms(a)}",
+             f"Archivo del bus: {fmt_hms(rec.beg)}–{fmt_hms(rec.end)}, "
+             f"{rec.size / 1e6:.1f} MB, ubicación {LOC_NAMES.get(rec.loc, rec.loc)}, "
+             f"calidad {'liviana' if rec.stream_type == 1 else 'principal'}"]
+    status = await msg.reply_text("\n".join(lines + ["Probando reproducción remota…"]))
+
+    # Reproducción remota: el bus transmite el tramo como un en vivo
+    try:
+        if not cms.jsession:
+            await cms.login()
+        url = cms.playback_stream_url(rec, a, b)
+        out = links.files_dir() / _name(v, chn, day, a, b, "_prueba.mp4")
+        out, took = await video.record_stream(url, out, (b - a) * 3 + 30)
+        dur = await video.probe_duration(out)
+        speed = dur / took if took else 0
+        lines.append(f"▶️ Reproducción remota: {dur:.0f} s de video en {took:.0f} s "
+                     f"→ {speed:.1f}× tiempo real")
+        await msg.reply_video(video=out, caption="Video obtenido por reproducción remota")
+    except Exception as e:
+        lines.append(f"▶️ Reproducción remota: no funcionó ({str(e)[:150]})")
+    await _edit(status, "\n".join(lines + ["Probando descarga por tramos…"]))
+
+    # Descarga por tramos (método actual), para comparar
+    try:
+        t = time.monotonic()
+        stats: dict = {}
+        await make_clip(v, chn, day, a, b, status, stats)
+        took = time.monotonic() - t
+        lines.append(f"📡 Descarga por tramos: {b - a} s de video en {took:.0f} s "
+                     f"→ {(b - a) / took:.1f}× tiempo real")
+    except Exception as e:
+        lines.append(f"📡 Descarga por tramos: no funcionó ({str(e)[:150]})")
+    log.info("Prueba de métodos: %s", " | ".join(lines))
+    await _edit(status, "\n".join(lines))
+
+
+@authorized
 async def cmd_cancelar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Detiene todos los pedidos en curso de este chat (y sus descargas en los buses)."""
     chat = update.effective_chat.id
@@ -930,6 +984,7 @@ def main() -> None:
     app.add_handler(CommandHandler(["enlinea", "en_linea"], cmd_enlinea))
     app.add_handler(CommandHandler(["vivo", "envivo"], cmd_vivo))
     app.add_handler(CommandHandler(["cancelar", "detener", "parar"], cmd_cancelar))
+    app.add_handler(CommandHandler("probar", cmd_probar))
     app.add_handler(CommandHandler("video", cmd_video))
     app.add_handler(CommandHandler("foto", cmd_foto))
     log.info("Bot iniciado (Bot API: %s)", config.bot_api_url or "nube de Telegram")

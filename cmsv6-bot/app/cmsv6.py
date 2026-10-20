@@ -52,6 +52,7 @@ class RecFile:
     task_url: str = ""  # DownTaskUrl: descarga por tramos del equipo al servidor
     segment_only: bool = False  # stream=1: el archivo solo se puede bajar por tramos
     stream_type: int | None = None  # streamtype: 0 = calidad principal, 1 = secundaria (liviana)
+    playback_url: str = ""  # PlaybackUrl: reproducción remota (el bus transmite el tramo)
 
     def has_channel(self, chn: int) -> bool:
         return chn in (self.chns or (self.chn,))
@@ -227,6 +228,7 @@ class CMSV6:
                 task_url=str(f.get("DownTaskUrl") or "").strip(),
                 segment_only=f.get("stream") == 1,
                 stream_type=None if f.get("streamtype") is None else int(f["streamtype"]),
+                playback_url=str(f.get("PlaybackUrl") or "").strip(),
             ))
         files.sort(key=lambda x: (x.chn, x.beg))
         return files
@@ -265,6 +267,16 @@ class CMSV6:
     def live_hls_url(self, base: str, dev_id: str, chn: int, stream: int = 1) -> str:
         return f"{base}/hls/1_{dev_id}_{chn}_{stream}.m3u8?" + urlencode(
             {"jsession": self.jsession or ""})
+
+    def playback_stream_url(self, f: RecFile, start: int, stop: int) -> str:
+        """Reproducción remota: el bus transmite [start, stop] como un video en vivo."""
+        if not f.playback_url:
+            raise CMSV6Error("CMSV7 no entregó URL de reproducción para este archivo.")
+        # La URL de ejemplo de CMSV7 viene mal armada («jsession=DevIDNO=…»): se corrige
+        raw = f.playback_url.replace("jsession=DevIDNO=", "jsession=&DevIDNO=")
+        base, q = self._fix_url(raw)
+        q.update({"jsession": self.jsession or "", "PLAYBEG": start, "PLAYEND": stop})
+        return f"{base}?{urlencode(q)}"
 
     def _fix_url(self, url: str) -> tuple[str, dict]:
         """Separa la URL y, si apunta a una IP interna del servidor, la cambia por la pública."""

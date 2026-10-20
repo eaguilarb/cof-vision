@@ -604,3 +604,16 @@ async def test_cancelar_stops_request_and_bus_task(monkeypatch, tmp_path):
     texts = [c.args[0] for c in status.edit_text.call_args_list]
     assert any("Cancelado" in t for t in texts)
     assert "Se detuvieron 1" in msg.reply_text.call_args.args[0]
+
+
+def test_playback_stream_url_fixes_cmsv7_format():
+    cms = CMSV6("http://47.88.25.163:8088", "u", "p")
+    cms.jsession = "J"
+    f = RecFile("D1", 0, 31044, 32842, "H.264", 1, 1, "", playback_url=(
+        "http://10.0.0.2:6604/3/5?DownType=5&&jsession=DevIDNO=D1&FILELOC=1&FILESVR=0"
+        "&FILECHN=0&FILEBEG=31044&FILEEND=32842&PLAYIFRM=0&PLAYFILE=H.264"
+        "&PLAYBEG=31044&PLAYEND=32842&PLAYCHN=0"))
+    url = cms.playback_stream_url(f, 31100, 31160)
+    assert url.startswith("http://47.88.25.163:6604/3/5?")
+    assert "DevIDNO=D1" in url and "jsession=J" in url
+    assert "PLAYBEG=31100" in url and "PLAYEND=31160" in url
