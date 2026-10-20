@@ -104,7 +104,7 @@ async def cmd_grabaciones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     out = [f"<b>{_esc(v.plate)}</b> — {day:%d/%m/%Y}"]
     for loc in config.search_locations:
         try:
-            files = await cms.search(v.dev_id, day, chn=-1, loc=loc)
+            files = await cms.search(v, day, chn=-1, loc=loc)
         except CMSV6Error as e:
             out.append(f"\n<i>{LOC_NAMES.get(loc, loc)}</i>: error ({_esc(str(e))})")
             continue
@@ -166,13 +166,12 @@ async def cmd_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         status = await msg.reply_text(f"⏳ Buscando imagen {v.plate} {v.channel_label(chn)}…")
         async with jobs:
             try:
-                recs = await cms.find_recordings(v.dev_id, day, chn, at, at + 1,
-                                                 config.search_locations)
+                recs = await cms.find_recordings(v, day, chn, at, at + 1, config.search_locations)
                 if not recs:
                     raise CMSV6Error(f"No hay grabación de {v.channel_label(chn)} a las {fmt_hms(at)}.")
-                raw = await fetch(recs[0], status)
+                raw, beg, stream = await fetch(v, recs[0], chn, day, at, at + 2, status)
                 out = links.files_dir() / _name(v, chn, day, at, None, ".jpg")
-                await video.extract_frame(raw, out, at - recs[0].beg)
+                await video.extract_frame(raw, out, at - beg, stream)
             except (CMSV6Error, video.FFmpegError) as e:
                 await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
                 continue
@@ -184,18 +183,17 @@ async def cmd_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
                     status: Message) -> Path:
     await status.edit_text(f"🔎 Buscando grabaciones de {v.plate} {v.channel_label(chn)}…")
-    recs = await cms.find_recordings(v.dev_id, day, chn, start, stop, config.search_locations)
+    recs = await cms.find_recordings(v, day, chn, start, stop, config.search_locations)
     if not recs:
         raise CMSV6Error(f"No hay grabaciones en ese horario ({fmt_hms(start)}–{fmt_hms(stop)}).")
     pieces = []
     work = _work_dir()
     for i, rec in enumerate(recs, 1):
-        raw = await fetch(rec, status, f"({i}/{len(recs)}) ")
         a, b = max(start, rec.beg), min(stop, rec.end)
+        raw, beg, stream = await fetch(v, rec, chn, day, a, b, status, f"({i}/{len(recs)}) ")
         await status.edit_text(f"🗜️ Comprimiendo parte {i}/{len(recs)}…")
         piece = work / f"{raw.stem}_{a}_{b}.mp4"
-        stream = rec.chns.index(chn) if chn in rec.chns else 0
-        await video.compress_piece(raw, piece, a - rec.beg, b - a, stream)
+        await video.compress_piece(raw, piece, a - beg, b - a, stream)
         pieces.append(piece)
     out = links.files_dir() / _name(v, chn, day, start, stop, ".mp4")
     await video.concat(pieces, out)
@@ -203,18 +201,47 @@ async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
     return out
 
 
-async def fetch(rec: RecFile, status: Message, prefix: str = "") -> Path:
-    """Descarga un archivo de grabación (o lo reutiliza si ya está en caché)."""
+async def fetch(v: Vehicle, rec: RecFile, chn: int, day: date, start: int, stop: int,
+                status: Message, prefix: str = "") -> tuple[Path, int, int]:
+    """Consigue el video de [start, stop] (o lo reutiliza si ya está en caché).
+
+    Devuelve (archivo, segundo del día en que empieza, índice del video dentro del archivo).
+    Primero intenta la descarga directa del archivo completo; si la grabación está en el
+    vehículo y no se puede bajar directo, pide a CMSV6 una descarga por tramos."""
     work = _work_dir()
     safe = re.sub(r"[^\w.-]", "_", f"{rec.dev_id}_{rec.chn}_{rec.path}")[-150:]
+    stream = rec.chns.index(chn) if chn in rec.chns else 0
     dest = work / safe
     if dest.exists():
         dest.touch()
-        return dest
-    mb = f" ({rec.size / 1e6:.0f} MB)" if rec.size else ""
-    await status.edit_text(f"⬇️ {prefix}Descargando grabación desde el "
-                           f"{LOC_NAMES.get(rec.loc, 'servidor')}{mb}…")
-    return await cms.download(rec, dest)
+        return dest, rec.beg, stream
+    seg_dest = work / f"{safe}_{start}_{stop}.seg"
+    if seg_dest.exists():
+        seg_dest.touch()
+        return seg_dest, start, 0
+
+    can_segment = rec.loc == 1 and bool(rec.task_url)
+    if not (can_segment and (rec.segment_only or not rec.down_url)):
+        mb = f" ({rec.size / 1e6:.0f} MB)" if rec.size else ""
+        await status.edit_text(f"⬇️ {prefix}Descargando grabación desde el "
+                               f"{LOC_NAMES.get(rec.loc, 'servidor')}{mb}…")
+        try:
+            return await cms.download(rec, dest), rec.beg, stream
+        except CMSV6Error as e:
+            if not can_segment:
+                raise
+            log.info("Descarga directa falló (%s); se intenta por tramos", e)
+
+    async def progress(state: str) -> None:
+        try:
+            await status.edit_text(f"📡 {prefix}Pidiendo al vehículo el tramo "
+                                   f"{fmt_hms(start)}–{fmt_hms(stop)}: {state}…")
+        except Exception:
+            pass  # Telegram rechaza ediciones con el mismo texto
+
+    await progress("enviando solicitud")
+    path, beg = await cms.segment_download(v, rec, day, start, stop, seg_dest, progress)
+    return path, beg, 0
 
 
 async def deliver(msg: Message, status: Message, out: Path, caption: str) -> None:

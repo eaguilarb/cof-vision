@@ -61,9 +61,9 @@ async def concat(pieces: list[Path], dest: Path) -> Path:
     return dest
 
 
-async def extract_frame(src: Path, dest: Path, offset: float) -> Path:
+async def extract_frame(src: Path, dest: Path, offset: float, stream: int = 0) -> Path:
     await _run("-fflags", "+genpts", "-i", str(src), "-ss", f"{max(0.0, offset):.3f}",
-               "-frames:v", "1", "-q:v", "2", str(dest))
+               "-map", f"0:v:{stream}", "-frames:v", "1", "-q:v", "2", str(dest))
     if not dest.exists() or dest.stat().st_size == 0:
         raise FFmpegError("No se pudo extraer una imagen en ese instante.")
     return dest

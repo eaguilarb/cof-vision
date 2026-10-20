@@ -113,7 +113,8 @@ async def test_end_to_end_clip(tmp_path, monkeypatch):
     assert 58 <= dur <= 62, dur
     assert out.name == "ABC123_cam1_20260101_140030-140130.mp4".replace("20260101", "20261019")
     assert out.stat().st_size < 2 * raw.stat().st_size
-    assert calls[0]["DevIDNO"] == "D1" and calls[0]["LOC"] == "2"
+    # CMSV7: en el servidor de almacenamiento se busca por placa
+    assert calls[0]["DevIDNO"] == "ABC123" and calls[0]["LOC"] == "2"
     # El DownUrl trae una IP interna (10.0.0.5): debe reemplazarse por la del servidor
     f = RecFile("D1", 0, 0, 60, "/x", 1, 2, "http://10.0.0.5:6611/3/5?a=1")
     assert cms.download_url(f) == "http://127.0.0.1:6611/3/5?a=1&jsession=J1&SAVENAME=x"
@@ -121,5 +122,75 @@ async def test_end_to_end_clip(tmp_path, monkeypatch):
     jpg = tmp_path / "f.jpg"
     await video.extract_frame(raw, jpg, 10)
     assert jpg.stat().st_size > 1000
+    await cms.close()
+    await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_segment_download_from_vehicle(tmp_path, monkeypatch):
+    """Grabación solo en el equipo, sin DownUrl (JT/T 1078): se pide por tramos y se baja el MP4."""
+    seg = tmp_path / "seg.264"
+    _make_raw(seg, 60)
+    state = {"polls": 0, "task": None}
+
+    async def login(r):
+        return web.json_response({"result": 0, "jsession": "J1"})
+
+    async def search(r):
+        if r.query["LOC"] != "1":
+            return web.json_response({"result": 0, "files": []})
+        assert r.query["DevIDNO"] == "D1"  # en el equipo se busca por número de equipo
+        return web.json_response({"result": 0, "files": [{
+            "beg": 50400, "end": 52200, "chn": 0, "chnMask": 0, "file": "/rec/x.264",
+            "len": 999, "loc": 1, "stream": -1, "DownUrl": "",
+            "DownTaskUrl": f"http://10.0.0.5:{port}/StandardApiAction_addDownloadTask.action?jsession=&did=D1"
+                           "&fbtm=2026-10-19 14:00:00&fetm=2026-10-19 14:30:00&sbtm=2026-10-19 14:00:00"
+                           "&setm=2026-10-19 14:30:00&lab=&fph=/rec/x.264&vtp=0&len=999&chn=0&dtp=1"}]})
+
+    async def add_task(r):
+        state["task"] = dict(r.query)
+        return web.json_response({"result": 0})
+
+    async def tasks(r):
+        state["polls"] += 1
+        stu = 2 if state["polls"] < 2 else 4
+        return web.json_response({"result": 0, "infos": [{
+            "stu": stu, "downUrl": f"http://10.0.0.5:{port}/3/5?DownType=3&jsession=&FPATH=seg.mp4&SAVENAME="}]})
+
+    async def download(r):
+        assert r.query["jsession"] == "J1" and r.query["SAVENAME"]
+        return web.FileResponse(seg)
+
+    app = web.Application()
+    app.router.add_get("/StandardApiAction_login.action", login)
+    app.router.add_get("/StandardApiAction_getVideoFileInfo.action", search)
+    app.router.add_get("/StandardApiAction_addDownloadTask.action", add_task)
+    app.router.add_get("/StandardApiAction_downloadTasklist.action", tasks)
+    app.router.add_get("/3/5", download)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+
+    from app import cmsv6 as cmsv6_mod, main
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(cmsv6_mod.asyncio, "sleep", lambda s: real_sleep(0))
+    object.__setattr__(main.config, "data_dir", tmp_path / "data")
+    object.__setattr__(main.config, "search_locations", [2, 1])
+    cms = CMSV6(f"http://127.0.0.1:{port}", "u", "p")
+    monkeypatch.setattr(main, "cms", cms)
+
+    status = MagicMock(edit_text=AsyncMock())
+    v = main.Vehicle(plate="ABC123", dev_id="D1", channels=1, channel_names=[])
+    # 14:10:00–14:11:00 de un archivo de 14:00 a 14:30 que está en el vehículo
+    out = await main.make_clip(v, 0, date(2026, 10, 19), 51000, 51060, status)
+
+    t = state["task"]
+    assert t["fbtm"] == "2026-10-19 14:10:00" and t["fetm"] == "2026-10-19 14:11:00"
+    assert t["dtp"] == "2" and t["lab"].startswith("bot") and t["jsession"] == "J1"
+    assert t["sbtm"] == "2026-10-19 14:00:00"
+    dur = await video.probe_duration(out)
+    assert 58 <= dur <= 62, dur
     await cms.close()
     await runner.cleanup()

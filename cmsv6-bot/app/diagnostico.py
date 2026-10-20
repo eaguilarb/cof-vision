@@ -41,7 +41,7 @@ async def run() -> int:
         for loc in (2, 1, 4):
             try:
                 data = await cms.call("StandardApiAction_getVideoFileInfo.action", {
-                    "DevIDNO": v.dev_id, "LOC": loc, "CHN": -1, "YEAR": day.year,
+                    "DevIDNO": v.dev_id if loc == 1 else v.plate, "LOC": loc, "CHN": -1, "YEAR": day.year,
                     "MON": day.month, "DAY": day.day, "RECTYPE": -1, "FILEATTR": 2,
                     "BEG": 0, "END": 86399, "ARM1": 0, "ARM2": 0, "RES": 0,
                     "STREAM": -1, "STORE": 0})
@@ -53,7 +53,7 @@ async def run() -> int:
             if files:
                 print("    Ejemplo crudo:", json.dumps(files[0], ensure_ascii=False)[:800])
                 if found is None:
-                    found = (await cms.search(v.dev_id, day, chn=-1, loc=loc))[0]
+                    found = (await cms.search(v, day, chn=-1, loc=loc))[0]
         if not found:
             print("    No hay grabaciones ese día. Prueba con otra placa o fecha:")
             print("    python -m app.diagnostico PLACA 19/10/2026")
@@ -61,15 +61,29 @@ async def run() -> int:
 
         paso(4, f"Descargando cam{found.chn + 1} {fmt_hms(found.beg)}–{fmt_hms(found.end)} "
                 f"({found.size / 1e6:.1f} MB)")
-        print("    URL:", cms.download_url(found))
         work = config.data_dir / "work"
         work.mkdir(parents=True, exist_ok=True)
-        raw_file = await cms.download(found, work / "diagnostico.raw")
+        offset = 0
+        try:
+            print("    URL:", cms.download_url(found).split("jsession=")[0])
+            raw_file = await cms.download(found, work / "diagnostico.raw")
+        except CMSV6Error as e:
+            if not found.task_url:
+                raise
+            print(f"    Descarga directa no disponible ({e}).")
+            print("    Probando descarga por tramos (el vehículo debe estar encendido)…")
+
+            async def prog(state):
+                print("      estado:", state)
+            raw_file, beg = await cms.segment_download(
+                v, found, day, found.beg, min(found.end, found.beg + 30),
+                work / "diagnostico.seg", prog)
+            offset = found.beg - beg
         print(f"    OK, {raw_file.stat().st_size / 1e6:.1f} MB descargados")
 
         paso(5, "Comprimiendo 20 segundos con ffmpeg")
         out = files_dir() / "diagnostico.mp4"
-        await video.compress_piece(raw_file, out, 0, 20)
+        await video.compress_piece(raw_file, out, offset, 20)
         print(f"    OK, {out.stat().st_size / 1e6:.2f} MB, duración {await video.probe_duration(out):.1f} s")
         print("\nTodo funciona. Ya puedes iniciar el bot con: docker compose up -d")
         return 0

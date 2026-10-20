@@ -1,10 +1,13 @@
 """Cliente de la API web de CMSV6 (StandardApiAction_*)."""
 
 import asyncio
+import ipaddress
 import logging
 import os
+import secrets
+import time
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -43,6 +46,8 @@ class RecFile:
     loc: int
     down_url: str
     chns: tuple[int, ...] = ()  # todos los canales que contiene (archivos multicanal)
+    task_url: str = ""  # DownTaskUrl: descarga por tramos del equipo al servidor
+    segment_only: bool = False  # stream=1: el archivo solo se puede bajar por tramos
 
     def has_channel(self, chn: int) -> bool:
         return chn in (self.chns or (self.chn,))
@@ -99,8 +104,8 @@ class CMSV6:
             result = data.get("result")
             if result == 0:
                 return data
-            # 4/5 = sesión expirada o inexistente
-            if attempt == 1 and result in (4, 5):
+            # 5 = la sesión no existe (vence a las 4 h sin uso)
+            if attempt == 1 and result == 5:
                 await self.login()
                 continue
             raise CMSV6Error(f"{action} devolvió result={result}: {data.get('message', '')}")
@@ -143,17 +148,26 @@ class CMSV6:
                              + ", ".join(v.plate for v in partial[:10]))
         raise CMSV6Error(f"No encontré el vehículo «{query}». Usa /vehiculos para ver la lista.")
 
-    async def search(self, dev_id: str, day: date, chn: int = -1, loc: int = 2,
-                     beg: int = 0, end: int = 86399) -> list[RecFile]:
+    async def search(self, v: Vehicle, day: date, chn: int = -1, loc: int = 2) -> list[RecFile]:
+        """Busca grabaciones. En el servidor (LOC 2/4) CMSV7 identifica por placa; en el equipo, por número."""
+        ids = [v.dev_id] if loc == 1 else list(dict.fromkeys([v.plate, v.dev_id]))
+        for ident in ids:
+            files = await self._search(ident, v.dev_id, day, chn, loc)
+            if files:
+                return files
+        return []
+
+    async def _search(self, ident: str, dev_id: str, day: date, chn: int, loc: int) -> list[RecFile]:
         params = {
-            "DevIDNO": dev_id, "LOC": loc, "CHN": chn,
+            "DevIDNO": ident, "LOC": loc, "CHN": chn,
             "YEAR": day.year, "MON": day.month, "DAY": day.day,
-            "RECTYPE": -1, "FILEATTR": 2, "BEG": beg, "END": end,
+            "RECTYPE": -1, "FILEATTR": 2, "BEG": 0, "END": 86399,
             "ARM1": 0, "ARM2": 0, "RES": 0, "STREAM": -1, "STORE": 0,
         }
         data = await self.call("StandardApiAction_getVideoFileInfo.action", params)
         files = []
         for f in data.get("files") or []:
+            # beg/end en segundos desde las 00:00; end puede pasar de 86400 si cruza el día
             f_beg, f_end = int(f.get("beg") or 0), int(f.get("end") or 0)
             if f_end <= f_beg:
                 f_end = 86400
@@ -165,18 +179,20 @@ class CMSV6:
                 path=str(f.get("file", "")),
                 size=int(f.get("len") or 0),
                 loc=int(f.get("loc") or loc),
-                down_url=str(f.get("DownUrl") or f.get("downUrl") or ""),
+                down_url=str(f.get("DownUrl") or f.get("downUrl") or "").strip(),
+                task_url=str(f.get("DownTaskUrl") or "").strip(),
+                segment_only=f.get("stream") == 1,
             ))
         files.sort(key=lambda x: (x.chn, x.beg))
         return files
 
-    async def find_recordings(self, dev_id: str, day: date, chn: int, start: int, stop: int,
+    async def find_recordings(self, v: Vehicle, day: date, chn: int, start: int, stop: int,
                               locations: list[int]) -> list[RecFile]:
         """Busca en cada ubicación (servidor primero) y devuelve la primera que tenga datos."""
         last_err: Exception | None = None
         for loc in locations:
             try:
-                files = await self.search(dev_id, day, chn=chn, loc=loc)
+                files = await self.search(v, day, chn=chn, loc=loc)
             except CMSV6Error as e:
                 last_err = e
                 continue
@@ -187,33 +203,94 @@ class CMSV6:
             raise last_err
         return []
 
+    def _fix_url(self, url: str) -> tuple[str, dict]:
+        """Separa la URL y, si apunta a una IP interna del servidor, la cambia por la pública."""
+        url = url.strip()
+        if url.startswith("/"):
+            url = f"http://{self.host}:6611{url}"
+        parts = urlsplit(url)
+        netloc = parts.netloc
+        if _is_internal(parts.hostname or ""):
+            netloc = f"{self.host}:{parts.port}" if parts.port else self.host
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        return urlunsplit((parts.scheme or "http", netloc, parts.path, "", "")), query
+
     def download_url(self, f: RecFile) -> str:
         """URL de descarga directa (DownUrl). La API la devuelve con jsession y SAVENAME vacíos."""
         if f.down_url:
-            url = f.down_url
-            if url.startswith("/"):
-                url = f"http://{self.host}:6611{url}"
-            parts = urlsplit(url)
+            base, query = self._fix_url(f.down_url)
+        elif f.path and f.loc != 1:
+            base = f"http://{self.host}:6611/3/5"
+            query = {"DownType": 3, "DevIDNO": f.dev_id, "FLENGTH": f.size, "FOFFSET": 0,
+                     "MTYPE": 1, "FPATH": f.path}
         else:
-            if f.loc != 1 and not f.path:
-                raise CMSV6Error("CMSV6 no entregó enlace de descarga para este archivo "
-                                 "(equipos JT/T 1078 solo permiten descarga por tareas).")
-            parts = urlsplit(f"http://{self.host}:6611/3/5?" + urlencode({
-                "DownType": 3, "DevIDNO": f.dev_id, "FLENGTH": f.size, "FOFFSET": 0,
-                "MTYPE": 1, "FPATH": f.path}))
-        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+            raise CMSV6Error("Este archivo no tiene descarga directa.")
         query["jsession"] = self.jsession or ""
         if not query.get("SAVENAME"):
             query["SAVENAME"] = os.path.basename(f.path.replace("\\", "/")) or "video"
-        # CMSV6 suele devolver su IP interna; la reemplazamos por la pública
-        netloc = f"{self.host}:{parts.port}" if parts.port else self.host
-        return urlunsplit((parts.scheme or "http", netloc, parts.path, urlencode(query), ""))
+        return f"{base}?{urlencode(query)}"
+
+    async def segment_download(self, v: Vehicle, f: RecFile, day: date, start: int, stop: int,
+                               dest: Path, progress=None, timeout_s: int = 1200) -> tuple[Path, int]:
+        """Pide a CMSV6 que baje del equipo solo el tramo [start, stop] y luego lo descarga.
+
+        Devuelve el archivo y el segundo del día en que empieza."""
+        if not f.task_url:
+            raise CMSV6Error("CMSV6 no ofrece descarga por tramos para este archivo.")
+        a, b = max(start, f.beg), min(stop, f.end)
+        midnight = datetime(day.year, day.month, day.day)
+        fmt = lambda sec: (midnight + timedelta(seconds=sec)).strftime("%Y-%m-%d %H:%M:%S")
+        tag = "bot" + secrets.token_hex(4)
+        _, query = self._fix_url(f.task_url)
+        query.pop("jsession", None)
+        query.update({"fbtm": fmt(a), "fetm": fmt(b), "lab": tag, "dtp": 2})
+        query.setdefault("sbtm", fmt(f.beg))
+        query.setdefault("setm", fmt(f.end))
+        await self.call("StandardApiAction_addDownloadTask.action", query)
+        log.info("Tarea de descarga por tramos %s creada (%s – %s)", tag, fmt(a), fmt(b))
+
+        deadline = time.monotonic() + timeout_s
+        info: dict = {}
+        while time.monotonic() < deadline:
+            await asyncio.sleep(10)
+            data = await self.call("StandardApiAction_downloadTasklist.action", {
+                "taskTag": tag, "begintime": fmt(0), "endtime": fmt(86399 + 86400)})
+            infos = data.get("infos") or []
+            info = infos[0] if infos else {}
+            stu = info.get("stu")
+            if progress:
+                await progress({1: "en espera", 2: "descargando del vehículo",
+                                4: "listo"}.get(stu, "en espera"))
+            if stu == 3:
+                raise CMSV6Error(f"El vehículo no pudo enviar el video: {info.get('err') or 'sin detalle'}")
+            if stu == 4:
+                break
+        else:
+            raise CMSV6Error("El vehículo tardó demasiado en enviar el video "
+                             "(¿está apagado o sin señal?). La tarea sigue en CMSV6; intenta más tarde.")
+
+        url = str(info.get("downUrl") or "").strip()
+        if url:
+            base, q = self._fix_url(url)
+            q["jsession"] = self.jsession or ""
+            if not q.get("SAVENAME"):
+                q["SAVENAME"] = tag + ".mp4"
+            await self._download_url(f"{base}?{urlencode(q)}", dest)
+            return dest, a
+        # Sin enlace en la tarea: el archivo ya está en el servidor de almacenamiento
+        for rec in await self.search(v, day, chn=f.chn, loc=2):
+            if rec.has_channel(f.chn) and rec.covers(a, b):
+                await self.download(rec, dest)
+                return dest, rec.beg
+        raise CMSV6Error("La descarga terminó pero no encontré el archivo en el servidor.")
 
     async def download(self, f: RecFile, dest: Path) -> Path:
         if not self.jsession:
             await self.login()
-        url = self.download_url(f)
-        log.info("Descargando %s", url)
+        return await self._download_url(self.download_url(f), dest)
+
+    async def _download_url(self, url: str, dest: Path) -> Path:
+        log.info("Descargando %s", url.split("jsession=")[0])
         http = await self._http()
         tmp = dest.with_suffix(dest.suffix + ".part")
         timeout = aiohttp.ClientTimeout(total=None, sock_read=120)
@@ -232,6 +309,16 @@ class CMSV6:
             raise CMSV6Error(f"CMSV6 devolvió un archivo vacío o un error: {body!r}")
         tmp.rename(dest)
         return dest
+
+
+def _is_internal(host: str) -> bool:
+    if host in ("", "localhost"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False  # es un dominio: se respeta
+    return ip.is_private or ip.is_loopback or ip.is_unspecified
 
 
 def _file_channels(f: dict) -> list[int]:

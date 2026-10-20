@@ -1,4 +1,4 @@
-# Bot CMSV6 → Telegram
+# Bot CMSV6 / CMSV7 → Telegram
 
 Bot de Telegram que se conecta al servidor CMSV6 (`47.88.25.163`) y responde
 con **videos comprimidos** o **fotos** de las grabaciones de los vehículos.
@@ -24,6 +24,15 @@ Corre en el VPS (Ubuntu 24.04) con Docker.
 | `/miid` | Tu ID de Telegram (para autorizarte) |
 
 Solo las personas cuyo ID está en `ALLOWED_USERS` pueden pedir videos.
+
+## De dónde saca los videos
+
+1. **Servidor de almacenamiento** (si la grabación ya se subió): descarga directa, rápido.
+2. **Vehículo (MDVR/dashcam)**: si el equipo permite descarga directa, baja el archivo;
+   si no (equipos JT/T 1078 o archivos multicanal), le pide a CMSV7 una
+   **descarga por tramos**: el vehículo sube por 4G solo los minutos pedidos y
+   el bot los recoge. Para esto el vehículo debe estar **encendido y con señal**,
+   y puede tardar varios minutos (el bot muestra el avance).
 
 ## Compresión
 
@@ -55,7 +64,8 @@ corre su propio servidor de Telegram y el límite sube a 2 GB.
 
 ### Paso 3 — Verificar el acceso a CMSV6
 
-No hace falta el proveedor: CMSV6 trae una API web oficial incluida, la misma
+No hace falta el proveedor: CMSV6 y CMSV7 traen una API web oficial incluida
+(documentación de CMSV7: <https://help.cmsv7.com>), la misma
 que usa su versión web, y se entra con **el mismo usuario y contraseña del
 programa CMSV6**. Pruébala desde el navegador de tu PC o del iMac:
 
