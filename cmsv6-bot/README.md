@@ -78,7 +78,7 @@ programa CMSV6**. Pruébala desde el navegador de tu PC o del iMac:
    Si responde algo como `{"result":0,"jsession":"..."}`, la API funciona con
    tu cuenta y el bot podrá conectarse.
 
-Si el puerto 8080 no carga, mira en el programa CMSV6 la pantalla de inicio de
+Si el puerto 8088 no carga, mira en el programa CMSV6 la pantalla de inicio de
 sesión (botón de configuración del servidor), que muestra la IP y los puertos
 que usa. Pásame esa captura.
 
@@ -144,7 +144,7 @@ Los videos generados y los enlaces se borran solos después de `LINK_HOURS` (48 
 
 | Mensaje | Causa probable |
 |---|---|
-| `No se pudo contactar a CMSV6` | El puerto 8080 no está abierto hacia el VPS, o la IP cambió |
+| `No se pudo contactar a CMSV6` | El puerto 8088 no está abierto hacia el VPS, o la IP cambió |
 | `Login rechazado` | Usuario o contraseña de CMSV6 incorrectos en `.env` |
 | `No hay grabaciones en ese horario` | No hay grabación de esa cámara en ese horario. Revisa con `/grabaciones` |
 | `Falló la descarga` | El puerto 6611 está cerrado; o, si la grabación está en el equipo del vehículo, el vehículo está apagado o sin señal |
