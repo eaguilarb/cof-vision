@@ -36,6 +36,30 @@ def _kill(proc: asyncio.subprocess.Process) -> None:
             pass
 
 
+# En los archivos de los equipos el audio puede aparecer tarde en el archivo: se analiza más
+# a fondo para no perderlo (por defecto ffmpeg mira solo el comienzo)
+PROBE = ("-analyzeduration", "30000000", "-probesize", "50000000")
+
+
+async def has_audio(src: Path) -> bool:
+    proc = await asyncio.create_subprocess_exec(
+        "ffprobe", "-v", "error", *PROBE, "-select_streams", "a", "-show_entries",
+        "stream=codec_name", "-of", "csv=p=0", str(src),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, _ = await proc.communicate()
+    return bool(out.decode().strip())
+
+
+async def describe(src: Path) -> str:
+    """Pistas del archivo (para el registro): códec de video y de audio."""
+    proc = await asyncio.create_subprocess_exec(
+        "ffprobe", "-v", "error", *PROBE, "-show_entries",
+        "stream=codec_type,codec_name,sample_rate,channels", "-of", "compact=p=0:nk=1", str(src),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, _ = await proc.communicate()
+    return out.decode(errors="replace").strip().replace("\n", " | ")
+
+
 def _scale_filter() -> str:
     h = config.video_max_height
     # Reduce solo si es más grande que el máximo; ancho y alto pares (requisito de H.264)
@@ -49,7 +73,7 @@ async def compress_piece(src: Path, dest: Path, offset: float, duration: float,
     stream: índice del video dentro del archivo (en archivos con varias cámaras)."""
     # -ss después de -i: los .264 crudos de los MDVR no tienen índice y no admiten salto rápido
     await _run(
-        "-fflags", "+genpts", "-i", str(src),
+        *PROBE, "-fflags", "+genpts", "-i", str(src),
         "-ss", f"{max(0.0, offset):.3f}", "-t", f"{duration:.3f}",
         "-map", f"0:v:{stream}", "-map", "0:a:0?",
         "-vf", _scale_filter(),
@@ -78,7 +102,7 @@ async def remux(src: Path, dest: Path, duration: float) -> bool:
     que se reproduce en cualquier teléfono; devuelve False si hay que comprimir."""
     if await video_codec(src) != "h264":
         return False
-    await _run("-fflags", "+genpts", "-i", str(src), "-t", f"{duration:.3f}",
+    await _run(*PROBE, "-fflags", "+genpts", "-i", str(src), "-t", f"{duration:.3f}",
                "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy",
                "-c:a", "aac", "-b:a", "64k", "-ac", "1", "-movflags", "+faststart", str(dest))
     return dest.exists() and dest.stat().st_size > 1024
@@ -209,8 +233,12 @@ def _grid(n: int) -> tuple[int, int]:
     return cols, -(-n // cols)
 
 
-async def mosaic(inputs: list[Path], dest: Path, image: bool = False) -> Path:
-    """Une varios videos (o fotos) de distintas cámaras en una sola pantalla dividida."""
+async def mosaic(inputs: list[Path], dest: Path, image: bool = False,
+                 audio_from: int | None = None) -> Path:
+    """Une varios videos (o fotos) de distintas cámaras en una sola pantalla dividida.
+
+    audio_from: índice de la entrada cuyo audio se usa; None = la primera que tenga
+    audio; -1 = sin audio."""
     n = len(inputs)
     cols, rows = _grid(n)
     cells = cols * rows
@@ -230,7 +258,15 @@ async def mosaic(inputs: list[Path], dest: Path, image: bool = False) -> Path:
     if image:
         args += ["-frames:v", "1", "-q:v", "2"]
     else:
-        args += ["-map", "0:a:0?", "-c:v", "libx264", "-preset", config.video_preset,
+        if audio_from is None:
+            audio_from = -1
+            for i, p in enumerate(inputs):
+                if await has_audio(p):
+                    audio_from = i
+                    break
+        if 0 <= audio_from < n:
+            args += ["-map", f"{audio_from}:a:0?"]
+        args += ["-c:v", "libx264", "-preset", config.video_preset,
                  "-crf", str(config.video_crf), "-c:a", "aac", "-b:a", "64k",
                  "-movflags", "+faststart"]
     await _run(*args, str(dest))

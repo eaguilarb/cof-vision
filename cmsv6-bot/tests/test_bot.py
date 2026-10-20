@@ -242,11 +242,15 @@ async def test_single_sign_on_message(monkeypatch):
 def test_split_mode():
     from app.main import _split_mode
     assert _split_mode(["X", "todos", "hoy", "10:00", "10:02", "juntas"]) == (
-        ["X", "todos", "hoy", "10:00", "10:02"], True, False)
+        ["X", "todos", "hoy", "10:00", "10:02"], True, False, None)
     assert _split_mode(["X", "1,3", "hoy", "10:00", "10:02", "Separadas"])[1] is False
-    assert _split_mode(["X", "1", "hoy", "10:00", "10:02"])[1:] == (False, False)
+    assert _split_mode(["X", "1", "hoy", "10:00", "10:02"])[1:] == (False, False, None)
     assert _split_mode(["X", "1,3", "hoy", "10:00", "10:02", "juntas", "rápido"]) == (
-        ["X", "1,3", "hoy", "10:00", "10:02"], True, True)
+        ["X", "1,3", "hoy", "10:00", "10:02"], True, True, None)
+    assert _split_mode(["X", "1,3", "hoy", "10:00", "10:02", "juntas", "audio3"])[1:] == (
+        True, False, 2)
+    assert _split_mode(["X", "1,3", "hoy", "10:00", "10:02", "audio:1", "juntas"])[3] == 0
+    assert _split_mode(["X", "1,3", "hoy", "10:00", "10:02", "juntas", "sinaudio"])[3] == -1
 
 
 def test_pick_stream_avoids_double_download():
@@ -794,3 +798,39 @@ async def test_remux_h264_avi_is_instant(tmp_path):
     subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
                     "testsrc=size=320x240:rate=15:duration=2", "-c:v", "mpeg4", str(mpeg4)], check=True)
     assert not await video.remux(mpeg4, tmp_path / "x.mp4", 2)  # no es H.264: se comprime
+
+
+@pytest.mark.asyncio
+async def test_mosaic_audio_choice(tmp_path):
+    """El mosaico lleva el audio de la cámara elegida; un video solo conserva el suyo."""
+    clips = []
+    for i, freq in enumerate((300, 1200)):
+        p = tmp_path / f"c{i}.mp4"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                        "testsrc=size=320x240:rate=15:duration=3", "-f", "lavfi", "-i",
+                        f"sine=frequency={freq}:duration=3", "-c:v", "libx264", "-preset",
+                        "ultrafast", "-c:a", "aac", "-shortest", str(p)], check=True)
+        clips.append(p)
+    silent = tmp_path / "s.mp4"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=320x240:rate=15:duration=3", "-c:v", "libx264", "-preset",
+                    "ultrafast", str(silent)], check=True)
+
+    def dominant_freq(path):
+        import struct
+        pcm = subprocess.run(["ffmpeg", "-loglevel", "error", "-i", str(path), "-t", "1",
+                              "-ac", "1", "-ar", "8000", "-f", "s16le", "-"],
+                             capture_output=True).stdout
+        samples = struct.unpack(f"<{len(pcm) // 2}h", pcm)
+        crossings = sum(1 for a, b in zip(samples, samples[1:]) if a < 0 <= b)
+        return crossings * 8000 / len(samples)
+
+    out = await video.mosaic(clips, tmp_path / "m2.mp4", audio_from=1)
+    assert 1000 < dominant_freq(out) < 1400          # sonido de la cámara 2
+    out = await video.mosaic([silent, clips[0]], tmp_path / "auto.mp4")
+    assert 200 < dominant_freq(out) < 400            # automático: la primera con sonido
+    out = await video.mosaic(clips, tmp_path / "mute.mp4", audio_from=-1)
+    assert not await video.has_audio(out)
+    single = tmp_path / "one.mp4"
+    await video.compress_piece(clips[1], single, 0, 3)
+    assert await video.has_audio(single)              # un solo video conserva su audio

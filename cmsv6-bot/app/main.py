@@ -53,9 +53,12 @@ AYUDA = """\
 <code>/foto ABC123 todos hoy 14:05:30</code>
 <code>/grabaciones ABC123 ayer</code>
 <code>/vivo ABC123 1,3 20 juntas</code>
+<code>/video ABC123 1,2,3 hoy 08:30 08:35 juntas audio2</code> (mosaico con el sonido de la cámara 2)
 
 Fecha: hoy, ayer, 19/10 o 19/10/2026. Canal: 1, 2, 1,3 o todos.
 Con varias cámaras: sin nada al final llegan separadas; con «juntas», en mosaico.
+En el mosaico: «audio2» usa el sonido de la cámara 2, «sinaudio» lo quita (si no pones
+nada, usa la primera cámara que tenga sonido). Un video solo conserva su audio.
 «rapido» al final usa la grabación liviana del bus (menos calidad, llega mucho antes).
 Máximo {max} minutos por video."""
 
@@ -260,7 +263,7 @@ async def cmd_enlinea(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 @authorized
 async def cmd_vivo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Video en vivo: enlace para mirar en el navegador + un clip corto en el chat."""
-    args, together, _ = _split_mode(list(ctx.args))
+    args, together, _, audio = _split_mode(list(ctx.args))
     if not args:
         raise ParseError("Uso: /vivo placa [cámaras] [segundos] [juntas]\n"
                          "Ejemplo: /vivo SPBS42 1,3 20")
@@ -313,8 +316,11 @@ async def cmd_vivo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         out = links.files_dir() / _name(v, -1, today(), seconds_of_day(datetime.now(TZ).time()),
                                          None, "_vivo.mp4", "camaras" + "-".join(
                                              str(c + 1) for c, _ in ok))
+        cams_ok = [c for c, _ in ok]
+        a_idx = cams_ok.index(audio) if audio is not None and audio in cams_ok else (
+            -1 if audio == -1 else None)
         async with cpu:
-            await video.mosaic([p for _, p in ok], out)
+            await video.mosaic([p for _, p in ok], out, audio_from=a_idx)
         out.chmod(0o644)
         caption = f"🔴 {v.plate} en vivo · cámaras {', '.join(str(c + 1) for c, _ in ok)} · {when}"
         if failed:
@@ -364,21 +370,37 @@ SEPARADAS = ("separadas", "separados", "separada")
 RAPIDO = ("rapido", "rápido", "rapida", "rápida", "liviano")
 
 
-def _split_mode(args: list[str]) -> tuple[list[str], bool, bool]:
-    """Quita las palabras finales «juntas»/«separadas»/«rapido» (en cualquier orden).
+_AUDIO_RE = re.compile(r"(?:audio|sonido|aud)[:=]?(\d)")
+SIN_AUDIO = ("sinaudio", "sin_audio", "mudo", "silencio")
 
-    Devuelve (resto, juntas, rápido)."""
+
+def _split_mode(args: list[str]) -> tuple[list[str], bool, bool, int | None]:
+    """Quita las palabras finales «juntas»/«separadas»/«rapido»/«audioN»/«sinaudio»
+    (en cualquier orden).
+
+    Devuelve (resto, juntas, rápido, audio): audio = cámara (base 0) cuyo sonido va en el
+    mosaico, -1 sin audio, None automático (la primera cámara que tenga sonido)."""
     together = fast = False
-    while args and args[-1].lower() in JUNTAS + SEPARADAS + RAPIDO:
-        word = args.pop().lower()
-        together = together or word in JUNTAS
-        fast = fast or word in RAPIDO
-    return args, together, fast
+    audio: int | None = None
+    while args:
+        word = args[-1].lower()
+        m = _AUDIO_RE.fullmatch(word)
+        if m:
+            audio = int(m.group(1)) - 1
+        elif word in SIN_AUDIO:
+            audio = -1
+        elif word in JUNTAS + SEPARADAS + RAPIDO:
+            together = together or word in JUNTAS
+            fast = fast or word in RAPIDO
+        else:
+            break
+        args.pop()
+    return args, together, fast, audio
 
 
 @authorized
 async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    args, together, fast = _split_mode(list(ctx.args))
+    args, together, fast, audio = _split_mode(list(ctx.args))
     if len(args) == 4 and not re.fullmatch(r"\d{1,2}(:\d{2}){0,2}h?", args[2]):
         raise ParseError(f"Falta la hora de fin. Ejemplo: /video {args[0]} {args[1]} {args[2]} "
                          f"{args[3]} HH:MM")
@@ -407,7 +429,10 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"({(stop - start) // 60} min × {len(chans)} cámaras). Estimado: ~{_mmss(eta)}.\n"
             "Para recibirlo antes, pide menos minutos o menos cámaras; puedes detenerlo con /cancelar.")
     if together and len(chans) > 1:
-        await _video_together(msg, v, chans, day, start, stop, when, fast)
+        if audio is not None and audio >= 0 and audio not in chans:
+            raise ParseError(f"El audio debe ser de una de las cámaras pedidas "
+                             f"({', '.join(str(c + 1) for c in chans)}).")
+        await _video_together(msg, v, chans, day, start, stop, when, fast, audio)
         return
     async def one(chn: int) -> None:
         title = f"🎥 {v.plate} {v.channel_label(chn)} · {day:%d/%m} {fmt_hms(start)}–{fmt_hms(stop)}"
@@ -422,15 +447,17 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
             return
         tracker.stop()
+        sound = "" if await video.has_audio(out) else "\n🔇 esta grabación no trae audio"
         await deliver(msg, status, out,
-                      f"🎥 {v.plate} {v.channel_label(chn)} · {when}{_timing(stats)}")
+                      f"🎥 {v.plate} {v.channel_label(chn)} · {when}{sound}{_timing(stats)}")
 
     # Las cámaras se piden todas a la vez; cada una llega cuando está lista
     await asyncio.gather(*(one(c) for c in chans))
 
 
 async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
-                          start: int, stop: int, when: str, fast: bool = False) -> None:
+                          start: int, stop: int, when: str, fast: bool = False,
+                          audio: int | None = None) -> None:
     title = f"🎥 {v.plate} · cámaras {', '.join(str(c + 1) for c in chans)} juntas · {when}"
     status = await msg.reply_text(f"{title}\n{_bar(0)} 0% · en cola…")
     tracker = Tracker(status, title)
@@ -457,15 +484,29 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
     await _edit(status, f"{title}\n{_bar(97)} 97% · 🧩 armando el mosaico…")
     out = links.files_dir() / _name(v, -1, day, start, stop, ".mp4", "camaras" + "-".join(
         str(c + 1) for c in ok))
+    # Audio: la cámara elegida (si llegó), o la primera que tenga sonido
+    audio_idx = ok.index(audio) if audio is not None and audio in ok else (
+        -1 if audio == -1 else None)
+    if audio_idx is None:
+        for i, c in enumerate(clips):
+            if await video.has_audio(c):
+                audio_idx = i
+                break
     try:
         async with cpu:
-            await video.mosaic(clips, out)
+            await video.mosaic(clips, out, audio_from=audio_idx if audio_idx is not None else -1)
     finally:
         for c in clips:
             c.unlink(missing_ok=True)
     out.chmod(0o644)
+    if audio_idx is not None and audio_idx >= 0:
+        sound = f"🔊 audio de la cámara {ok[audio_idx] + 1}"
+    elif audio == -1:
+        sound = "🔇 sin audio (pedido)"
+    else:
+        sound = "🔇 las grabaciones no traen audio"
     caption = (f"🎥 {v.plate} · cámaras {', '.join(str(c + 1) for c in ok)} juntas · {when}"
-               f"\n⏱ {_mmss(time.monotonic() - t0)}")
+               f"\n{sound}\n⏱ {_mmss(time.monotonic() - t0)}")
     if failed:
         caption += "\n⚠️ Sin video: " + "; ".join(failed)
     await deliver(msg, status, out, caption)
@@ -473,7 +514,7 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
 
 @authorized
 async def cmd_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    args, together, fast = _split_mode(list(ctx.args))
+    args, together, fast, _ = _split_mode(list(ctx.args))
     # Sin fecha ni hora, o con «ahora»: foto instantánea desde el video en vivo
     live = len(args) in (1, 2) or (len(args) == 3 and args[2].lower() in ("ahora", "vivo"))
     if live:
@@ -819,6 +860,7 @@ async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
     if _ftp_first(recs):
         try:
             raw = await fetch_ftp(v, chn, day, start, stop, status, fast)
+            log.info("Archivo FTP %s: %s", raw.name, await video.describe(raw))
             stats["bajar"] = time.monotonic() - t0 - stats["buscar"]
             stats["metodo"] = "ftp"
             out = links.files_dir() / _name(v, chn, day, start, stop, ".mp4")
