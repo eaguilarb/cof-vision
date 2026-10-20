@@ -11,7 +11,7 @@ Variables de entorno:
 """
 import os, re, uuid, shutil, threading, subprocess, tempfile, time, traceback
 import cv2
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from conteo import Detector, contar_puerta
@@ -24,6 +24,9 @@ ORIGENES = os.environ.get('ORIGENES', 'https://eaguilarb.github.io').split(',')
 app = FastAPI(title='COF conteo')
 app.add_middleware(CORSMiddleware, allow_origins=ORIGENES, allow_methods=['*'], allow_headers=['*'])
 DET = None
+# Videos subidos desde el computador (cuando no vienen de Drive): se guardan aquí y se borran a las 12 horas.
+VIDEOS = os.environ.get('VIDEOS_DIR', '/tmp/cof-videos')
+VID_RE = re.compile(r'^[a-f0-9]{8,64}$')
 JOBS = {}
 LOCK = threading.Lock()  # un trabajo a la vez: el plan Hobby tiene 8 núcleos y el detector los usa todos
 
@@ -49,6 +52,12 @@ def auth(a):
 
 
 def url_de(video, gkey):
+    if video.startswith('subido:'):
+        vid = video[7:]
+        path = os.path.join(VIDEOS, f'{vid}.mp4')
+        if not VID_RE.match(vid) or not os.path.exists(path):
+            raise ValueError('El video subido ya no está en el servidor: vuelve a analizar para subirlo de nuevo')
+        return path
     if os.environ.get('PERMITIR_LOCAL') == '1' and video.startswith('/') and os.path.exists(video):
         return video  # solo para pruebas en el propio equipo
     if re.match(r'^https?://', video):
@@ -99,6 +108,42 @@ def correr(jid, job: Trabajo):
         traceback.print_exc()
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def limpiar_videos():
+    if not os.path.isdir(VIDEOS):
+        return
+    for f in os.listdir(VIDEOS):
+        p = os.path.join(VIDEOS, f)
+        if time.time() - os.path.getmtime(p) > 12 * 3600:
+            try: os.remove(p)
+            except OSError: pass
+
+
+@app.put('/videos/{vid}')
+async def subir_video(vid: str, request: Request, authorization: str = Header(default='')):
+    auth(authorization)
+    if not VID_RE.match(vid):
+        raise HTTPException(400, 'Identificador de video inválido')
+    os.makedirs(VIDEOS, exist_ok=True)
+    limpiar_videos()
+    path = os.path.join(VIDEOS, f'{vid}.mp4')
+    n = 0
+    with open(path + '.part', 'wb') as f:
+        async for chunk in request.stream():
+            f.write(chunk); n += len(chunk)
+    os.replace(path + '.part', path)
+    return {'ok': True, 'bytes': n}
+
+
+@app.get('/videos/{vid}')
+def ver_video(vid: str, authorization: str = Header(default='')):
+    auth(authorization)
+    path = os.path.join(VIDEOS, f'{vid}.mp4')
+    if not VID_RE.match(vid) or not os.path.exists(path):
+        raise HTTPException(404, 'No está')
+    os.utime(path)  # se usa: no se borra todavía
+    return {'ok': True, 'bytes': os.path.getsize(path)}
 
 
 @app.get('/')

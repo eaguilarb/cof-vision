@@ -12,7 +12,8 @@
 //   QWEN_API_KEY     (opcional) clave de Qwen: la IA se usa desde el servidor y no se pide en la página
 //   GOOGLE_API_KEY   (opcional) clave de Google para leer Drive; se entrega a la página solo con sesión iniciada
 //   PORT             lo define Railway
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
+import { request as httpsRequest } from 'node:https'
 import { readFileSync } from 'node:fs'
 import { createHmac, createHash, timingSafeEqual } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -207,6 +208,26 @@ async function handle(req, res) {
     return send(res, r.status === 401 || r.status === 403 ? 502 : r.status, text, 'application/json')
   }
 
+  // Videos subidos desde el computador: pasan directo (sin guardarse en memoria) al servicio de conteo.
+  const v = path.match(/^\/api\/conteo\/videos\/([a-f0-9]{8,64})$/)
+  if (v) {
+    if (!user) return send(res, 401, JSON.stringify({ detail: 'Tu sesión terminó. Vuelve a entrar.' }), 'application/json')
+    if (!CONTEO || !CONTEO_TOKEN) return send(res, 503, JSON.stringify({ detail: 'Falta configurar CONTEO_URL y CONTEO_TOKEN.' }), 'application/json')
+    if (req.method !== 'PUT' && req.method !== 'GET') return send(res, 405, 'Método no permitido')
+    const u = new URL(`${CONTEO}/videos/${v[1]}`)
+    const headers = { Authorization: `Bearer ${CONTEO_TOKEN}` }
+    if (req.method === 'PUT') { headers['Content-Type'] = 'application/octet-stream'; if (req.headers['content-length']) headers['Content-Length'] = req.headers['content-length'] }
+    await new Promise((done) => {
+      const up = (u.protocol === 'https:' ? httpsRequest : httpRequest)(u, { method: req.method, headers }, (r) => {
+        res.writeHead(r.statusCode || 502, { ...HEADERS, 'Content-Type': 'application/json', 'Cache-Control': 'no-store' })
+        r.pipe(res); r.on('end', done)
+      })
+      up.on('error', (e) => { if (!res.headersSent) send(res, 502, JSON.stringify({ detail: `No se pudo conectar con el servicio de conteo: ${e.message}` }), 'application/json'); done() })
+      if (req.method === 'PUT') req.pipe(up); else up.end()
+    })
+    return
+  }
+
   // Servicio de conteo: el servidor agrega su clave. /api/conteo (estado), /api/conteo/trabajos (crear y consultar).
   const k = path.match(/^\/api\/conteo(\/trabajos(?:\/([a-f0-9]{6,32}))?)?$/)
   if (k) {
@@ -231,10 +252,13 @@ async function handle(req, res) {
   return send(res, 404, 'No encontrado')
 }
 
-createServer((req, res) => {
+const srv = createServer((req, res) => {
   handle(req, res).catch((e) => {
     if (!res.headersSent) send(res, e.status || 500, e.status ? e.message : 'Error interno')
     else res.end()
     if (!e.status) console.error(e)
   })
-}).listen(PORT, () => console.log(`COF Vision escuchando en el puerto ${PORT} · ${USERS.size} usuario(s) · clave de Gemini ${KEY ? 'configurada' : 'FALTANTE'}`))
+})
+// Subir un video de 1 GB desde el computador tarda más de los 5 minutos que Node permite por defecto a una petición.
+srv.requestTimeout = 0
+srv.listen(PORT, () => console.log(`COF Vision escuchando en el puerto ${PORT} · ${USERS.size} usuario(s) · clave de Gemini ${KEY ? 'configurada' : 'FALTANTE'}`))

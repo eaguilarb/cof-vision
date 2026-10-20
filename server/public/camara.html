@@ -463,7 +463,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.20-1';
+  const VERSION = '2026.10.20-2';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -4047,10 +4047,39 @@
     };
   }
   // Conteo en el servidor (servicio cof-conteo: supervision + ByteTrack + LineZone con RF-DETR, calibrado con el LCSX54:
-  // 27 de 30 subidas). Solo con videos de Drive (el servidor los baja directo) y en la versión con usuario y contraseña.
+  // 27 de 30 subidas). Con videos de Drive el servidor los baja directo; con videos del computador, la página los sube
+  // primero. Solo en la versión con usuario y contraseña.
   const CONTEO = { ok: !!window.COF_CONTEO, fallas: 0 };
+  // Video elegido desde el computador: se sube una vez al servidor (se queda 12 horas) para que lo cuente el servicio.
+  // El identificador sale del nombre y tamaño del archivo: si ya estaba subido, no se vuelve a subir.
+  async function vidId(c) {
+    const b = new TextEncoder().encode(`${c.name}|${c.file.size}|${c.file.lastModified || 0}`);
+    const h = await crypto.subtle.digest('SHA-256', b);
+    return [...new Uint8Array(h)].slice(0, 16).map((x) => x.toString(16).padStart(2, '0')).join('');
+  }
+  function uploadCam(c) {
+    if (c.upPr) return c.upPr;
+    c.upPr = (async () => {
+      const id = await vidId(c);
+      const ya = await fetch(`api/conteo/videos/${id}`).then((r) => r.ok).catch(() => false);
+      if (ya) return `subido:${id}`;
+      await new Promise((ok, fail) => {
+        const x = new XMLHttpRequest();
+        x.open('PUT', `api/conteo/videos/${id}`);
+        x.upload.onprogress = (e) => { if (e.lengthComputable) status(`Subiendo ${camName(c)} al servidor para contarlo: ${Math.round((100 * e.loaded) / e.total)} % (${(e.total / 1e9).toFixed(2)} GB, se hace una sola vez)`, e.loaded / e.total); };
+        x.onload = () => (x.status >= 200 && x.status < 300 ? ok() : fail(new Error(`no se pudo subir ${camName(c)} (${x.status})`)));
+        x.onerror = () => fail(new Error(`se cortó la subida de ${camName(c)}`));
+        x.send(c.file);
+      });
+      return `subido:${id}`;
+    })();
+    c.upPr.catch(() => { c.upPr = null; });
+    return c.upPr;
+  }
   async function workerCount(s, c, win, run) {
     const L = c.line;
+    const video = c.remote || (c.file ? await uploadCam(c) : null);
+    if (!video || run !== S.run) return null;
     // El servicio cuenta «adentro» a la derecha de la línea recorrida de a→b: se da vuelta si el adentro está al otro lado.
     const [a, b] = L.inside === 1 ? [L.a, L.b] : [L.b, L.a];
     stuExcl(c);
@@ -4058,7 +4087,7 @@
     // Zonas que no cuentan (conductor, asientos, reflejos) en fracción de la imagen: el servicio descarta a quien tenga
     // ahí los pies (o el centro, con la cámara cenital).
     const excluir = (c.excl || []).map((z) => [z.x0, z.y0, z.x1, z.y1]);
-    const body = { puertas: { [c.label]: { video: c.remote, linea: [a[0], a[1], b[0], b[1]], off: c.off || 0, fps: 12, ancla: L.anchor === 'center' ? 'center' : 'bottom', excluir } }, tramos: [[+win.t0.toFixed(2), +win.t1.toFixed(2)]] };
+    const body = { puertas: { [c.label]: { video, linea: [a[0], a[1], b[0], b[1]], off: c.off || 0, fps: 12, ancla: L.anchor === 'center' ? 'center' : 'bottom', excluir } }, tramos: [[+win.t0.toFixed(2), +win.t1.toFixed(2)]] };
     const r0 = await fetch('api/conteo/trabajos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!r0.ok) throw new Error(`servicio de conteo: ${r0.status} ${(await r0.text()).slice(0, 160)}`);
     const { id } = await r0.json();
@@ -4114,7 +4143,7 @@
     if (window.__cofDebug && keep.mot && keep.mot.green) (window.__cofDebug.greens = window.__cofDebug.greens || []).push({ cam: c.label, valz: c.valz, W: keep.mot.W, H: keep.mot.H, n: keep.mot.green.length, t: keep.mot.green.map((g) => +g.t.toFixed(2)), px: keep.mot.green.map((g) => g.idx.length), greens }); // solo para pruebas
     if (!times.length) return { c, quiet: true, boarders: [], bajan: 0, greens };
     // Con el servicio de conteo, las personas se cuentan allá; si falla (o el video no es de Drive), se cuenta aquí.
-    if (CONTEO.ok && c.remote && c.line && CONTEO.fallas < 3) {
+    if (CONTEO.ok && (c.remote || c.file) && c.line && CONTEO.fallas < 3) {
       try {
         const w = await workerCount(s, c, win, run);
         if (run !== S.run) return null;
