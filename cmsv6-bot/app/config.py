@@ -19,7 +19,7 @@ class Config:
         default_factory=lambda: [int(x) for x in _list("ALLOWED_USERS")]
     )
 
-    cmsv6_url: str = os.environ.get("CMSV6_URL", "http://47.88.25.163:8080").rstrip("/")
+    cmsv6_url: str = os.environ.get("CMSV6_URL", "http://47.88.25.163:8088").rstrip("/")
     cmsv6_user: str = os.environ.get("CMSV6_USER", "")
     cmsv6_password: str = os.environ.get("CMSV6_PASSWORD", "")
     # Dónde buscar grabaciones, en orden: 2 = servidor de almacenamiento, 1 = equipo (MDVR), 4 = servidor de descarga

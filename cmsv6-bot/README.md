@@ -5,7 +5,7 @@ con **videos comprimidos** o **fotos** de las grabaciones de los vehículos.
 Corre en el VPS (Ubuntu 24.04) con Docker.
 
 ```
- Tú (Telegram) ──► Bot en el VPS ──► API web de CMSV6 (47.88.25.163:8080)
+ Tú (Telegram) ──► Bot en el VPS ──► API web de CMSV6 (47.88.25.163:8088)
                        │                 └─ descarga la grabación (puerto 6611)
                        ├─ recorta y comprime con ffmpeg
                        ├─ te envía el video por Telegram (hasta 2 GB)
@@ -69,11 +69,11 @@ No hace falta el proveedor: CMSV6 y CMSV7 traen una API web oficial incluida
 que usa su versión web, y se entra con **el mismo usuario y contraseña del
 programa CMSV6**. Pruébala desde el navegador de tu PC o del iMac:
 
-1. Página de inicio de sesión: `http://47.88.25.163:8080`
+1. Página de inicio de sesión: `http://47.88.25.163:8088`
 2. Documentación de la API (viene dentro de tu propio servidor):
-   `http://47.88.25.163:8080/808gps/open/webApi.html`
+   `http://47.88.25.163:8088/808gps/open/webApi.html`
 3. Prueba de inicio de sesión (cambia USUARIO y CLAVE):
-   `http://47.88.25.163:8080/StandardApiAction_login.action?account=USUARIO&password=CLAVE`
+   `http://47.88.25.163:8088/StandardApiAction_login.action?account=USUARIO&password=CLAVE`
 
    Si responde algo como `{"result":0,"jsession":"..."}`, la API funciona con
    tu cuenta y el bot podrá conectarse.

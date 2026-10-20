@@ -49,7 +49,7 @@ def test_file_channels():
 
 
 def test_download_url_fills_session_and_savename():
-    cms = CMSV6("http://47.88.25.163:8080", "u", "p")
+    cms = CMSV6("http://47.88.25.163:8088", "u", "p")
     cms.jsession = "J9"
     # Formato exacto del ejemplo de la documentación de CMSV6
     f = RecFile("1235", 1, 31044, 32842, "H20100628-083724P2N2P0.264", 23211837, 2,
