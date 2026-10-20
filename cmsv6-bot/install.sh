@@ -5,8 +5,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 say() { printf '\n\033[1;32m==> %s\033[0m\n' "$*"; }
-ask() { local v; read -rp "$1: " v; printf '%s' "$v"; }
-ask_secret() { local v; read -rsp "$1: " v; echo >&2; printf '%s' "$v"; }
+# Quita espacios y teclas especiales (flechas, etc.) que se cuelan al pegar
+clean() { printf '%s' "$1" | sed -e 's/\x1b\[[0-9;]*[A-Za-z]//g' | tr -d '[:cntrl:][:space:]'; }
+ask() { local v; read -rp "$1 (pega y presiona Enter): " v; clean "$v"; }
+ask_secret() { local v; read -rsp "$1 (no se verá al escribir; presiona Enter): " v; echo >&2; clean "$v"; }
 set_env() { # set_env CLAVE valor
   local k="$1" v="$2"
   if grep -q "^$k=" .env; then
