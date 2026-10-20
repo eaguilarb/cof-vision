@@ -28,6 +28,7 @@ class Vehicle:
     dev_id: str
     channels: int
     channel_names: list[str]
+    company: str = ""  # empresa/terminal (pnm)
 
     def channel_label(self, chn: int) -> str:
         if chn < len(self.channel_names) and self.channel_names[chn]:
@@ -123,7 +124,7 @@ class CMSV6:
                 names = [n.strip() for n in str(d.get("cn") or "").split(",")]
                 out.append(Vehicle(plate=str(v.get("nm", "")), dev_id=str(d.get("id", "")),
                                    channels=int(d.get("cc") or len(names) or 1),
-                                   channel_names=names))
+                                   channel_names=names, company=str(v.get("pnm") or "")))
         self._vehicles = (time.monotonic(), out)
         return out
 

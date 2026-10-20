@@ -194,3 +194,17 @@ async def test_segment_download_from_vehicle(tmp_path, monkeypatch):
     assert 58 <= dur <= 62, dur
     await cms.close()
     await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_parse_real_vehicle_list(monkeypatch):
+    """Formato real devuelto por el servidor CMSV7 de COF (queryUserVehicle)."""
+    cms = CMSV6("http://x:8088", "u", "p")
+    sample = {"result": 0, "vehicles": [
+        {"id": 685, "nm": "SRRX58", "ic": 6, "pid": 15, "pnm": "CAMILO HENRIQUEZ",
+         "dl": [{"id": "010314376127", "pid": 5, "cc": 5, "cn": "CH1,CH2,CH3,CH4,CH5", "md": 361}],
+         "chnCount": 5}]}
+    monkeypatch.setattr(cms, "call", AsyncMock(return_value=sample))
+    v = await cms.find_vehicle("srrx-58")
+    assert (v.plate, v.dev_id, v.channels, v.company) == ("SRRX58", "010314376127", 5, "CAMILO HENRIQUEZ")
+    assert v.channel_label(4) == "cam5 (CH5)"

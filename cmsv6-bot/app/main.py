@@ -102,7 +102,8 @@ async def cmd_vehiculos(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines = []
     for v in sorted(vs, key=lambda v: v.plate):
         mark = "🟢" if online.get(v.dev_id) else ("🔴" if v.dev_id in online else "⚪")
-        lines.append(f"{mark} <b>{_esc(v.plate)}</b> — equipo {_esc(v.dev_id)}, {v.channels} cámaras")
+        empresa = f" · {_esc(v.company)}" if v.company else ""
+        lines.append(f"{mark} <b>{_esc(v.plate)}</b>{empresa} — {v.channels} cámaras")
     await _send_long(update.effective_message, "\n".join(lines))
 
 
