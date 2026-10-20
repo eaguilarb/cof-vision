@@ -19,7 +19,8 @@ def paso(n: int, txt: str) -> None:
 
 
 async def run() -> int:
-    cms = CMSV6(config.cmsv6_url, config.cmsv6_user, config.cmsv6_password)
+    cms = CMSV6(config.cmsv6_url, config.cmsv6_user, config.cmsv6_password,
+            config.data_dir / ".jsession")
     try:
         paso(1, f"Iniciando sesión en {config.cmsv6_url} con el usuario «{config.cmsv6_user}»")
         await cms.login()

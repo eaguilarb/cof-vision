@@ -58,8 +58,12 @@ class RecFile:
 
 
 class CMSV6:
-    def __init__(self, base_url: str, account: str, password: str):
+    def __init__(self, base_url: str, account: str, password: str,
+                 session_file: Path | None = None):
         self.base_url = base_url.rstrip("/")
+        # La sesión se guarda en disco: con «inicio de sesión único» activado, CMSV7 rechaza
+        # un segundo login (código 34) mientras la sesión anterior siga viva, p. ej. tras reiniciar.
+        self.session_file = session_file
         self.host = urlsplit(self.base_url).hostname or ""
         self.account = account
         self.password = password
@@ -77,14 +81,29 @@ class CMSV6:
         if self._session:
             await self._session.close()
 
-    async def login(self) -> None:
+    async def login(self, force: bool = False) -> None:
         async with self._lock:
+            if not force and self.session_file and self.session_file.exists():
+                saved = self.session_file.read_text().strip()
+                if saved:
+                    self.jsession = saved
+                    return
             data = await self._raw("StandardApiAction_login.action",
                                    {"account": self.account, "password": self.password})
-            if data.get("result") != 0 or not data.get("jsession"):
-                raise CMSV6Error(f"Login rechazado por CMSV6 (result={data.get('result')}). "
+            result = data.get("result")
+            if result == 34:
+                raise CMSV6Error(
+                    f"El usuario «{self.account}» tiene «inicio de sesión único» y ya está "
+                    "conectado en otro lugar (aplicativo o navegador). Cierra esa sesión o usa "
+                    "un usuario exclusivo para el bot.")
+            if result != 0 or not data.get("jsession"):
+                raise CMSV6Error(f"Login rechazado por CMSV6 (result={result}). "
                                  "Revisa CMSV6_USER y CMSV6_PASSWORD.")
             self.jsession = data["jsession"]
+            if self.session_file:
+                self.session_file.parent.mkdir(parents=True, exist_ok=True)
+                self.session_file.write_text(self.jsession)
+                self.session_file.chmod(0o600)
             log.info("Sesión CMSV6 iniciada")
 
     async def _raw(self, action: str, params: dict) -> dict:
@@ -108,7 +127,7 @@ class CMSV6:
                 return data
             # 5 = la sesión no existe (vence a las 4 h sin uso)
             if attempt == 1 and result == 5:
-                await self.login()
+                await self.login(force=True)
                 continue
             raise CMSV6Error(f"{action} devolvió result={result}: {data.get('message', '')}")
         raise AssertionError("unreachable")

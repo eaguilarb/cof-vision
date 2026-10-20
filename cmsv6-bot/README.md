@@ -145,6 +145,7 @@ Los videos generados y los enlaces se borran solos después de `LINK_HOURS` (48 
 | Mensaje | Causa probable |
 |---|---|
 | `No se pudo contactar a CMSV6` | El puerto 8088 no está abierto hacia el VPS, o la IP cambió |
+| `inicio de sesión único` (código 34) | El usuario ya está conectado en el aplicativo o el navegador. Usa un usuario exclusivo para el bot |
 | `Login rechazado` | Usuario o contraseña de CMSV6 incorrectos en `.env` |
 | `No hay grabaciones en ese horario` | No hay grabación de esa cámara en ese horario. Revisa con `/grabaciones` |
 | `Falló la descarga` | El puerto 6611 está cerrado; o, si la grabación está en el equipo del vehículo, el vehículo está apagado o sin señal |

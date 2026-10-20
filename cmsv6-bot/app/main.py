@@ -24,7 +24,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("bot")
 
-cms = CMSV6(config.cmsv6_url, config.cmsv6_user, config.cmsv6_password)
+cms = CMSV6(config.cmsv6_url, config.cmsv6_user, config.cmsv6_password,
+            config.data_dir / ".jsession")
 jobs = asyncio.Semaphore(config.max_parallel_jobs)
 WORK_HOURS = 6  # cuánto se guardan las grabaciones originales descargadas (caché)
 

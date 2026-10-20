@@ -208,3 +208,32 @@ async def test_parse_real_vehicle_list(monkeypatch):
     v = await cms.find_vehicle("srrx-58")
     assert (v.plate, v.dev_id, v.channels, v.company) == ("SRRX58", "010314376127", 5, "CAMILO HENRIQUEZ")
     assert v.channel_label(4) == "cam5 (CH5)"
+
+
+@pytest.mark.asyncio
+async def test_session_reused_and_refreshed(tmp_path, monkeypatch):
+    f = tmp_path / ".jsession"
+    f.write_text("OLD")
+    cms = CMSV6("http://x:8088", "u", "p", f)
+    sent = []
+
+    async def raw(action, params):
+        sent.append((action, params.get("jsession")))
+        if action.endswith("login.action"):
+            return {"result": 0, "jsession": "NEW"}
+        return {"result": 5} if params["jsession"] == "OLD" else {"result": 0, "ok": 1}
+
+    monkeypatch.setattr(cms, "_raw", raw)
+    assert (await cms.call("StandardApiAction_x.action"))["ok"] == 1
+    # Primero reutiliza la guardada, ante «sesión no existe» inicia sesión y la guarda
+    assert [a for a, _ in sent] == ["StandardApiAction_x.action",
+                                    "StandardApiAction_login.action", "StandardApiAction_x.action"]
+    assert f.read_text() == "NEW"
+
+
+@pytest.mark.asyncio
+async def test_single_sign_on_message(monkeypatch):
+    cms = CMSV6("http://x:8088", "cof", "p")
+    monkeypatch.setattr(cms, "_raw", AsyncMock(return_value={"result": 34}))
+    with pytest.raises(Exception, match="inicio de sesión único"):
+        await cms.login()
