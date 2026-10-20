@@ -777,3 +777,20 @@ async def test_ftp_method_one_task_for_whole_range(tmp_path, monkeypatch):
     assert main._method_info("ftp")["vel"] > 0
     await cms.close()
     await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_remux_h264_avi_is_instant(tmp_path):
+    import time as _t
+    avi = tmp_path / "ch1.avi"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=1280x720:rate=15:duration=120", "-c:v", "libx264", "-preset",
+                    "ultrafast", str(avi)], check=True)
+    t = _t.monotonic()
+    assert await video.remux(avi, tmp_path / "out.mp4", 120)
+    assert _t.monotonic() - t < 5
+    assert 119 <= await video.probe_duration(tmp_path / "out.mp4") <= 121
+    mpeg4 = tmp_path / "m4.avi"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=320x240:rate=15:duration=2", "-c:v", "mpeg4", str(mpeg4)], check=True)
+    assert not await video.remux(mpeg4, tmp_path / "x.mp4", 2)  # no es H.264: se comprime

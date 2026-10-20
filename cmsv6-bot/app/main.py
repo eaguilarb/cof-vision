@@ -687,7 +687,7 @@ def _ftp_first(recs: list[RecFile]) -> bool:
     if not recs or all(r.loc != 1 for r in recs):
         return False  # ya está en el servidor
     if config.download_method == "ftp":
-        return True
+        return True  # siempre primero, como en el aplicativo (los otros quedan de respaldo)
     if config.download_method != "auto":
         return False
     failed = time.time() - _method_info("ftp").get("fallo", 0) < _FAIL_COOLDOWN
@@ -824,8 +824,13 @@ async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
             out = links.files_dir() / _name(v, chn, day, start, stop, ".mp4")
             async with cpu:
                 t2 = time.monotonic()
-                await _edit(status, "🗜️ comprimiendo", 92, 10)
-                await video.compress_piece(raw, out, 0, stop - start, 0, intermediate)
+                done = False
+                if config.ftp_remux and not intermediate:
+                    await _edit(status, "⚡ preparando el MP4 (sin recomprimir)", 95, 3)
+                    done = await video.remux(raw, out, stop - start)
+                if not done:
+                    await _edit(status, "🗜️ comprimiendo (ultrarrápido)", 92, 10)
+                    await video.compress_piece(raw, out, 0, stop - start, 0, intermediate)
                 stats["comprimir"] = time.monotonic() - t2
             out.chmod(0o644)
             stats["total"] = time.monotonic() - t0

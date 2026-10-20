@@ -55,12 +55,33 @@ async def compress_piece(src: Path, dest: Path, offset: float, duration: float,
         "-vf", _scale_filter(),
         # Para el mosaico este archivo es intermedio (se vuelve a comprimir al unir):
         # se hace muy rápido y con buena calidad para no gastar CPU dos veces
+        "-threads", "0",
         "-c:v", "libx264", "-preset", "ultrafast" if intermediate else config.video_preset,
         "-crf", "20" if intermediate else str(config.video_crf),
         "-c:a", "aac", "-b:a", "64k", "-ac", "1",
         "-movflags", "+faststart",
         str(dest))
     return dest
+
+
+async def video_codec(src: Path) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name",
+        "-of", "default=nw=1:nk=1", str(src),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, _ = await proc.communicate()
+    return out.decode().strip().lower()
+
+
+async def remux(src: Path, dest: Path, duration: float) -> bool:
+    """Pasa el video a MP4 sin recomprimir (segundos en vez de minutos). Solo si es H.264,
+    que se reproduce en cualquier teléfono; devuelve False si hay que comprimir."""
+    if await video_codec(src) != "h264":
+        return False
+    await _run("-fflags", "+genpts", "-i", str(src), "-t", f"{duration:.3f}",
+               "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy",
+               "-c:a", "aac", "-b:a", "64k", "-ac", "1", "-movflags", "+faststart", str(dest))
+    return dest.exists() and dest.stat().st_size > 1024
 
 
 async def concat(pieces: list[Path], dest: Path) -> Path:

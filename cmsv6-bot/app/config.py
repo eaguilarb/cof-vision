@@ -41,7 +41,12 @@ class Config:
     # Compresión: CRF más alto = archivo más liviano (23 alta calidad, 28 equilibrado, 32 muy liviano)
     video_crf: int = int(os.environ.get("VIDEO_CRF", "28"))
     video_max_height: int = int(os.environ.get("VIDEO_MAX_HEIGHT", "720"))
-    video_preset: str = os.environ.get("VIDEO_PRESET", "veryfast")
+    # «ultrafast» comprime varias veces más rápido (el archivo pesa algo más). El valor antiguo
+    # por defecto («veryfast», que quedó en los .env viejos) se toma también como ultrafast.
+    video_preset: str = (lambda p: "ultrafast" if p == "veryfast" else p)(
+        os.environ.get("VIDEO_PRESET", "ultrafast"))
+    # Si el AVI del FTP ya viene en H.264, se entrega sin recomprimir (instantáneo)
+    ftp_remux: bool = os.environ.get("FTP_REMUX", "1") != "0"
     max_clip_minutes: int = int(os.environ.get("MAX_CLIP_MINUTES", "30"))
     max_parallel_jobs: int = int(os.environ.get("MAX_PARALLEL_JOBS", "3"))
     # Grabaciones en el bus: «auto» pide solo los minutos necesarios (descarga por tramos) cuando
@@ -55,7 +60,7 @@ class Config:
     # Método de descarga de grabaciones del bus: auto (elige el más rápido medido),
     # ftp (el bus sube el horario al FTP de CMSV7, como en el aplicativo),
     # reproduccion (el bus transmite el tramo), tramos (el bus sube el tramo) o directa
-    download_method: str = os.environ.get("DOWNLOAD_METHOD", "auto").lower()
+    download_method: str = os.environ.get("DOWNLOAD_METHOD", "ftp").lower()
     # Transmisiones de reproducción a la vez por bus (una por cámara)
     bus_streams: int = int(os.environ.get("BUS_STREAMS", "4"))
 
