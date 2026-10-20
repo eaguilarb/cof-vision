@@ -26,6 +26,7 @@ Corre en el VPS (Ubuntu 24.04) con Docker.
 | `/video ABC123 todos 19/10 08:30 08:35 juntas` | Todas las cámaras en un solo video (mosaico) |
 | `/video ABC123 1,3 hoy 08:30 08:35 juntas` | Cámaras 1 y 3 lado a lado |
 | `/video ABC123 1 hoy 08:30 08:35 rapido` | Usa la grabación liviana del bus: menos calidad, llega mucho antes |
+| `/foto ABC123` o `/foto ABC123 1,3` | Foto de **ahora mismo** (en vivo, en segundos) |
 | `/foto ABC123 2 hoy 14:05:30` | Imagen de ese instante |
 | `/foto ABC123 todos hoy 14:05:30 juntas` | Una imagen con todas las cámaras |
 | `/miid` | Tu ID de Telegram (para autorizarte) |

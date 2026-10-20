@@ -38,7 +38,8 @@ AYUDA = """\
 /vehiculos <i>texto</i> — busca vehículos (ej. /vehiculos SVD), cámaras y si están en línea
 /grabaciones <i>placa</i> [<i>fecha</i>] — qué horas hay grabadas
 /video <i>placa canal fecha inicio fin</i> [juntas] [rapido] — clip comprimido
-/foto <i>placa canal fecha hora</i> [juntas] — imagen de ese instante
+/foto <i>placa</i> [<i>cámaras</i>] — foto de ahora mismo (rápida, en vivo)
+/foto <i>placa canal fecha hora</i> [juntas] — imagen de un momento pasado (más lenta)
 /miid — tu ID de Telegram
 
 <b>Ejemplos</b>
@@ -363,6 +364,11 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
 @authorized
 async def cmd_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     args, together, fast = _split_mode(list(ctx.args))
+    # Sin fecha ni hora, o con «ahora»: foto instantánea desde el video en vivo
+    live = len(args) in (1, 2) or (len(args) == 3 and args[2].lower() in ("ahora", "vivo"))
+    if live:
+        await _foto_live(update.effective_message, args, together)
+        return
     if len(args) == 3:
         args.insert(2, "hoy")
     if len(args) != 4:
@@ -410,6 +416,48 @@ async def cmd_foto(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if failed:
         caption += "\n⚠️ Sin imagen: " + "; ".join(failed)
     await msg.reply_photo(photo=out.read_bytes(), caption=caption)
+    await status.delete()
+
+
+async def _foto_live(msg: Message, args: list[str], together: bool) -> None:
+    v = await cms.find_vehicle(args[0])
+    chans = parse_channels(args[1] if len(args) > 1 else "todos", v.channels)
+    if not cms.jsession:
+        await cms.login()
+    status = await msg.reply_text(f"📸 Tomando foto en vivo de {v.plate}…")
+    stamp = seconds_of_day(datetime.now(TZ).time())
+
+    async def one(chn: int) -> tuple[int, Path | None, str]:
+        out = links.files_dir() / _name(v, chn, today(), stamp, None, "_ahora.jpg")
+        last = ""
+        for base in cms.media_bases():
+            try:
+                await video.snapshot_live(cms.live_flv_url(base, v.dev_id, chn), out)
+                cms.media_url = cms.media_url or base
+                return chn, out, ""
+            except video.FFmpegError as e:
+                last = str(e)
+        return chn, None, f"{v.channel_label(chn)}: {last}"
+
+    results = await asyncio.gather(*(one(c) for c in chans))
+    ok = [(c, p) for c, p, _ in results if p]
+    failed = [e for _, p, e in results if not p]
+    when = datetime.now(TZ).strftime("%d/%m/%Y %H:%M:%S")
+    if not ok:
+        await status.edit_text("⚠️ No llegó imagen en vivo.\n" + "\n".join(failed))
+        return
+    if together and len(ok) > 1:
+        out = links.files_dir() / _name(v, -1, today(), stamp, None, "_ahora.jpg",
+                                         "camaras" + "-".join(str(c + 1) for c, _ in ok))
+        async with cpu:
+            await video.mosaic([p for _, p in ok], out, image=True)
+        await msg.reply_photo(photo=out.read_bytes(), caption=f"📸 {v.plate} ahora · {when}")
+    else:
+        for c, p in ok:
+            await msg.reply_photo(photo=p.read_bytes(),
+                                  caption=f"📸 {v.plate} {v.channel_label(c)} ahora · {when}")
+    if failed:
+        await msg.reply_text("⚠️ Sin imagen: " + "; ".join(failed))
     await status.delete()
 
 

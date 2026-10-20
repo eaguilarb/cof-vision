@@ -1,6 +1,7 @@
 """Recorte, compresión y extracción de fotos con ffmpeg."""
 
 import asyncio
+import signal
 import logging
 from pathlib import Path
 
@@ -73,22 +74,60 @@ async def record_live(url: str, dest: Path, seconds: int) -> Path:
     """Graba unos segundos del video en vivo (HTTP-FLV) y lo deja en MP4.
 
     El video se copia tal cual (sin recomprimir, es la calidad liviana); el audio de los
-    equipos (G.711/ADPCM) se pasa a AAC para que se reproduzca en cualquier teléfono."""
+    equipos (G.711/ADPCM) se pasa a AAC para que se reproduzca en cualquier teléfono.
+    Se corta por tiempo real (no solo por los tiempos del video, que en el en vivo de los
+    equipos pueden saltar y cortar el clip antes)."""
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
         "-rw_timeout", "20000000",  # 20 s sin datos → error
-        "-i", url, "-t", str(seconds),
+        # Análisis corto del flujo: por defecto ffmpeg espera ~5 s antes de empezar
+        "-probesize", "65536", "-analyzeduration", "1500000",
+        "-fflags", "+genpts", "-i", url, "-t", str(seconds * 3),
         "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k",
         "-movflags", "+faststart", str(dest),
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE)
+
+    async def stop_after_real_time() -> None:
+        # Espera a que empiece a llegar video y luego cuenta los segundos pedidos
+        for _ in range(40):
+            if dest.exists() and dest.stat().st_size > 0 or proc.returncode is not None:
+                break
+            await asyncio.sleep(0.5)
+        await asyncio.sleep(seconds)
+        if proc.returncode is None:
+            proc.send_signal(signal.SIGINT)  # ffmpeg cierra el MP4 ordenadamente
+
+    stopper = asyncio.create_task(stop_after_real_time())
     try:
-        _, err = await asyncio.wait_for(proc.communicate(), timeout=seconds + 60)
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=seconds + 70)
     except asyncio.TimeoutError:
         proc.kill()
         raise FFmpegError("El bus no envió video en vivo a tiempo (¿sin señal?).")
-    if proc.returncode != 0 or not dest.exists() or dest.stat().st_size < 1024:
+    finally:
+        stopper.cancel()
+    # Cortado por nosotros (SIGINT) ffmpeg termina con código 255: es normal
+    if proc.returncode not in (0, 255) or not dest.exists() or dest.stat().st_size < 1024:
         msg = err.decode(errors="replace").strip()[-300:]
         raise FFmpegError(f"No llegó video en vivo. {msg}".strip())
+    return dest
+
+
+async def snapshot_live(url: str, dest: Path) -> Path:
+    """Foto del momento actual: toma el primer cuadro completo (clave) del video en vivo."""
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-rw_timeout", "15000000", "-probesize", "65536", "-analyzeduration", "1500000",
+        "-skip_frame", "nokey", "-i", url,
+        "-frames:v", "1", "-q:v", "2", str(dest),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=40)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise FFmpegError("El bus no envió imagen a tiempo (¿sin señal?).")
+    if proc.returncode != 0 or not dest.exists() or dest.stat().st_size < 1024:
+        raise FFmpegError("No llegó imagen en vivo. " + err.decode(errors="replace").strip()[-200:])
     return dest
 
 

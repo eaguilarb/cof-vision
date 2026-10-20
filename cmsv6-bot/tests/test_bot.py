@@ -467,8 +467,19 @@ async def test_live_clip_and_proxy(tmp_path, monkeypatch):
                     "-f", "mpegts", str(seg)], check=True)
 
     async def flv_h(r):
+        # Se envía a velocidad de «en vivo» (8 s de video en ~8 s)
         assert r.query["jsession"] == "J" and r.query["DevIDNO"] == "D1"
-        return web.FileResponse(flv)
+        resp = web.StreamResponse(headers={"Content-Type": "video/x-flv"})
+        await resp.prepare(r)
+        data = flv.read_bytes()
+        step = max(1, len(data) // 80)
+        try:
+            for i in range(0, len(data), step):
+                await resp.write(data[i:i + step])
+                await asyncio.sleep(0.1)
+        except (ConnectionResetError, Exception):
+            pass
+        return resp
 
     async def m3u8_h(r):
         assert r.query["jsession"] == "J"
@@ -493,7 +504,8 @@ async def test_live_clip_and_proxy(tmp_path, monkeypatch):
     cms = CMSV6("http://127.0.0.1:8088", "u", "p", media_url=base)
     cms.jsession = "J"
     out = await video.record_live(cms.live_flv_url(base, "D1", 0), tmp_path / "v.mp4", 4)
-    assert 3 <= await video.probe_duration(out) <= 5.5
+    # Al menos los segundos pedidos (puede traer un poco más del arranque)
+    assert 3.5 <= await video.probe_duration(out) <= 7.5
 
     # Proxy: el navegador nunca ve la sesión
     from app import links
@@ -524,3 +536,14 @@ async def test_live_clip_and_proxy(tmp_path, monkeypatch):
         assert (await http.get(bad)).status == 403
     await r2.cleanup()
     await r1.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_snapshot_live(tmp_path):
+    src = tmp_path / "live.flv"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=640x360:rate=15:duration=4", "-c:v", "libx264", "-preset",
+                    "ultrafast", "-f", "flv", str(src)], check=True)
+    out = await video.snapshot_live(str(src), tmp_path / "f.jpg")
+    assert out.stat().st_size > 1024
+
