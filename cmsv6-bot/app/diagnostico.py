@@ -35,7 +35,13 @@ async def run() -> int:
             print("    (ninguno) Respuesta cruda:", json.dumps(raw)[:800])
             return 1
 
-        v = await cms.find_vehicle(sys.argv[1]) if len(sys.argv) > 1 else vs[0]
+        if len(sys.argv) > 1:
+            v = await cms.find_vehicle(sys.argv[1])
+        else:
+            # Sin placa: elige un bus en línea, para poder leer su grabador
+            online = await cms.online_devices()
+            print(f"    {len(vs)} vehículos, {len(online)} en línea ahora")
+            v = next((x for x in vs if x.dev_id in online), vs[0])
         day = parse_date(sys.argv[2]) if len(sys.argv) > 2 else today()
         paso(3, f"Buscando grabaciones de {v.plate} el {day:%d/%m/%Y}")
         found = None

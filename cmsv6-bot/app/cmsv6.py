@@ -129,6 +129,9 @@ class CMSV6:
             if attempt == 1 and result == 5:
                 await self.login(force=True)
                 continue
+            if result == 32:
+                raise CMSV6Error("El vehículo no está en línea (apagado o sin señal), así que no se "
+                                 "puede consultar su grabador. Intenta cuando esté encendido.")
             raise CMSV6Error(f"{action} devolvió result={result}: {data.get('message', '')}")
         raise AssertionError("unreachable")
 
@@ -146,6 +149,11 @@ class CMSV6:
                                    channel_names=names, company=str(v.get("pnm") or "")))
         self._vehicles = (time.monotonic(), out)
         return out
+
+    async def online_devices(self) -> set[str]:
+        """Números de equipo de todos los vehículos de la cuenta que están en línea ahora."""
+        data = await self.call("StandardApiAction_getDeviceOlStatus.action", {"status": 1})
+        return {str(o.get("did")) for o in data.get("onlines") or [] if o.get("online") == 1}
 
     async def online_status(self, dev_ids: list[str]) -> dict[str, bool]:
         if not dev_ids:
