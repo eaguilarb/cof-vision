@@ -1,0 +1,49 @@
+"""Configuración leída de variables de entorno (archivo .env)."""
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def _list(name: str) -> list[str]:
+    raw = os.environ.get(name, "")
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+@dataclass(frozen=True)
+class Config:
+    telegram_token: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    # URL del servidor local de Telegram Bot API (vacío = usar la nube de Telegram, límite 50 MB)
+    bot_api_url: str = os.environ.get("BOT_API_URL", "").rstrip("/")
+    allowed_users: list[int] = field(
+        default_factory=lambda: [int(x) for x in _list("ALLOWED_USERS")]
+    )
+
+    cmsv6_url: str = os.environ.get("CMSV6_URL", "http://47.88.25.163:8080").rstrip("/")
+    cmsv6_user: str = os.environ.get("CMSV6_USER", "")
+    cmsv6_password: str = os.environ.get("CMSV6_PASSWORD", "")
+    # Dónde buscar grabaciones, en orden: 2 = servidor de almacenamiento, 1 = equipo (MDVR), 4 = servidor de descarga
+    search_locations: list[int] = field(
+        default_factory=lambda: [int(x) for x in _list("CMSV6_LOCATIONS") or ["2", "1"]]
+    )
+
+    data_dir: Path = Path(os.environ.get("DATA_DIR", "/data"))
+    public_url: str = os.environ.get("PUBLIC_URL", "").rstrip("/")
+    link_secret: str = os.environ.get("LINK_SECRET", "")
+    link_hours: int = int(os.environ.get("LINK_HOURS", "48"))
+    http_port: int = int(os.environ.get("HTTP_PORT", "8088"))
+
+    # Compresión: CRF más alto = archivo más liviano (23 alta calidad, 28 equilibrado, 32 muy liviano)
+    video_crf: int = int(os.environ.get("VIDEO_CRF", "28"))
+    video_max_height: int = int(os.environ.get("VIDEO_MAX_HEIGHT", "720"))
+    video_preset: str = os.environ.get("VIDEO_PRESET", "veryfast")
+    max_clip_minutes: int = int(os.environ.get("MAX_CLIP_MINUTES", "30"))
+    max_parallel_jobs: int = int(os.environ.get("MAX_PARALLEL_JOBS", "2"))
+
+    @property
+    def telegram_max_mb(self) -> int:
+        # Servidor local: 2000 MB; nube de Telegram: 50 MB
+        return 1900 if self.bot_api_url else 49
+
+
+config = Config()
