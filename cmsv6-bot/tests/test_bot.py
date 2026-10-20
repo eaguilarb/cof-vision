@@ -445,3 +445,82 @@ async def test_segment_task_already_exists(monkeypatch, tmp_path):
     v = m.Vehicle("SPBF25", "D", 5, [])
     path, beg = await cms.segment_download(v, f, date(2026, 10, 20), 41400, 41520, tmp_path / "s")
     assert beg == 41400 and "jsession=J" in got["url"]
+
+
+def test_task_pct():
+    from app.cmsv6 import _task_pct
+    assert _task_pct({"stu": 2}) is None
+    assert _task_pct({"percent": 40}) == 40
+    assert _task_pct({"len": 200, "dlen": 50}) == 25
+
+
+@pytest.mark.asyncio
+async def test_live_clip_and_proxy(tmp_path, monkeypatch):
+    import socket
+    # Fuente en vivo simulada: FLV por HTTP y una lista HLS con 2 segmentos
+    flv = tmp_path / "live.flv"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=640x360:rate=15:duration=8", "-c:v", "libx264", "-preset",
+                    "ultrafast", "-f", "flv", str(flv)], check=True)
+    seg = tmp_path / "seg0.ts"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(flv), "-t", "2", "-c", "copy",
+                    "-f", "mpegts", str(seg)], check=True)
+
+    async def flv_h(r):
+        assert r.query["jsession"] == "J" and r.query["DevIDNO"] == "D1"
+        return web.FileResponse(flv)
+
+    async def m3u8_h(r):
+        assert r.query["jsession"] == "J"
+        return web.Response(text="#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nseg0.ts\n",
+                            content_type="application/vnd.apple.mpegurl")
+
+    async def ts_h(r):
+        assert r.query.get("jsession") == "J"
+        return web.FileResponse(seg, headers={"Content-Type": "video/mp2t"})
+
+    up = web.Application()
+    up.router.add_get("/3/3", flv_h)
+    up.router.add_get("/hls/1_D1_0_1.m3u8", m3u8_h)
+    up.router.add_get("/hls/seg0.ts", ts_h)
+    r1 = web.AppRunner(up)
+    await r1.setup()
+    s1 = web.TCPSite(r1, "127.0.0.1", 0)
+    await s1.start()
+    port = s1._server.sockets[0].getsockname()[1]
+    base = f"http://127.0.0.1:{port}"
+
+    cms = CMSV6("http://127.0.0.1:8088", "u", "p", media_url=base)
+    cms.jsession = "J"
+    out = await video.record_live(cms.live_flv_url(base, "D1", 0), tmp_path / "v.mp4", 4)
+    assert 3 <= await video.probe_duration(out) <= 5.5
+
+    # Proxy: el navegador nunca ve la sesión
+    from app import links
+    with socket.socket() as sk:
+        sk.bind(("127.0.0.1", 0))
+        free = sk.getsockname()[1]
+    object.__setattr__(links.config, "http_port", free)
+    object.__setattr__(links.config, "public_url", f"http://127.0.0.1:{free}")
+    object.__setattr__(links.config, "link_secret", "s")
+
+    async def source(dev, chn):
+        return cms.live_hls_url(base, dev, chn)
+    links.set_live_source(source)
+    r2 = await links.start_server()
+    link = links.make_live_link("D1", "SPBS42", [0])
+    import aiohttp
+    async with aiohttp.ClientSession() as http:
+        page = await (await http.get(link)).text()
+        assert "SPBS42" in page and "0.m3u8" in page and "J" not in page.split("<script")[0]
+        root = link.split("?")[0]
+        pl = await (await http.get(root + "0.m3u8")).text()
+        assert "jsession" not in pl and "p?c=0&u=" in pl
+        seg_url = root + [l for l in pl.splitlines() if l.startswith("p?")][0]
+        rs = await http.get(seg_url)
+        assert rs.status == 200 and len(await rs.read()) == seg.stat().st_size
+        # Enlace alterado → prohibido
+        bad = link.replace("/D1/", "/D2/")
+        assert (await http.get(bad)).status == 403
+    await r2.cleanup()
+    await r1.cleanup()

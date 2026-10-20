@@ -7,7 +7,7 @@ import logging
 import re
 import time
 import urllib.request
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from telegram import Message, Update
@@ -18,14 +18,14 @@ from . import links, video
 from .cmsv6 import CMSV6, CMSV6Error, LOC_NAMES, RecFile, Vehicle
 from .config import config
 from .parsing import (ParseError, fmt_hms, parse_channels, parse_date, parse_time,
-                      seconds_of_day, today)
+                      TZ, seconds_of_day, today)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("bot")
 
 cms = CMSV6(config.cmsv6_url, config.cmsv6_user, config.cmsv6_password,
-            config.data_dir / ".jsession")
+            config.data_dir / ".jsession", config.cmsv6_media_url)
 # Limita solo el trabajo de CPU (ffmpeg); las descargas desde los buses van todas en paralelo
 cpu = asyncio.Semaphore(config.max_parallel_jobs)
 WORK_HOURS = 6  # cuánto se guardan las grabaciones originales descargadas (caché)
@@ -34,6 +34,7 @@ AYUDA = """\
 <b>Comandos</b>
 
 /enlinea [<i>texto</i>] — buses encendidos ahora (ej. /enlinea SPB)
+/vivo <i>placa</i> [<i>cámaras</i>] [<i>segundos</i>] [juntas] — en vivo: enlace + clip corto
 /vehiculos <i>texto</i> — busca vehículos (ej. /vehiculos SVD), cámaras y si están en línea
 /grabaciones <i>placa</i> [<i>fecha</i>] — qué horas hay grabadas
 /video <i>placa canal fecha inicio fin</i> [juntas] [rapido] — clip comprimido
@@ -48,6 +49,7 @@ AYUDA = """\
 <code>/video ABC123 2 19/10 22:15 22:20</code>
 <code>/foto ABC123 todos hoy 14:05:30</code>
 <code>/grabaciones ABC123 ayer</code>
+<code>/vivo ABC123 1,3 20 juntas</code>
 
 Fecha: hoy, ayer, 19/10 o 19/10/2026. Canal: 1, 2, 1,3 o todos.
 Con varias cámaras: sin nada al final llegan separadas; con «juntas», en mosaico.
@@ -151,6 +153,83 @@ async def cmd_enlinea(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.effective_message.reply_text(head, parse_mode=ParseMode.HTML)
         return
     await _send_long(update.effective_message, head + "\n\n" + _esc(", ".join(on)))
+
+
+@authorized
+async def cmd_vivo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Video en vivo: enlace para mirar en el navegador + un clip corto en el chat."""
+    args, together, _ = _split_mode(list(ctx.args))
+    if not args:
+        raise ParseError("Uso: /vivo placa [cámaras] [segundos] [juntas]\n"
+                         "Ejemplo: /vivo SPBS42 1,3 20")
+    v = await cms.find_vehicle(args[0])
+    chans = parse_channels(args[1] if len(args) > 1 else "1", v.channels)
+    seconds = config.live_seconds
+    if len(args) > 2:
+        if not args[2].rstrip("s").isdigit():
+            raise ParseError("Los segundos deben ser un número, por ejemplo: /vivo SPBS42 1 20")
+        seconds = max(5, min(60, int(args[2].rstrip("s"))))
+    msg = update.effective_message
+    online = await cms.online_status([v.dev_id])
+    if online and not online.get(v.dev_id):
+        raise CMSV6Error(f"{v.plate} no está en línea (apagado o sin señal).")
+    if not cms.jsession:
+        await cms.login()
+
+    link = links.make_live_link(v.dev_id, v.plate, chans)
+    cams_txt = ", ".join(str(c + 1) for c in chans)
+    if link:
+        await msg.reply_text(
+            f"🔴 <b>{_esc(v.plate)}</b> en vivo · cámaras {cams_txt}\n"
+            f'<a href="{link}">▶️ Ver en vivo</a> (vale {config.live_link_minutes // 60} h; '
+            "puede tardar unos segundos en conectar con el bus)",
+            parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    status = await msg.reply_text(f"⏺ Grabando {seconds} s en vivo de {v.plate}…")
+
+    async def one(chn: int) -> tuple[int, Path | None, str]:
+        out = links.files_dir() / _name(v, chn, today(), seconds_of_day(
+            datetime.now(TZ).time()), None, "_vivo.mp4")
+        last = ""
+        for base in cms.media_bases():
+            try:
+                await video.record_live(cms.live_flv_url(base, v.dev_id, chn), out, seconds)
+                cms.media_url = cms.media_url or base  # este servidor de video funciona
+                out.chmod(0o644)
+                return chn, out, ""
+            except video.FFmpegError as e:
+                last = str(e)
+        return chn, None, f"{v.channel_label(chn)}: {last}"
+
+    results = await asyncio.gather(*(one(c) for c in chans))
+    ok = [(c, p) for c, p, _ in results if p]
+    failed = [e for _, p, e in results if not p]
+    if not ok:
+        await status.edit_text("⚠️ No llegó video en vivo.\n" + "\n".join(failed))
+        return
+    when = datetime.now(TZ).strftime("%d/%m/%Y %H:%M:%S")
+    if together and len(ok) > 1:
+        out = links.files_dir() / _name(v, -1, today(), seconds_of_day(datetime.now(TZ).time()),
+                                         None, "_vivo.mp4", "camaras" + "-".join(
+                                             str(c + 1) for c, _ in ok))
+        async with cpu:
+            await video.mosaic([p for _, p in ok], out)
+        out.chmod(0o644)
+        caption = f"🔴 {v.plate} en vivo · cámaras {', '.join(str(c + 1) for c, _ in ok)} · {when}"
+        if failed:
+            caption += "\n⚠️ Sin video: " + "; ".join(failed)
+        await deliver(msg, status, out, caption)
+        return
+    for i, (c, p) in enumerate(ok):
+        st = status if i == 0 else await msg.reply_text("📤 Enviando…")
+        await deliver(msg, st, p, f"🔴 {v.plate} {v.channel_label(c)} en vivo · {when}")
+    if failed:
+        await msg.reply_text("⚠️ Sin video: " + "; ".join(failed))
+
+
+async def _live_source(dev_id: str, chn: int) -> str:
+    if not cms.jsession:
+        await cms.login()
+    return cms.live_hls_url(cms.media_bases()[0], dev_id, chn)
 
 
 @authorized
@@ -437,14 +516,20 @@ async def fetch(v: Vehicle, rec: RecFile, chn: int, day: date, start: int, stop:
                             f"{state}…")
 
     async def dl_progress(done: int, total: int, speed: float) -> None:
-        pct = f" {done * 100 // total}%" if total else ""
+        if total and done < total:
+            left = (total - done) / speed if speed else 0
+            pct = (f" {done * 100 // total}% (faltan {100 - done * 100 // total}%"
+                   f"{f', ~{int(left) // 60}:{int(left) % 60:02d}' if left else ''})")
+        else:
+            pct = ""
         await _edit(status, f"⬇️ {prefix}Bajando grabación{pct}: {done / 1e6:.0f}"
                             f"{f'/{total / 1e6:.0f}' if total else ''} MB a {speed * 8 / 1e6:.1f} Mbps…")
 
     async def by_segment(stall: int | None) -> tuple[Path, int, int, str]:
         await seg_progress("enviando solicitud")
         path, beg = await cms.segment_download(v, rec, day, start, stop, seg_dest,
-                                               seg_progress, stall_s=stall)
+                                               seg_progress, stall_s=stall,
+                                               dl_progress=dl_progress)
         return path, beg, 0, "tramos"
 
     async def direct() -> tuple[Path, int, int, str]:
@@ -558,6 +643,7 @@ def _logout_from_cloud() -> None:
 
 
 async def post_init(app: Application) -> None:
+    links.set_live_source(_live_source)
     _busy_flag().unlink(missing_ok=True)  # restos de un reinicio anterior
     app.bot_data["http"] = await links.start_server()
     app.bot_data["cleanup"] = asyncio.create_task(_cleanup_loop())
@@ -594,6 +680,7 @@ def main() -> None:
     app.add_handler(CommandHandler("vehiculos", cmd_vehiculos))
     app.add_handler(CommandHandler("grabaciones", cmd_grabaciones))
     app.add_handler(CommandHandler(["enlinea", "en_linea"], cmd_enlinea))
+    app.add_handler(CommandHandler(["vivo", "envivo"], cmd_vivo))
     app.add_handler(CommandHandler("video", cmd_video))
     app.add_handler(CommandHandler("foto", cmd_foto))
     log.info("Bot iniciado (Bot API: %s)", config.bot_api_url or "nube de Telegram")

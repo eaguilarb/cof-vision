@@ -16,6 +16,8 @@ Corre en el VPS (Ubuntu 24.04) con Docker.
 
 | Comando | Qué hace |
 |---|---|
+| `/vivo SPBS42` | En vivo, cámara 1: enlace para mirar en el navegador + clip de 15 s en el chat |
+| `/vivo SPBS42 1,3 20 juntas` | En vivo cámaras 1 y 3, clip de 20 s en una sola pantalla |
 | `/enlinea` o `/enlinea SPB` | Buses encendidos ahora (todos o filtrados por placa) |
 | `/vehiculos SVD` | Busca vehículos por parte de la placa, con cámaras y estado en línea |
 | `/grabaciones ABC123 ayer` | Muestra las horas grabadas por cámara |

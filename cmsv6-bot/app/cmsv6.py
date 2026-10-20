@@ -62,8 +62,11 @@ class RecFile:
 
 class CMSV6:
     def __init__(self, base_url: str, account: str, password: str,
-                 session_file: Path | None = None):
+                 session_file: Path | None = None, media_url: str = ""):
         self.base_url = base_url.rstrip("/")
+        # Servidor de video (en vivo / reproducción). Si no se configura, se aprende de las
+        # URLs de reproducción que entrega la búsqueda de grabaciones.
+        self.media_url = media_url.rstrip("/")
         # La sesión se guarda en disco: con «inicio de sesión único» activado, CMSV7 rechaza
         # un segundo login (código 34) mientras la sesión anterior siga viva, p. ej. tras reiniciar.
         self.session_file = session_file
@@ -208,6 +211,11 @@ class CMSV6:
             if f_end <= f_beg:
                 f_end = 86400
             chns = _file_channels(f)
+            if not self.media_url and f.get("PlaybackUrl"):
+                base, _ = self._fix_url(str(f["PlaybackUrl"]))
+                parts = urlsplit(base)
+                self.media_url = f"{parts.scheme}://{parts.netloc}"
+                log.info("Servidor de video de CMSV7: %s", self.media_url)
             files.append(RecFile(
                 dev_id=dev_id,
                 chn=chns[0], chns=tuple(chns),
@@ -240,6 +248,24 @@ class CMSV6:
             raise last_err
         return []
 
+    def media_bases(self) -> list[str]:
+        """Direcciones posibles del servidor de video, de la más probable a la menos."""
+        bases = [self.media_url] if self.media_url else []
+        for port in (6604, 6603):
+            b = f"http://{self.host}:{port}"
+            if b not in bases:
+                bases.append(b)
+        return bases
+
+    def live_flv_url(self, base: str, dev_id: str, chn: int, stream: int = 1) -> str:
+        """Video en vivo HTTP-FLV (stream 1 = calidad secundaria, más liviana para 4G)."""
+        return f"{base}/3/3?" + urlencode({"AVType": 1, "jsession": self.jsession or "",
+                                           "DevIDNO": dev_id, "Channel": chn, "Stream": stream})
+
+    def live_hls_url(self, base: str, dev_id: str, chn: int, stream: int = 1) -> str:
+        return f"{base}/hls/1_{dev_id}_{chn}_{stream}.m3u8?" + urlencode(
+            {"jsession": self.jsession or ""})
+
     def _fix_url(self, url: str) -> tuple[str, dict]:
         """Separa la URL y, si apunta a una IP interna del servidor, la cambia por la pública."""
         url = url.strip()
@@ -269,7 +295,7 @@ class CMSV6:
 
     async def segment_download(self, v: Vehicle, f: RecFile, day: date, start: int, stop: int,
                                dest: Path, progress=None, timeout_s: int = 1200,
-                               stall_s: int | None = None) -> tuple[Path, int]:
+                               stall_s: int | None = None, dl_progress=None) -> tuple[Path, int]:
         """Pide a CMSV6 que baje del equipo solo el tramo [start, stop] y luego lo descarga.
 
         Si ya hay una tarea del mismo tramo (de un pedido anterior, terminada o en curso), se
@@ -318,6 +344,7 @@ class CMSV6:
         deadline = started + timeout_s
         info: dict = existing or {}
         first = True
+        logged = False
         while info.get("stu") != 4 and time.monotonic() < deadline:
             if not first:
                 await asyncio.sleep(3)
@@ -326,9 +353,16 @@ class CMSV6:
             info = (_own_task(infos, own[1]) if own[0] == "lab"
                     else next((i for i in infos if i.get("id") == own[1]), {}))
             stu = info.get("stu")
+            if stu == 2 and not logged:
+                logged = True
+                log.info("Tarea en curso (campos de CMSV7): %s", info)
             if progress:
-                await progress({1: "en espera", 2: "descargando del vehículo",
-                                4: "listo"}.get(stu, "en espera"))
+                pct = _task_pct(info)
+                el = int(time.monotonic() - started)
+                await progress({1: "en espera del bus", 2: "el bus está enviando",
+                                4: "listo"}.get(stu, "en espera del bus")
+                               + (f" {pct}%" if pct is not None else "")
+                               + f" · {el // 60}:{el % 60:02d}")
             if stu == 3:
                 log.warning("Tarea %s fallida: %s", own[1], info)
                 raise CMSV6Error(f"El vehículo no pudo enviar el video: {info.get('err') or 'sin detalle'}")
@@ -352,7 +386,8 @@ class CMSV6:
             q["jsession"] = self.jsession or ""
             if not q.get("SAVENAME"):
                 q["SAVENAME"] = tag + ".mp4"
-            await self._download_url(f"{base}?{urlencode(q)}", dest)
+            await self._download_url(f"{base}?{urlencode(q)}", dest, dl_progress,
+                                     int(info.get("len") or 0))
             return dest, task_beg
         # Sin enlace en la tarea: el archivo ya está en el servidor de almacenamiento
         for rec in await self.search(v, day, chn=f.chn, loc=2):
@@ -418,6 +453,28 @@ def _pick_stream(files: list[RecFile], prefer_sub: bool) -> list[RecFile]:
             continue
         kept.append(f)
     return kept
+
+
+def _task_pct(info: dict) -> int | None:
+    """Avance de una tarea de descarga, si CMSV7 lo informa (el campo cambia según versión)."""
+    for k in ("percent", "per", "progress", "pct", "rate", "downRate"):
+        try:
+            v = float(info[k])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= v <= 1 and k in ("rate", "downRate") and isinstance(info[k], float):
+            v *= 100
+        if 0 <= v <= 100:
+            return int(v)
+    total = info.get("len") or 0
+    for k in ("dlen", "downLen", "curLen", "curlen", "downSize", "dsize"):
+        try:
+            done = float(info[k])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if total:
+            return max(0, min(100, int(done * 100 / float(total))))
+    return None
 
 
 def _task_sec(info: dict, field: str, midnight: datetime) -> int:

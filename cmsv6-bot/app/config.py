@@ -27,6 +27,11 @@ class Config:
         default_factory=lambda: [int(x) for x in _list("CMSV6_LOCATIONS") or ["2", "1"]]
     )
 
+    # Servidor de video en vivo de CMSV7 (vacío = se detecta solo a partir de las grabaciones)
+    cmsv6_media_url: str = os.environ.get("CMSV6_MEDIA_URL", "").rstrip("/")
+    live_seconds: int = int(os.environ.get("LIVE_SECONDS", "15"))
+    live_link_minutes: int = int(os.environ.get("LIVE_LINK_MINUTES", "120"))
+
     data_dir: Path = Path(os.environ.get("DATA_DIR", "/data"))
     public_url: str = os.environ.get("PUBLIC_URL", "").rstrip("/")
     link_secret: str = os.environ.get("LINK_SECRET", "")

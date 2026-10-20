@@ -69,6 +69,29 @@ async def extract_frame(src: Path, dest: Path, offset: float, stream: int = 0) -
     return dest
 
 
+async def record_live(url: str, dest: Path, seconds: int) -> Path:
+    """Graba unos segundos del video en vivo (HTTP-FLV) y lo deja en MP4.
+
+    El video se copia tal cual (sin recomprimir, es la calidad liviana); el audio de los
+    equipos (G.711/ADPCM) se pasa a AAC para que se reproduzca en cualquier teléfono."""
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-rw_timeout", "20000000",  # 20 s sin datos → error
+        "-i", url, "-t", str(seconds),
+        "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac", "-b:a", "64k",
+        "-movflags", "+faststart", str(dest),
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=seconds + 60)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise FFmpegError("El bus no envió video en vivo a tiempo (¿sin señal?).")
+    if proc.returncode != 0 or not dest.exists() or dest.stat().st_size < 1024:
+        msg = err.decode(errors="replace").strip()[-300:]
+        raise FFmpegError(f"No llegó video en vivo. {msg}".strip())
+    return dest
+
+
 TILE_W, TILE_H = 640, 360
 
 
