@@ -55,6 +55,26 @@ Con varias cámaras: sin nada al final llegan separadas; con «juntas», en mosa
 Máximo {max} minutos por video."""
 
 
+_busy = 0
+
+
+def _busy_flag() -> Path:
+    # Mientras haya pedidos en curso existe este archivo; autoupdate.sh no reinicia el bot
+    return config.data_dir / ".ocupado"
+
+
+def _set_busy(delta: int) -> None:
+    global _busy
+    _busy += delta
+    try:
+        if _busy > 0:
+            _busy_flag().write_text(str(_busy))
+        else:
+            _busy_flag().unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def authorized(handler):
     @functools.wraps(handler)
     async def wrapper(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -66,6 +86,7 @@ def authorized(handler):
                     "No tienes permiso para usar este bot. Envía /miid y pásale tu ID "
                     "al administrador para que te agregue.")
             return
+        _set_busy(+1)
         try:
             await handler(update, ctx)
         except (ParseError, CMSV6Error, video.FFmpegError) as e:
@@ -73,6 +94,8 @@ def authorized(handler):
         except Exception:
             log.exception("Error inesperado")
             await update.effective_message.reply_text("⚠️ Ocurrió un error inesperado. Revisa los logs.")
+        finally:
+            _set_busy(-1)
     return wrapper
 
 
@@ -535,6 +558,7 @@ def _logout_from_cloud() -> None:
 
 
 async def post_init(app: Application) -> None:
+    _busy_flag().unlink(missing_ok=True)  # restos de un reinicio anterior
     app.bot_data["http"] = await links.start_server()
     app.bot_data["cleanup"] = asyncio.create_task(_cleanup_loop())
     try:

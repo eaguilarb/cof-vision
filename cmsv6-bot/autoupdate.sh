@@ -26,6 +26,13 @@ g fetch -q origin
 if [ "$(g rev-parse HEAD)" = "$(g rev-parse '@{u}')" ]; then
   exit 0
 fi
+# No reiniciar mientras el bot prepara videos (se reintenta en la próxima revisión).
+# Si el aviso tiene más de 40 minutos, se asume que quedó colgado y se actualiza igual.
+BUSY="$DIR/data/.ocupado"
+if [ -f "$BUSY" ] && [ -n "$(find "$BUSY" -mmin -40)" ]; then
+  echo "$(date '+%F %T') hay pedidos en curso; se actualizará después"
+  exit 0
+fi
 g merge -q --ff-only '@{u}'
 docker compose up -d --build --remove-orphans
 docker image prune -f >/dev/null

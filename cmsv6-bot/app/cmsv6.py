@@ -19,7 +19,9 @@ LOC_NAMES = {1: "equipo", 2: "servidor de almacenamiento", 4: "servidor de desca
 
 
 class CMSV6Error(RuntimeError):
-    pass
+    def __init__(self, msg: str, code: int | None = None):
+        super().__init__(msg)
+        self.code = code  # código «result» de CMSV7, si lo hay
 
 
 @dataclass
@@ -133,7 +135,7 @@ class CMSV6:
             if result == 32:
                 raise CMSV6Error("El vehículo no está en línea (apagado o sin señal), así que no se "
                                  "puede consultar su grabador. Intenta cuando esté encendido.")
-            raise CMSV6Error(f"{action} devolvió result={result}: {data.get('message', '')}")
+            raise CMSV6Error(f"{action} devolvió result={result}: {data.get('message', '')}", result)
         raise AssertionError("unreachable")
 
     async def vehicles(self) -> list[Vehicle]:
@@ -270,41 +272,69 @@ class CMSV6:
                                stall_s: int | None = None) -> tuple[Path, int]:
         """Pide a CMSV6 que baje del equipo solo el tramo [start, stop] y luego lo descarga.
 
-        Devuelve el archivo y el segundo del día en que empieza."""
+        Si ya hay una tarea del mismo tramo (de un pedido anterior, terminada o en curso), se
+        reutiliza en vez de pedirla otra vez al bus. Devuelve el archivo y el segundo del día
+        en que empieza."""
         if not f.task_url:
             raise CMSV6Error("CMSV6 no ofrece descarga por tramos para este archivo.")
         a, b = max(start, f.beg), min(stop, f.end)
         midnight = datetime(day.year, day.month, day.day)
         fmt = lambda sec: (midnight + timedelta(seconds=sec)).strftime("%Y-%m-%d %H:%M:%S")
+        day_range = {"devIdno": f.dev_id, "begintime": fmt(0), "endtime": fmt(86399 + 86400)}
+
+        async def task_list() -> list[dict]:
+            data = await self.call("StandardApiAction_downloadTasklist.action", day_range)
+            return data.get("infos") or []
+
         tag = "bot" + secrets.token_hex(4)
-        _, query = self._fix_url(f.task_url)
-        query.pop("jsession", None)
-        query.update({"fbtm": fmt(a), "fetm": fmt(b), "lab": tag, "dtp": 2})
-        query.setdefault("sbtm", fmt(f.beg))
-        query.setdefault("setm", fmt(f.end))
-        await self.call("StandardApiAction_addDownloadTask.action", query)
-        log.info("Tarea de descarga por tramos %s creada (%s – %s)", tag, fmt(a), fmt(b))
+        own = None  # (campo, valor) que identifica nuestra tarea en la lista
+        task_beg = a
+        existing = _matching_task(await task_list(), f, midnight, a, b)
+        if existing:
+            own = ("id", existing.get("id"))
+            task_beg = _task_sec(existing, "fbtm", midnight)
+            log.info("Se reutiliza la tarea %s (estado %s)", existing.get("id"), existing.get("stu"))
+        else:
+            _, query = self._fix_url(f.task_url)
+            query.pop("jsession", None)
+            query.update({"fbtm": fmt(a), "fetm": fmt(b), "lab": tag, "dtp": 2})
+            query.setdefault("sbtm", fmt(f.beg))
+            query.setdefault("setm", fmt(f.end))
+            try:
+                await self.call("StandardApiAction_addDownloadTask.action", query)
+                own = ("lab", tag)
+                log.info("Tarea de descarga por tramos %s creada (%s – %s)", tag, fmt(a), fmt(b))
+            except CMSV6Error as e:
+                if e.code != 11:  # 11 = la tarea ya existe
+                    raise
+                existing = _matching_task(await task_list(), f, midnight, a, b, loose=True)
+                if not existing:
+                    raise CMSV6Error("Ya hay una descarga en curso de esa grabación en CMSV7. "
+                                     "Intenta de nuevo en unos minutos.") from e
+                own = ("id", existing.get("id"))
+                task_beg = _task_sec(existing, "fbtm", midnight)
 
         started = time.monotonic()
         deadline = started + timeout_s
-        info: dict = {}
-        while time.monotonic() < deadline:
-            await asyncio.sleep(3)
-            data = await self.call("StandardApiAction_downloadTasklist.action", {
-                "devIdno": f.dev_id, "taskTag": tag,
-                "begintime": fmt(0), "endtime": fmt(86399 + 86400)})
-            info = _own_task(data.get("infos") or [], tag)
+        info: dict = existing or {}
+        first = True
+        while info.get("stu") != 4 and time.monotonic() < deadline:
+            if not first:
+                await asyncio.sleep(3)
+            first = False
+            infos = await task_list()
+            info = (_own_task(infos, own[1]) if own[0] == "lab"
+                    else next((i for i in infos if i.get("id") == own[1]), {}))
             stu = info.get("stu")
             if progress:
                 await progress({1: "en espera", 2: "descargando del vehículo",
                                 4: "listo"}.get(stu, "en espera"))
             if stu == 3:
-                log.warning("Tarea %s fallida: %s", tag, info)
+                log.warning("Tarea %s fallida: %s", own[1], info)
                 raise CMSV6Error(f"El vehículo no pudo enviar el video: {info.get('err') or 'sin detalle'}")
-            if stu == 4:
-                break
             # stu 1 = en espera: el vehículo aún no empieza a enviar
-            if stall_s is not None and stu in (None, 1) and time.monotonic() - started > stall_s:
+            if (stall_s is not None and own[0] == "lab" and stu in (None, 1)
+                    and time.monotonic() - started > stall_s):
                 # Se cancela la tarea para que no compita por el 4G del bus con el plan B
                 try:
                     await self.call("StandardApiAction_delDownloadTasklist.action",
@@ -312,7 +342,7 @@ class CMSV6:
                 except CMSV6Error as e:
                     log.info("No se pudo cancelar la tarea %s: %s", tag, e)
                 raise CMSV6Error(f"El vehículo no empezó a enviar el tramo en {stall_s} s.")
-        else:
+        if info.get("stu") != 4:
             raise CMSV6Error("El vehículo tardó demasiado en enviar el video "
                              "(¿está apagado o sin señal?). La tarea sigue en CMSV6; intenta más tarde.")
 
@@ -323,7 +353,7 @@ class CMSV6:
             if not q.get("SAVENAME"):
                 q["SAVENAME"] = tag + ".mp4"
             await self._download_url(f"{base}?{urlencode(q)}", dest)
-            return dest, a
+            return dest, task_beg
         # Sin enlace en la tarea: el archivo ya está en el servidor de almacenamiento
         for rec in await self.search(v, day, chn=f.chn, loc=2):
             if rec.has_channel(f.chn) and rec.covers(a, b):
@@ -388,6 +418,52 @@ def _pick_stream(files: list[RecFile], prefer_sub: bool) -> list[RecFile]:
             continue
         kept.append(f)
     return kept
+
+
+def _task_sec(info: dict, field: str, midnight: datetime) -> int:
+    """Hora de una tarea (fbtm/fetm) en segundos desde la medianoche del día pedido.
+
+    CMSV7 la entrega como texto («fbtmStr») o como milisegundos desde 1970."""
+    txt = info.get(field + "Str")
+    if txt:
+        try:
+            return int((datetime.strptime(str(txt), "%Y-%m-%d %H:%M:%S") - midnight).total_seconds())
+        except ValueError:
+            pass
+    raw = info.get(field)
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        try:
+            return int((datetime.strptime(str(raw), "%Y-%m-%d %H:%M:%S") - midnight).total_seconds())
+        except ValueError:
+            return -1
+    if n > 10**11:
+        n //= 1000
+    if n > 10**8:
+        return int((datetime.fromtimestamp(n) - midnight).total_seconds())
+    return n
+
+
+def _matching_task(infos: list[dict], f: RecFile, midnight: datetime, a: int, b: int,
+                   loose: bool = False) -> dict | None:
+    """Tarea ya existente del mismo archivo y cámara que cubra [a, b] (o, con loose, que se
+    superponga). Se prefiere una ya terminada."""
+    name = os.path.basename(f.path.replace("\\", "/"))
+    found = []
+    for i in infos:
+        if i.get("stu") == 3 or int(i.get("chn", -1)) != f.chn:
+            continue
+        fph = os.path.basename(str(i.get("fph") or "").replace("\\", "/"))
+        if name and fph and fph != name:
+            continue
+        tb, te = _task_sec(i, "fbtm", midnight), _task_sec(i, "fetm", midnight)
+        if tb < 0 or te < 0:
+            continue
+        if (tb <= a + 1 and te >= b - 1) or (loose and tb < b and te > a):
+            found.append(i)
+    found.sort(key=lambda i: i.get("stu") != 4)
+    return found[0] if found else None
 
 
 def _own_task(infos: list[dict], tag: str) -> dict:

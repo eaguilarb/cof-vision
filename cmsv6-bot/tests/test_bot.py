@@ -9,7 +9,7 @@ import pytest
 from aiohttp import web
 
 from app import links, parsing, video
-from app.cmsv6 import CMSV6, RecFile, _file_channels
+from app.cmsv6 import CMSV6, CMSV6Error, RecFile, _file_channels
 
 
 def test_parse_date_and_time():
@@ -389,3 +389,59 @@ def test_own_task_ignores_other_tasks():
     assert _own_task(infos, "botabc")["stu"] == 2
     assert _own_task([{"lab": "otro", "stu": 3}], "botabc") == {}
     assert _own_task([{"stu": 4}], "botabc")["stu"] == 4
+
+
+def test_matching_task_reuse():
+    from datetime import datetime as dt
+    from app.cmsv6 import _matching_task, _task_sec
+    mid = dt(2026, 10, 20)
+    f = RecFile("D", 0, 41400, 41549, "/mnt/rec/x.264", 1, 1, "", task_url="t")
+    done = {"id": 7, "chn": 0, "stu": 4, "fph": "/mnt/rec/x.264",
+            "fbtmStr": "2026-10-20 11:30:00", "fetmStr": "2026-10-20 11:32:00"}
+    other_cam = dict(done, id=8, chn=2)
+    failed = dict(done, id=9, stu=3)
+    assert _task_sec(done, "fbtm", mid) == 41400
+    ms = int(dt(2026, 10, 20, 11, 30).timestamp() * 1000)
+    assert _task_sec({"fbtm": ms}, "fbtm", mid) == 41400
+    assert _matching_task([failed, other_cam, done], f, mid, 41400, 41520)["id"] == 7
+    assert _matching_task([done], f, mid, 41400, 41540) is None          # no cubre
+    assert _matching_task([done], f, mid, 41400, 41540, loose=True)["id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_segment_task_already_exists(monkeypatch, tmp_path):
+    """Código 11 (la tarea ya existe): se espera la existente en vez de fallar."""
+    cms = CMSV6("http://x:8088", "u", "p")
+    cms.jsession = "J"
+    f = RecFile("D", 0, 41400, 41549, "/r/x.264", 1, 1, "", task_url="http://x/add?did=D")
+    calls = {"list": 0}
+    task = {"id": 5, "chn": 0, "fph": "/r/x.264", "stu": 2,
+            "fbtmStr": "2026-10-20 11:30:00", "fetmStr": "2026-10-20 11:32:00",
+            "downUrl": "http://x:6611/3/5?FPATH=a&SAVENAME="}
+
+    async def call(action, params=None):
+        if "addDownloadTask" in action:
+            raise CMSV6Error("ya existe", 11)
+        if "downloadTasklist" in action:
+            calls["list"] += 1
+            # La primera consulta (antes de crear) aún no la muestra; luego aparece y termina
+            if calls["list"] == 1:
+                return {"infos": []}
+            return {"infos": [dict(task, stu=4 if calls["list"] > 2 else 2)]}
+        raise AssertionError(action)
+
+    got = {}
+
+    async def dl(url, dest, progress=None, total=0):
+        got["url"] = url
+        dest.write_bytes(b"x")
+        return dest
+
+    from app import cmsv6 as m
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(m.asyncio, "sleep", lambda s: real_sleep(0))
+    monkeypatch.setattr(cms, "call", call)
+    monkeypatch.setattr(cms, "_download_url", dl)
+    v = m.Vehicle("SPBF25", "D", 5, [])
+    path, beg = await cms.segment_download(v, f, date(2026, 10, 20), 41400, 41520, tmp_path / "s")
+    assert beg == 41400 and "jsession=J" in got["url"]
