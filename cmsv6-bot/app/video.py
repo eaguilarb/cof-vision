@@ -43,7 +43,7 @@ def _scale_filter() -> str:
 
 
 async def compress_piece(src: Path, dest: Path, offset: float, duration: float,
-                         stream: int = 0) -> Path:
+                         stream: int = 0, intermediate: bool = False) -> Path:
     """Recorta [offset, offset+duration] de src y lo comprime a MP4 H.264.
 
     stream: índice del video dentro del archivo (en archivos con varias cámaras)."""
@@ -53,7 +53,10 @@ async def compress_piece(src: Path, dest: Path, offset: float, duration: float,
         "-ss", f"{max(0.0, offset):.3f}", "-t", f"{duration:.3f}",
         "-map", f"0:v:{stream}", "-map", "0:a:0?",
         "-vf", _scale_filter(),
-        "-c:v", "libx264", "-preset", config.video_preset, "-crf", str(config.video_crf),
+        # Para el mosaico este archivo es intermedio (se vuelve a comprimir al unir):
+        # se hace muy rápido y con buena calidad para no gastar CPU dos veces
+        "-c:v", "libx264", "-preset", "ultrafast" if intermediate else config.video_preset,
+        "-crf", "20" if intermediate else str(config.video_crf),
         "-c:a", "aac", "-b:a", "64k", "-ac", "1",
         "-movflags", "+faststart",
         str(dest))
@@ -128,15 +131,17 @@ async def record_live(url: str, dest: Path, seconds: int) -> Path:
     return dest
 
 
-async def record_stream(url: str, dest: Path, wall_limit: int) -> tuple[Path, float]:
-    """Graba un flujo (p. ej. reproducción remota) hasta que termine o pasen wall_limit s.
-    Devuelve el archivo y los segundos reales que tardó."""
+async def record_stream(url: str, dest: Path, wall_limit: int,
+                        max_seconds: float | None = None) -> tuple[Path, float]:
+    """Graba un flujo (p. ej. reproducción remota) hasta que termine, llegue a max_seconds
+    de video o pasen wall_limit s. Devuelve el archivo y los segundos reales que tardó."""
     t0 = asyncio.get_running_loop().time()
+    limit = ["-t", f"{max_seconds:.3f}"] if max_seconds else []
     proc = await asyncio.create_subprocess_exec(
         "ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-rw_timeout", "20000000",
         "-probesize", "65536", "-analyzeduration", "1500000", "-fflags", "+genpts",
-        "-i", url, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac",
-        "-movflags", "+faststart", str(dest),
+        "-i", url, *limit, "-map", "0:v:0", "-map", "0:a:0?", "-c:v", "copy", "-c:a", "aac",
+        "-f", "matroska", str(dest),
         stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE)
     try:

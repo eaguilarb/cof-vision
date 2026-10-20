@@ -444,7 +444,7 @@ class CMSV6:
                 total = total or int(r.headers.get("Content-Length") or 0)
                 done, t0, last = 0, time.monotonic(), 0.0
                 with tmp.open("wb") as fh:
-                    async for chunk in r.content.iter_chunked(1 << 16):
+                    async for chunk in r.content.iter_chunked(1 << 20):
                         fh.write(chunk)
                         done += len(chunk)
                         now = time.monotonic()

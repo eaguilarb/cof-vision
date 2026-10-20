@@ -5,6 +5,7 @@ import functools
 import json
 import logging
 import re
+import shutil
 import time
 import urllib.request
 from datetime import date, datetime
@@ -148,34 +149,29 @@ async def cmd_probar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
              f"Archivo del bus: {fmt_hms(rec.beg)}–{fmt_hms(rec.end)}, "
              f"{rec.size / 1e6:.1f} MB, ubicación {LOC_NAMES.get(rec.loc, rec.loc)}, "
              f"calidad {'liviana' if rec.stream_type == 1 else 'principal'}"]
-    status = await msg.reply_text("\n".join(lines + ["Probando reproducción remota…"]))
-
-    # Reproducción remota: el bus transmite el tramo como un en vivo
-    try:
-        if not cms.jsession:
-            await cms.login()
-        url = cms.playback_stream_url(rec, a, b)
-        out = links.files_dir() / _name(v, chn, day, a, b, "_prueba.mp4")
-        out, took = await video.record_stream(url, out, (b - a) * 3 + 30)
-        dur = await video.probe_duration(out)
-        speed = dur / took if took else 0
-        lines.append(f"▶️ Reproducción remota: {dur:.0f} s de video en {took:.0f} s "
-                     f"→ {speed:.1f}× tiempo real")
-        await msg.reply_video(video=out, caption="Video obtenido por reproducción remota")
-    except Exception as e:
-        lines.append(f"▶️ Reproducción remota: no funcionó ({str(e)[:150]})")
-    await _edit(status, "\n".join(lines + ["Probando descarga por tramos…"]))
-
-    # Descarga por tramos (método actual), para comparar
-    try:
+    status = await msg.reply_text("\n".join(lines + ["Probando métodos…"]))
+    avail = [m for m in ("reproduccion", "tramos", "directa")
+             if (m == "reproduccion" and rec.playback_url) or (m == "tramos" and rec.task_url)
+             or (m == "directa" and (rec.down_url or rec.loc != 1))]
+    names = {"reproduccion": "▶️ Reproducción remota", "tramos": "📡 Descarga por tramos",
+             "directa": "⬇️ Archivo completo"}
+    for m in avail:
+        await _edit(status, "\n".join(lines + [f"Probando {names[m]}…"]))
         t = time.monotonic()
-        stats: dict = {}
-        await make_clip(v, chn, day, a, b, status, stats)
-        took = time.monotonic() - t
-        lines.append(f"📡 Descarga por tramos: {b - a} s de video en {took:.0f} s "
-                     f"→ {(b - a) / took:.1f}× tiempo real")
-    except Exception as e:
-        lines.append(f"📡 Descarga por tramos: no funcionó ({str(e)[:150]})")
+        try:
+            raw, beg, stream, _ = await fetch(v, rec, chn, day, a, b, status, force=m)
+            took = time.monotonic() - t
+            lines.append(f"{names[m]}: {b - a} s de video en {took:.0f} s "
+                         f"→ {(b - a) / took:.2f}× tiempo real")
+            if m == "reproduccion":
+                out = links.files_dir() / _name(v, chn, day, a, b, "_prueba.mp4")
+                async with cpu:
+                    await video.compress_piece(raw, out, a - beg, b - a, stream)
+                await msg.reply_video(video=out, caption="Video obtenido por reproducción remota")
+        except Exception as e:
+            lines.append(f"{names[m]}: no funcionó ({str(e)[:150]})")
+    best = _choose_methods(rec, a, b)
+    lines.append(f"✅ Desde ahora el bot usará primero: {names[best[0]] if best else '—'}")
     log.info("Prueba de métodos: %s", " | ".join(lines))
     await _edit(status, "\n".join(lines))
 
@@ -432,7 +428,8 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
 
     async def one(chn: int) -> tuple[int, Path | None, str]:
         try:
-            clip = await make_clip(v, chn, day, start, stop, cam_status[chn], None, fast)
+            clip = await make_clip(v, chn, day, start, stop, cam_status[chn], None, fast,
+                                   intermediate=True)
             return chn, clip, ""
         except (CMSV6Error, video.FFmpegError) as e:
             await cam_status[chn].set(f"⚠️ {e}", 100, 0)
@@ -611,6 +608,76 @@ def _learn_speed(seconds_video: float, seconds_taken: float) -> None:
         pass
 
 
+def _save_speed(sp: dict) -> None:
+    try:
+        (config.data_dir / _SPEED_FILE).write_text(json.dumps(sp))
+    except OSError:
+        pass
+
+
+# Velocidad supuesta (segundos de video por segundo real) mientras no haya mediciones
+_DEFAULT_VEL = {"reproduccion": 1.0, "tramos": 0.6, "directa": 0.6}
+_FAIL_COOLDOWN = 1800  # un método que falla se deja de lado 30 min
+
+
+def _method_info(m: str) -> dict:
+    return _speed().get("metodos", {}).get(m, {})
+
+
+def _learn_method(m: str, video_seconds: float, wall_seconds: float, ok: bool = True) -> None:
+    """Guarda cuánto rinde cada método con tus buses (media móvil) o cuándo falló."""
+    sp = _speed()
+    info = sp.setdefault("metodos", {}).setdefault(m, {})
+    if ok and video_seconds > 0 and wall_seconds > 0:
+        sample = video_seconds / wall_seconds
+        info["vel"] = round(0.7 * info["vel"] + 0.3 * sample, 3) if "vel" in info else round(sample, 3)
+        info["n"] = info.get("n", 0) + 1
+        info.pop("fallo", None)
+    elif not ok:
+        info["fallo"] = int(time.time())
+    _save_speed(sp)
+
+
+def _method_vel(m: str) -> float:
+    return _method_info(m).get("vel", _DEFAULT_VEL[m])
+
+
+def _choose_methods(rec: RecFile, start: int, stop: int) -> list[str]:
+    """Métodos posibles para este archivo, del más rápido (según lo medido) al más lento."""
+    if rec.loc != 1:
+        return ["directa"]  # ya está en el servidor: es lo más rápido
+    avail = []
+    if rec.playback_url:
+        avail.append("reproduccion")
+    if rec.task_url and config.segment_mode != "nunca":
+        avail.append("tramos")
+    if rec.down_url and not rec.segment_only:
+        avail.append("directa")
+    file_len = max(rec.end - rec.beg, 1)
+
+    def score(m: str) -> float:
+        failed = time.time() - _method_info(m).get("fallo", 0) < _FAIL_COOLDOWN
+        vel = _method_vel(m)
+        if m == "directa":  # baja el archivo completo: rinde según la parte que se usa
+            vel *= (stop - start) / file_len
+        return vel - (100 if failed else 0)
+
+    avail.sort(key=score, reverse=True)
+    forced = {"reproduccion": "reproduccion", "tramos": "tramos", "directa": "directa"}.get(
+        config.download_method) or ("tramos" if config.segment_mode == "siempre" else None)
+    if forced in avail:
+        avail.remove(forced)
+        avail.insert(0, forced)
+    return avail
+
+
+def _bus_stream_slot(dev_id: str) -> asyncio.Semaphore:
+    key = "stream:" + dev_id
+    if key not in _bus_slots:
+        _bus_slots[key] = asyncio.Semaphore(max(1, config.bus_streams))
+    return _bus_slots[key]
+
+
 def _bar(pct: float) -> str:
     n = int(round(pct / 10))
     return "▰" * n + "▱" * (10 - n)
@@ -708,7 +775,8 @@ class CamStatus:
 
 
 async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
-                    status, stats: dict | None = None, fast: bool = False) -> Path:
+                    status, stats: dict | None = None, fast: bool = False,
+                    intermediate: bool = False) -> Path:
     """Arma el clip de una cámara. En stats deja cuánto tardó cada etapa (para el mensaje).
 
     Las partes (archivos de grabación) se piden todas a la vez al bus y se comprimen a
@@ -742,7 +810,7 @@ async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
         async with cpu:
             t2 = time.monotonic()
             await _edit(status, f"🗜️ {prefix}comprimiendo", 92, 10, i - 1)
-            await video.compress_piece(raw, piece, a - beg, b - a, stream)
+            await video.compress_piece(raw, piece, a - beg, b - a, stream, intermediate)
             await _edit(status, f"✅ {prefix}lista", 100, 0, i - 1)
             stats["comprimir"] = stats.get("comprimir", 0) + time.monotonic() - t2
         return piece
@@ -765,14 +833,16 @@ def _mmss(sec: float) -> str:
 def _timing(stats: dict) -> str:
     if "total" not in stats:
         return ""
-    how = {"cache": "ya estaba descargado", "tramos": "solo los minutos pedidos",
-           "directa": "archivo completo"}.get(stats.get("metodo", ""), "")
+    how = {"cache": "ya estaba descargado", "tramos": "el bus subió el tramo",
+           "directa": "archivo completo", "reproduccion": "el bus lo transmitió"}.get(
+        stats.get("metodo", ""), "")
     return (f"\n⏱ {_mmss(stats['total'])} (bajada {_mmss(stats.get('bajar', 0))}"
             f"{' · ' + how if how else ''}, compresión {_mmss(stats.get('comprimir', 0))})")
 
 
 async def fetch(v: Vehicle, rec: RecFile, chn: int, day: date, start: int, stop: int,
-                status, prefix: str = "", part: int = 0) -> tuple[Path, int, int, str]:
+                status, prefix: str = "", part: int = 0,
+                force: str | None = None) -> tuple[Path, int, int, str]:
     """Consigue el video de [start, stop] (o lo reutiliza si ya está en caché).
 
     Devuelve (archivo, segundo del día en que empieza, índice del video dentro del archivo,
@@ -783,19 +853,17 @@ async def fetch(v: Vehicle, rec: RecFile, chn: int, day: date, start: int, stop:
     safe = re.sub(r"[^\w.-]", "_", f"{rec.dev_id}_{rec.chn}_{rec.path}")[-150:]
     stream = rec.chns.index(chn) if chn in rec.chns else 0
     dest = work / safe
+    if force:
+        safe += "_" + force  # en /probar cada método baja su propia copia
+        dest = work / safe
     if dest.exists():
         dest.touch()
         return dest, rec.beg, stream, "cache"
     seg_dest = work / f"{safe}_{start}_{stop}.seg"
-    if seg_dest.exists():
-        seg_dest.touch()
-        return seg_dest, start, 0, "cache"
-
-    can_segment = rec.loc == 1 and bool(rec.task_url) and config.segment_mode != "nunca"
-    can_direct = bool(rec.down_url or rec.loc != 1) and not rec.segment_only
-    small_part = (stop - start) <= 0.5 * max(rec.end - rec.beg, 1)
-    prefer_segment = can_segment and (not can_direct or config.segment_mode == "siempre"
-                                      or small_part)
+    for cached in (seg_dest, seg_dest.with_suffix(".rep")):
+        if cached.exists():
+            cached.touch()
+            return cached, start, 0, "cache"
 
     sp = _speed()
     expected = sp["base"] + sp["ratio"] * (stop - start)  # tiempo estimado del bus
@@ -831,29 +899,70 @@ async def fetch(v: Vehicle, rec: RecFile, chn: int, day: date, start: int, stop:
             path, beg = await cms.segment_download(v, rec, day, start, stop, seg_dest,
                                                    seg_progress, stall_s=stall,
                                                    dl_progress=dl_progress)
-            _learn_speed(stop - start, time.monotonic() - t)
+            took = time.monotonic() - t
+            _learn_speed(stop - start, took)
+            _learn_method("tramos", stop - start, took)
         return path, beg, 0, "tramos"
 
     async def direct() -> tuple[Path, int, int, str]:
         await dl_progress(0, rec.size, 0)
-        return await cms.download(rec, dest, dl_progress), rec.beg, stream, "directa"
+        t = time.monotonic()
+        path = await cms.download(rec, dest, dl_progress)
+        _learn_method("directa", rec.end - rec.beg, time.monotonic() - t)
+        return path, rec.beg, stream, "directa"
 
-    if prefer_segment:
+    async def by_stream() -> tuple[Path, int, int, str]:
+        """Reproducción remota: el bus transmite el tramo; varias cámaras a la vez."""
+        want = stop - start
+        vel = _method_vel("reproduccion")
+        exp = want / max(vel, 0.1) + 10
+        out = work / f"{safe}_{start}_{stop}.mkv"
+        async with _bus_stream_slot(v.dev_id):
+            if not cms.jsession:
+                await cms.login()
+            url = cms.playback_stream_url(rec, start, stop)
+            t = time.monotonic()
+
+            async def ticker() -> None:
+                while True:
+                    el = time.monotonic() - t
+                    await _edit(status, f"▶️ {prefix}el bus está transmitiendo",
+                                5 + 85 * min(0.95, el / exp), max(5.0, exp - el) + 10, part)
+                    await asyncio.sleep(3)
+
+            tick = asyncio.create_task(ticker())
+            try:
+                path, took = await video.record_stream(url, out, int(want * 3 + 60), want + 2)
+            finally:
+                tick.cancel()
+        got = await video.probe_duration(path)
+        if got < 0.8 * want:
+            path.unlink(missing_ok=True)
+            raise CMSV6Error(f"la reproducción remota entregó {got:.0f} de {want} s")
+        _learn_method("reproduccion", got, took)
+        final = seg_dest.with_suffix(".rep")
+        path.rename(final)
+        return final, start, 0, "reproduccion"
+
+    runners = {"reproduccion": by_stream, "tramos": None, "directa": direct}
+    methods = [force] if force else _choose_methods(rec, start, stop)
+    if not methods:
+        raise CMSV6Error("CMSV7 no ofrece ninguna forma de descargar esta grabación.")
+    last: Exception | None = None
+    for i, m in enumerate(methods):
+        has_backup = i < len(methods) - 1
         try:
-            # Si hay plan B, no se espera más de segment_stall_s a que el bus responda
-            return await by_segment(config.segment_stall_s if can_direct else None)
-        except CMSV6Error as e:
-            if not can_direct:
-                raise
-            log.info("Descarga por tramos falló (%s); se baja el archivo completo", e)
-            return await direct()
-    try:
-        return await direct()
-    except CMSV6Error as e:
-        if not can_segment:
-            raise
-        log.info("Descarga directa falló (%s); se intenta por tramos", e)
-        return await by_segment(None)
+            if m == "tramos":
+                # Con plan B, no se espera más de segment_stall_s a que el bus responda
+                return await by_segment(config.segment_stall_s if has_backup else None)
+            return await runners[m]()
+        except (CMSV6Error, video.FFmpegError) as e:
+            last = e
+            _learn_method(m, 0, 0, ok=False)
+            log.info("Método %s falló (%s)%s", m, e, "; se prueba otro" if has_backup else "")
+            if has_backup:
+                await _edit(status, f"🔁 {prefix}cambiando de método…", None, None, part)
+    raise last if isinstance(last, CMSV6Error) else CMSV6Error(str(last))
 
 
 async def deliver(msg: Message, status: Message, out: Path, caption: str) -> None:
@@ -922,6 +1031,12 @@ async def _cleanup_loop() -> None:
                 if p.is_file() and p.stat().st_mtime < cutoff:
                     p.unlink(missing_ok=True)
                     n += 1
+            # Si el disco se llena, se borra la caché más antigua hasta dejar 3 GB libres
+            files = sorted((p for p in _work_dir().iterdir() if p.is_file()),
+                           key=lambda p: p.stat().st_mtime)
+            while files and shutil.disk_usage(config.data_dir).free < 3 * 1024**3:
+                files.pop(0).unlink(missing_ok=True)
+                n += 1
             if n:
                 log.info("Limpieza: %d archivos eliminados", n)
         except Exception:

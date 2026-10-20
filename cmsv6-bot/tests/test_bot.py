@@ -372,7 +372,7 @@ async def test_prefers_partial_download_and_falls_back(tmp_path, monkeypatch):
     stats = {}
     await main.make_clip(v, 0, date(2026, 10, 19), 50410, 50440, status, stats)
     assert stats["metodo"] == "tramos" and state["tasks"] == 1 and state["direct"] == 0
-    assert "solo los minutos pedidos" in main._timing(stats)
+    assert "el bus subió el tramo" in main._timing(stats)
 
     # 2) El bus no avanza (stu=1) → se usa la descarga directa
     state["stu"] = 1
@@ -617,3 +617,90 @@ def test_playback_stream_url_fixes_cmsv7_format():
     assert url.startswith("http://47.88.25.163:6604/3/5?")
     assert "DevIDNO=D1" in url and "jsession=J" in url
     assert "PLAYBEG=31100" in url and "PLAYEND=31160" in url
+
+
+@pytest.mark.asyncio
+async def test_adaptive_prefers_playback_and_falls_back(tmp_path, monkeypatch):
+    """Con reproducción remota disponible se usa primero; si falla, sigue con otro método
+    y recuerda el fallo para los próximos pedidos."""
+    flv = tmp_path / "pb.flv"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=640x360:rate=15:duration=20", "-c:v", "libx264", "-preset",
+                    "ultrafast", "-f", "flv", str(flv)], check=True)
+    raw = tmp_path / "full.264"
+    _make_raw(raw, 60)
+    state = {"pb_ok": True, "pb": 0, "tasks": 0}
+
+    async def login(r):
+        return web.json_response({"result": 0, "jsession": "J1"})
+
+    async def search(r):
+        if r.query["LOC"] != "1":
+            return web.json_response({"result": 0, "files": []})
+        return web.json_response({"result": 0, "files": [{
+            "beg": 50400, "end": 54000, "chn": 0, "file": "/rec/h.264", "len": 10, "loc": 1,
+            "DownUrl": "",
+            "PlaybackUrl": f"http://10.0.0.5:{port}/3/5?DownType=5&&jsession=DevIDNO=D1&FILELOC=1"
+                           "&FILECHN=0&PLAYFILE=/rec/h.264&PLAYBEG=50400&PLAYEND=54000&PLAYCHN=0",
+            "DownTaskUrl": f"http://10.0.0.5:{port}/StandardApiAction_addDownloadTask.action?"
+                           "jsession=&did=D1&fph=/rec/h.264&chn=0&dtp=1"}]})
+
+    async def playback(r):
+        state["pb"] += 1
+        assert r.query["jsession"] == "J1" and r.query["PLAYBEG"] == "50410"
+        if not state["pb_ok"]:
+            return web.Response(body=b"not a video" * 200)
+        return web.FileResponse(flv)
+
+    async def add_task(r):
+        state["tasks"] += 1
+        return web.json_response({"result": 0})
+
+    async def tasks(r):
+        return web.json_response({"result": 0, "infos": [{
+            "stu": 4, "downUrl": f"http://10.0.0.5:{port}/seg?FPATH=x&SAVENAME=x.mp4"}]})
+
+    async def seg(r):
+        return web.FileResponse(raw)
+
+    app = web.Application()
+    for path, h in [("/StandardApiAction_login.action", login),
+                    ("/StandardApiAction_getVideoFileInfo.action", search),
+                    ("/StandardApiAction_addDownloadTask.action", add_task),
+                    ("/StandardApiAction_downloadTasklist.action", tasks),
+                    ("/3/5", playback), ("/seg", seg)]:
+        app.router.add_get(path, h)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+
+    from app import cmsv6 as cmsv6_mod, main
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(cmsv6_mod.asyncio, "sleep", lambda s: real_sleep(0.01))
+    object.__setattr__(main.config, "data_dir", tmp_path / "data")
+    (tmp_path / "data").mkdir()
+    object.__setattr__(main.config, "search_locations", [2, 1])
+    object.__setattr__(main.config, "download_method", "auto")
+    cms = CMSV6(f"http://127.0.0.1:{port}", "u", "p")
+    monkeypatch.setattr(main, "cms", cms)
+    status = MagicMock(edit_text=AsyncMock())
+    v = main.Vehicle(plate="ABC123", dev_id="D1", channels=1, channel_names=[])
+
+    stats = {}
+    out = await main.make_clip(v, 0, date(2026, 10, 19), 50410, 50420, status, stats)
+    assert stats["metodo"] == "reproduccion" and state["tasks"] == 0
+    assert 9 <= await video.probe_duration(out) <= 11
+    assert main._method_info("reproduccion")["vel"] > 0
+
+    # La reproducción deja de funcionar → se usa la descarga por tramos y se recuerda
+    state["pb_ok"] = False
+    stats = {}
+    await main.make_clip(v, 0, date(2026, 10, 19), 50430, 50440, status, stats)
+    assert stats["metodo"] == "tramos" and state["tasks"] == 1
+    assert "fallo" in main._method_info("reproduccion")
+    rec = RecFile("D1", 0, 50400, 54000, "/r", 1, 1, "", task_url="t", playback_url="p")
+    assert main._choose_methods(rec, 50450, 50460)[0] == "tramos"
+    await cms.close()
+    await runner.cleanup()

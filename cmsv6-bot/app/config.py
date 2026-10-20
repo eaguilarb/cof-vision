@@ -52,6 +52,11 @@ class Config:
     # Cuántos tramos se piden a la vez a un mismo bus: el equipo los envía de a uno por su
     # 4G; pedir muchos juntos no acelera y hace que fallen
     bus_parallel: int = int(os.environ.get("BUS_PARALLEL", "2"))
+    # Método de descarga de grabaciones del bus: auto (elige el más rápido medido),
+    # reproduccion (el bus transmite el tramo), tramos (el bus sube el tramo) o directa
+    download_method: str = os.environ.get("DOWNLOAD_METHOD", "auto").lower()
+    # Transmisiones de reproducción a la vez por bus (una por cámara)
+    bus_streams: int = int(os.environ.get("BUS_STREAMS", "4"))
 
     @property
     def telegram_max_mb(self) -> int:

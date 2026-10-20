@@ -34,6 +34,20 @@ Corre en el VPS (Ubuntu 24.04) con Docker.
 
 Solo las personas cuyo ID está en `ALLOWED_USERS` pueden pedir videos.
 
+## Cómo elige el método de descarga (automático)
+
+Para grabaciones que están en el bus hay tres caminos, y el bot **mide cuánto rinde
+cada uno con tus buses** y usa el más rápido (lo guarda en `data/velocidad.json`):
+
+| Método | Cómo funciona | Ventaja |
+|---|---|---|
+| ▶️ Reproducción remota | El bus transmite el tramo como un en vivo | Todas las cámaras a la vez |
+| 📡 Por tramos | El bus sube solo los minutos pedidos a CMSV7 | Menos datos |
+| ⬇️ Archivo completo | Se baja el archivo entero del bus | Sirve de respaldo |
+
+Si un método falla, pasa al siguiente y lo deja de lado 30 minutos. `/probar placa
+cámara fecha hora` mide los tres con un bus real y entrena la elección.
+
 ## De dónde saca los videos
 
 1. **Servidor de almacenamiento** (si la grabación ya se subió): descarga directa, rápido.
