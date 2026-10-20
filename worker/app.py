@@ -34,6 +34,7 @@ class Puerta(BaseModel):
     off: float = 0             # desfase de esta cámara respecto de la línea de tiempo de la página (s)
     fps: float = 12
     ancla: str = 'center'      # 'center' (cámara cenital) o 'bottom' (pies, cámara de lado)
+    excluir: list[list[float]] = []   # zonas [x0, y0, x1, y1] (0-1) que no cuentan: conductor, asientos, reflejos
 
 
 class Trabajo(BaseModel):
@@ -84,7 +85,7 @@ def correr(jid, job: Trabajo):
                     s = tramo(url_de(p.video, gkey), a, b, dest)
                     v = cv2.VideoCapture(dest); W, H = v.get(3), v.get(4); v.release()
                     lin = (p.linea[0] * W, p.linea[1] * H, p.linea[2] * W, p.linea[3] * H)
-                    r = contar_puerta(dest, a - s, b - s, lin, DET, fps_det=p.fps, ancla='bottom' if p.ancla == 'bottom' else 'center')
+                    r = contar_puerta(dest, a - s, b - s, lin, DET, fps_det=p.fps, ancla='bottom' if p.ancla == 'bottom' else 'center', excluir=p.excluir)
                     r['t_suben'] = [round(t + s - p.off, 1) for t in r['t_suben']]
                     r['t_bajan'] = [round(t + s - p.off, 1) for t in r['t_bajan']]
                     for x in r['cajas_suben']: x['t'] = round(x['t'] + s - p.off, 1)

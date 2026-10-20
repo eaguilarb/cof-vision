@@ -37,10 +37,14 @@ class Detector:
         return d.with_nms(threshold=0.6) if len(self.sess) > 1 and len(d) else d
 
 
-def contar_puerta(video, t0, t1, linea, det, fps_det=12, conf=0.4, ancla='center'):
+def contar_puerta(video, t0, t1, linea, det, fps_det=12, conf=0.4, ancla='center', excluir=None, conf_ir=0.3, viaje_min=0.08):
     """Cuenta en una puerta entre t0 y t1 (segundos del video). linea = (x0, y0, x1, y1) en píxeles, con el
     interior del bus al lado derecho al recorrerla de (x0,y0) a (x1,y1). ancla: 'center' (cámara cenital, los pies
-    quedan fuera de la imagen) o 'bottom' (cámara de lado: cuentan los pies, como la línea dibujada en el escalón)."""
+    quedan fuera de la imagen) o 'bottom' (cámara de lado: cuentan los pies, como la línea dibujada en el escalón).
+    excluir: zonas [x0, y0, x1, y1] en fracción de la imagen que no cuentan (el conductor, asientos, reflejos).
+    conf_ir: confianza mínima en infrarrojo (blanco y negro): ahí los vidrios y metales brillan como siluetas.
+    viaje_min: cuánto debe recorrer una persona (fracción del alto) para que su cruce cuente; el conductor, un reflejo o
+    alguien parado en el umbral se mueven poco y no suman."""
     v = cv2.VideoCapture(video)
     fps = v.get(cv2.CAP_PROP_FPS) or 25
     tr = trackers.ByteTrackTracker(lost_track_buffer=int(fps_det * 2), frame_rate=fps_det,
@@ -55,7 +59,7 @@ def contar_puerta(video, t0, t1, linea, det, fps_det=12, conf=0.4, ancla='center
     lado = lambda x, y: (bx - ax) * (y - ay) - (by - ay) * (x - ax) > 0  # True = adentro
     i = int(t0 * fps)
     v.set(cv2.CAP_PROP_POS_FRAMES, i)
-    nxt, side, suben_t, cajas = float(i), {}, [], []
+    nxt, side, suben_t, cajas, hist = float(i), {}, [], [], {}
     while i <= t1 * fps:
         if not v.grab():
             break
@@ -64,12 +68,25 @@ def contar_puerta(video, t0, t1, linea, det, fps_det=12, conf=0.4, ancla='center
             ok, f = v.retrieve()
             if not ok:
                 break
-            d = tr.update(det(f))
+            H, W = f.shape[:2]
+            # Infrarrojo: casi sin color. Se piden detecciones más seguras antes de seguirlas.
+            sm = cv2.resize(f, (64, 36)).astype(np.int16)
+            ir = float(np.abs(sm[:, :, 0] - sm[:, :, 1]).mean() + np.abs(sm[:, :, 1] - sm[:, :, 2]).mean()) < 6
+            dd = det(f)
+            if ir and len(dd):
+                dd = dd[dd.confidence >= conf_ir]
+            if excluir and len(dd):
+                ax_ = (dd.xyxy[:, 0] + dd.xyxy[:, 2]) / 2 / W
+                ay_ = ((dd.xyxy[:, 1] + dd.xyxy[:, 3]) / 2 if ancla == 'center' else dd.xyxy[:, 3]) / H
+                fuera = np.ones(len(dd), bool)
+                for x0, y0, x1, y1 in excluir:
+                    fuera &= ~((ax_ >= x0) & (ax_ <= x1) & (ay_ >= y0) & (ay_ <= y1))
+                dd = dd[fuera]
+            d = tr.update(dd)
             if d.tracker_id is not None:
                 d = d[d.tracker_id >= 0]
             cin, _ = lz.trigger(d)
             t = round(i / fps, 1)
-            H, W = f.shape[:2]
             # Quién cruzó hacia adentro en esta foto, con su recuadro (en fracción de la imagen) para la foto de evidencia.
             for k in np.flatnonzero(cin):
                 x0, y0, x1, y1 = d.xyxy[k]
@@ -78,9 +95,18 @@ def contar_puerta(video, t0, t1, linea, det, fps_det=12, conf=0.4, ancla='center
             if d.tracker_id is not None:
                 for (x0, y0, x1, y1), tid in zip(d.xyxy, d.tracker_id):
                     cx, cy = (x0 + x1) / 2, ((y0 + y1) / 2 if ancla == 'center' else y1)
+                    hist.setdefault(int(tid), []).append((cx / W, cy / H))
                     if xa <= cx <= xb:
                         side.setdefault(int(tid), []).append((t, lado(cx, cy)))
         i += 1
-    bajan_t = sorted(h[-1][0] for h in side.values()
-                     if len(h) >= 3 and h[0][1] and h[1][1] and not h[-1][1] and not h[-2][1])
+    # Solo cuenta quien se siguió al menos 4 fotos y recorrió de verdad la puerta (no el conductor ni un reflejo).
+    def real(tid):
+        h = hist.get(tid, [])
+        if len(h) < 4:
+            return False
+        ys = [p[1] for p in h]; xs = [p[0] for p in h]
+        return max(max(ys) - min(ys), max(xs) - min(xs)) >= viaje_min
+    cajas = [x for x in cajas if real(x['id'])]
+    suben_t = [x['t'] for x in cajas]
+    bajan_t = sorted(h[-1][0] for tid, h in side.items() if real(tid) and len(h) >= 3 and h[0][1] and h[1][1] and not h[-1][1] and not h[-2][1])
     return {'suben': len(suben_t), 'bajan': len(bajan_t), 't_suben': suben_t, 't_bajan': bajan_t, 'cajas_suben': cajas}

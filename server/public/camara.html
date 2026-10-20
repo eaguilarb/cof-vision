@@ -439,7 +439,7 @@
   // Qwen (Alibaba Cloud, IA china de bajo costo): lee el recorrido, los paraderos y los detalles con la clave de la persona.
   // Plus para todo: Flash lee mal el texto chico de la cámara (patente, velocidad), y Plus sigue siendo muy barato.
   // quick: lectura de pantalla y recuadros (Qwen3-VL lee mejor el texto y ubica mejor); main: decisiones (quién subió, pagó, puerta abierta).
-  const QWEN = { quick: 'qwen3-vl-plus', main: 'qwen3.7-plus', fallback: 'qwen3-vl-plus', url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions' };
+  const QWEN = { quick: 'qwen3-vl-plus', main: 'qwen3.7-plus', max: 'qwen3.8-max', fallback: 'qwen3-vl-plus', url: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions' };
   // Tarifas en US$ por millón de tokens (entrada, salida), para estimar el gasto.
   const PRICE = (m) => (/qwen3-vl-plus/.test(m) ? [0.2, 1.6] : /qwen3\.\d-plus/.test(m) ? [0.4, 1.6] : /qwen/.test(m) ? [0.05, 0.4] : /haiku/.test(m) ? [1, 5] : /sonnet/.test(m) ? [2, 10] : /gemma/.test(m) ? [0, 0] : /pro/.test(m) ? [2, 12] : /lite/.test(m) ? [0.3, 2.5] : [0.75, 3.75]);
   // En Railway la página la entrega el servidor, que agrega la clave: el navegador nunca la ve.
@@ -449,7 +449,7 @@
   const API = SERVER ? 'api/gemini/models' : 'https://generativelanguage.googleapis.com/v1beta/models';
   const MAX_CAMS = 8;
   // Versión de las reglas de conteo: si cambian, los paraderos contados con reglas antiguas se vuelven a contar solos.
-  const COUNT_V = 23;
+  const COUNT_V = 24;
   const STAFF_RE = /\b(agente|agentes|uniforme negro|reflectante|chaleco|guardia|fiscalizador|inspector|conductor|chofer|personal de la empresa|funcionari)/i;
   const TIPOS = {
     puerta_delantera: 'Puerta delantera',
@@ -463,7 +463,7 @@
 
   const $ = (s) => document.querySelector(s);
   // Versión de la página. Cada media hora se compara con la publicada y, si cambió, se avisa arriba.
-  const VERSION = '2026.10.18-2';
+  const VERSION = '2026.10.20-1';
   $('#ver').textContent = `v${VERSION}`;
   async function checkVersion() {
     try {
@@ -1375,7 +1375,7 @@
   const GFAIL = { until: 0 };
   async function gemini(parts, run, tier, opts) {
     // Todas las lecturas van a Qwen (Gemini y Claude ya no se usan).
-    if (S.qkey) return qwen(parts, run, tier === 'main' ? QWEN.main : QWEN.quick, opts);
+    if (S.qkey) return qwen(parts, run, tier === 'max' ? QWEN.max : tier === 'main' ? QWEN.main : QWEN.quick, opts);
     { const err = new Error('Falta la clave de Qwen: pégala en la caja de arriba (Alibaba Cloud Model Studio, empieza con sk-).'); err.qwenKey = true; throw err; }
     if (tier === 'main' && isClaude(S.ai) && S.ckey) return claude(parts, run);
     const list = MODELS[tier];
@@ -3368,7 +3368,20 @@
   const inRect = (z, P) => P[0] >= z.x0 && P[0] <= z.x1 && P[1] >= z.y0 && P[1] <= z.y1;
   // Quita a quien tiene los pies dentro de una zona marcada como «no cuenta» (conductor, asientos, reflejos).
   // (Descartar solo a quien pasa mucho rato quieto empeoró el conteo: el agente junto al validador tapa a los que pagan.)
+  const IR_MIN = 0.55;
+  async function isIR(c, t) {
+    const f = await frameOf(c, t, 160);
+    if (!f) return false;
+    try { return isMonoData(f.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, f.width, f.height).data); } catch { return false; }
+  }
+  // Bus STU: en la cámara de la puerta principal (CH2) el conductor ocupa la parte de abajo a la izquierda (se ve su
+  // gorra y sus brazos al volante). Esa zona no cuenta, salvo que se hayan marcado otras zonas a mano.
+  function stuExcl(c) {
+    if (!stuBus() || c.label !== 'CH2' || (c.excl && c.excl.length)) return;
+    c.excl = [{ x0: 0.0, y0: 0.62, x1: 0.68, y1: 1.0, auto: true, que: 'conductor' }];
+  }
   function zoneFilter(c, dets) {
+    stuExcl(c);
     const ex = /^puerta_/.test(c.tipo || '') && c.excl;
     return ex && ex.length ? dets.filter((d) => !ex.some((z) => inRect(z, boxFoot(d.box)))) : dets;
   }
@@ -4008,12 +4021,14 @@
       'Mosaico de 9 fotos seguidas (1 a 9, cada 0,6 s) de la cámara de la PUERTA DELANTERA de un bus de Santiago, ampliada en el VALIDADOR: el aparato junto a la puerta, con una pantalla pequeña que se pone VERDE cuando se paga con tarjeta bip! o celular, y ROJA si rechaza.',
       z ? '' : 'En este bus no se sabe dónde está el validador ni si tiene luz (en los buses chicos STU es un aparato junto a la puerta, sin luz verde visible): mira si la persona acerca la tarjeta o el celular a un aparato junto a la puerta antes de pasar; eso es pagar.',
       'Mira a la persona que está subiendo: ¿acerca una tarjeta, celular o la mano al validador? ¿se enciende la pantalla en verde?',
-      'Responde SOLO JSON: {"hay_persona_subiendo":true,"acerca_tarjeta":true,"luz":"verde|roja|ninguna","foto_pago":4,"pago":"si|no|no_se","motivo":"breve"}.',
+      'Primero confirma que en las fotos hay una PERSONA real que SUBE desde la calle por la puerta: un reflejo en el vidrio, el marco o la hoja de la puerta, una manilla o un asiento NO son personas. El CONDUCTOR (sentado al volante, abajo junto al tablero, a menudo con gorra) NO es pasajero: si la persona marcada es el conductor, pon "es_conductor": true.',
+      c.mono || b.ir ? 'La cámara está en INFRARROJO (blanco y negro, de noche): los vidrios y las partes metálicas brillan y parecen siluetas. Sé estricto: "hay_persona_subiendo": true solo si se ve claramente una cabeza y un cuerpo que entran.' : '',
+      'Responde SOLO JSON: {"hay_persona_subiendo":true,"es_conductor":false,"acerca_tarjeta":true,"luz":"verde|roja|ninguna","foto_pago":4,"pago":"si|no|no_se","motivo":"breve"}.',
       '"pago":"si" si acerca la tarjeta o el celular y se ve verde, o si claramente valida; "no" solo si se ve claramente que pasa de largo sin acercar nada al validador; "no_se" si no se alcanza a ver.',
     ].filter(Boolean).join('\n') }, img(m, 0.85)];
     let r = null;
     try {
-      const txt = String((await gemini(parts, run, 'main', { raw: true })) || '');
+      const txt = String((await gemini(parts, run, c.mono || b.ir ? 'max' : 'main', { raw: true })) || '');
       const j = txt.match(/\{[\s\S]*\}/);
       r = j ? JSON.parse(j[0]) : null;
     } catch (e) { if (e.badKey || e.claudeKey || e.qwenKey || e.stop) throw e; r = null; }
@@ -4026,6 +4041,9 @@
       acerca: r.acerca_tarjeta === true || r.acerca_tarjeta === 'true',
       verde: /verde|green/i.test(String(r.luz || '')), roja: /roj|red/i.test(String(r.luz || '')),
       motivo: String(r.motivo || '').trim(), thumb: t.toDataURL('image/jpeg', 0.72),
+      // Sin una persona subiendo no hay pago que revisar: en infrarrojo la IA «veía pagar» a un reflejo en el vidrio,
+      // al marco de la puerta o al conductor.
+      persona: !(r.hay_persona_subiendo === false || r.hay_persona_subiendo === 'false') && !truthy(r.es_conductor),
     };
   }
   // Conteo en el servidor (servicio cof-conteo: supervision + ByteTrack + LineZone con RF-DETR, calibrado con el LCSX54:
@@ -4035,7 +4053,12 @@
     const L = c.line;
     // El servicio cuenta «adentro» a la derecha de la línea recorrida de a→b: se da vuelta si el adentro está al otro lado.
     const [a, b] = L.inside === 1 ? [L.a, L.b] : [L.b, L.a];
-    const body = { puertas: { [c.label]: { video: c.remote, linea: [a[0], a[1], b[0], b[1]], off: c.off || 0, fps: 12, ancla: L.anchor === 'center' ? 'center' : 'bottom' } }, tramos: [[+win.t0.toFixed(2), +win.t1.toFixed(2)]] };
+    stuExcl(c);
+    const ir = await isIR(c, (s.t0 + s.t1) / 2);
+    // Zonas que no cuentan (conductor, asientos, reflejos) en fracción de la imagen: el servicio descarta a quien tenga
+    // ahí los pies (o el centro, con la cámara cenital).
+    const excluir = (c.excl || []).map((z) => [z.x0, z.y0, z.x1, z.y1]);
+    const body = { puertas: { [c.label]: { video: c.remote, linea: [a[0], a[1], b[0], b[1]], off: c.off || 0, fps: 12, ancla: L.anchor === 'center' ? 'center' : 'bottom', excluir } }, tramos: [[+win.t0.toFixed(2), +win.t1.toFixed(2)]] };
     const r0 = await fetch('api/conteo/trabajos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (!r0.ok) throw new Error(`servicio de conteo: ${r0.status} ${(await r0.text()).slice(0, 160)}`);
     const { id } = await r0.json();
@@ -4062,7 +4085,7 @@
       const tr = { id: 9000 + (x.id != null ? x.id : k), boxes: [] };
       const fr = { f, dets: box ? [{ id: tr.id, box }] : [] };
       const thumb = annotate(fr, L, tr, [fr], '#00e5ff');
-      boarders.push({ c, tr, t: x.t, d: 0, near: false, fromOut: true, box, onboard: false, thumb: thumb.toDataURL('image/jpeg', 0.8), views: [thumb], where: ['adentro'] });
+      boarders.push({ c, tr, t: x.t, d: 0, near: false, fromOut: true, box, onboard: false, ir, thumb: thumb.toDataURL('image/jpeg', 0.8), views: [thumb], where: ['adentro'] });
     }
     return { c, boarders, near: [], bajan: res.bajan, frames: 0, tracks: res.suben + res.bajan, how: 'servidor: supervision + RF-DETR', heads: null, ir: false };
   }
@@ -4112,6 +4135,10 @@
     if (frames.length >= 4 && !frames.some((f) => f.dets.length)) return null;
     // Zonas que no cuentan (conductor, asientos, reflejos): fuera del conteo.
     for (const f of frames) f.dets = zoneFilter(c, f.dets);
+    // Infrarrojo (de noche, blanco y negro): vidrios y metales brillan y el detector ve «personas» con poca confianza.
+    // Ahí solo se siguen las detecciones claras.
+    const irNow = await isIR(c, (s.t0 + s.t1) / 2);
+    if (irNow) for (const f of frames) f.dets = f.dets.filter((d) => d.s == null || d.s >= IR_MIN);
     // En blanco y negro, un destello solo es pago si el detector ve a alguien junto al validador en ese momento.
     if (c.mono && c.valz && greens.length) {
       const z = c.valz, m = 0.08;
@@ -4196,6 +4223,7 @@
     }
     const known = [...pre, ...c.crew.filter((q) => q.n >= 3 || q.stop !== s.t0).map((q) => q.sig)];
     const out = use.filter((x) => frames[x.at].f).map((x) => ({
+      ir: irNow,
       onboard: !c.mono && (() => { const sg = sigOf(frames[x.at].f, x.box); return !!sg && known.some((k) => sigSim(k, sg) >= SIG_SAME); })(),
       c, tr: x.tr, t: frames[x.at].t, d: x.d, near: x.near, fromOut: !!x.fromOut, box: x.box,
       thumb: annotate(frames[x.at], c.line, x.tr, frames).toDataURL('image/jpeg', 0.8),
@@ -4280,7 +4308,7 @@
       '"n" es el número de PERSONA (1, 2, 3…) e "id" es su número #; responde una entrada por cada PERSONA.',
       'Responde SOLO JSON: {"personas":[{"n":1,"id":7,"subio":true,"es_personal":false,"descripcion":"mujer con chaqueta roja","luz":"verde","valida":true,"sin_validar_visto":false}],"validan_desde_adentro":0}',
     ].filter(Boolean).join('\n');
-    return gemini(parts, run, 'main');
+    return gemini(parts, run, boarders.some((b) => b.c.mono || b.ir) ? 'max' : 'main');
   }
 
   // Instrucciones comunes sobre el personal (agentes y conductor): nunca son pasajeros.
@@ -4458,6 +4486,8 @@
         if (run !== S.run) return false;
         if (!r) continue;
         b.payAI = r;
+        // No había nadie subiendo (reflejo, puerta, conductor): no es un pasajero.
+        if (!r.persona) { b.fantasma = true; continue; }
         // Acercar la tarjeta o el celular al validador es pagar (salvo que quede en rojo), aunque la pantalla no se alcance a ver.
         if (r.pago === 'si' || r.verde || (r.acerca && !r.roja)) payOf.set(b, true);
         else if (r.pago === 'no' && !r.acerca && !r.roja) payOf.set(b, false);
@@ -4520,6 +4550,7 @@
     const vp = ver && Array.isArray(ver.personas) ? ver.personas : [];
     const nearKept = [];
     [...boarders, ...headB].forEach((b, k) => {
+      if (b.fantasma) return;
       const nOf = (x, f) => Math.round(num(x && x[f]) || 0);
       // Cabeza que coincide con alguien que llegó a la puerta y ya quedó contado: es la misma persona.
       const twin = b.cabeza ? nearKept.findIndex((n) => n.c === b.c && Math.abs(n.t - b.t) < 3) : -1;
