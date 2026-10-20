@@ -38,7 +38,12 @@ class Config:
     video_max_height: int = int(os.environ.get("VIDEO_MAX_HEIGHT", "720"))
     video_preset: str = os.environ.get("VIDEO_PRESET", "veryfast")
     max_clip_minutes: int = int(os.environ.get("MAX_CLIP_MINUTES", "30"))
-    max_parallel_jobs: int = int(os.environ.get("MAX_PARALLEL_JOBS", "2"))
+    max_parallel_jobs: int = int(os.environ.get("MAX_PARALLEL_JOBS", "3"))
+    # Grabaciones en el bus: «auto» pide solo los minutos necesarios (descarga por tramos) cuando
+    # son menos de la mitad del archivo; «siempre» / «nunca» fuerzan un método
+    segment_mode: str = os.environ.get("SEGMENT_MODE", "auto").lower()
+    # Si la descarga por tramos no avanza en este tiempo, se usa la descarga directa
+    segment_stall_s: int = int(os.environ.get("SEGMENT_STALL_SECONDS", "120"))
 
     @property
     def telegram_max_mb(self) -> int:

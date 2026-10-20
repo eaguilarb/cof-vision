@@ -188,44 +188,66 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if together and len(chans) > 1:
         await _video_together(msg, v, chans, day, start, stop, when)
         return
-    for chn in chans:
+    async def one(chn: int) -> None:
         status = await msg.reply_text(
             f"⏳ {v.plate} {v.channel_label(chn)} {day:%d/%m} {fmt_hms(start)}–{fmt_hms(stop)}: en cola…")
+        stats: dict = {}
         async with jobs:
             try:
-                out = await make_clip(v, chn, day, start, stop, status)
+                out = await make_clip(v, chn, day, start, stop, status, stats)
             except (CMSV6Error, video.FFmpegError) as e:
                 await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
-                continue
-        await deliver(msg, status, out, f"🎥 {v.plate} {v.channel_label(chn)} · {when}")
+                return
+        await deliver(msg, status, out,
+                      f"🎥 {v.plate} {v.channel_label(chn)} · {when}{_timing(stats)}")
+
+    # Las cámaras se piden a la vez (hasta MAX_PARALLEL_JOBS); cada una llega cuando está lista
+    await asyncio.gather(*(one(c) for c in chans))
 
 
 async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
                           start: int, stop: int, when: str) -> None:
     status = await msg.reply_text(
         f"⏳ {v.plate} {len(chans)} cámaras juntas, {when}: en cola…")
-    clips, ok, failed = [], [], []
-    async with jobs:
-        for i, chn in enumerate(chans, 1):
-            await _edit(status, f"⏳ Cámara {i} de {len(chans)} ({v.channel_label(chn)})…")
-            try:
-                clips.append(await make_clip(v, chn, day, start, stop, status))
-                ok.append(chn)
-            except (CMSV6Error, video.FFmpegError) as e:
-                failed.append(f"{v.channel_label(chn)}: {e}")
-        if not clips:
-            await status.edit_text("⚠️ No se pudo obtener ninguna cámara.\n" + "\n".join(failed))
-            return
-        await _edit(status, f"🧩 Armando el mosaico de {len(clips)} cámaras…")
-        out = links.files_dir() / _name(v, -1, day, start, stop, ".mp4", "camaras" + "-".join(
-            str(c + 1) for c in ok))
+    t0 = time.monotonic()
+    done_count = 0
+
+    async def one(chn: int) -> tuple[int, Path | None, str]:
+        nonlocal done_count
+        # Mensaje de estado propio por cámara para no pisar el progreso de las otras
+        sub = await msg.reply_text(f"⏳ {v.channel_label(chn)}: en cola…")
         try:
-            await video.mosaic(clips, out)
+            async with jobs:
+                clip = await make_clip(v, chn, day, start, stop, sub)
+            return chn, clip, ""
+        except (CMSV6Error, video.FFmpegError) as e:
+            return chn, None, f"{v.channel_label(chn)}: {e}"
         finally:
-            for c in clips:
-                c.unlink(missing_ok=True)
-        out.chmod(0o644)
-    caption = f"🎥 {v.plate} · cámaras {', '.join(str(c + 1) for c in ok)} juntas · {when}"
+            done_count += 1
+            await _edit(status, f"⏳ {v.plate}: {done_count} de {len(chans)} cámaras listas…")
+            try:
+                await sub.delete()
+            except Exception:
+                pass
+
+    results = await asyncio.gather(*(one(c) for c in chans))
+    clips = [r[1] for r in results if r[1]]
+    ok = [r[0] for r in results if r[1]]
+    failed = [r[2] for r in results if not r[1]]
+    if not clips:
+        await status.edit_text("⚠️ No se pudo obtener ninguna cámara.\n" + "\n".join(failed))
+        return
+    await _edit(status, f"🧩 Armando el mosaico de {len(clips)} cámaras…")
+    out = links.files_dir() / _name(v, -1, day, start, stop, ".mp4", "camaras" + "-".join(
+        str(c + 1) for c in ok))
+    try:
+        await video.mosaic(clips, out)
+    finally:
+        for c in clips:
+            c.unlink(missing_ok=True)
+    out.chmod(0o644)
+    caption = (f"🎥 {v.plate} · cámaras {', '.join(str(c + 1) for c in ok)} juntas · {when}"
+               f"\n⏱ {_mmss(time.monotonic() - t0)}")
     if failed:
         caption += "\n⚠️ Sin video: " + "; ".join(failed)
     await deliver(msg, status, out, caption)
@@ -288,7 +310,7 @@ async def make_photo(v: Vehicle, chn: int, day: date, at: int, status: Message) 
     recs = await cms.find_recordings(v, day, chn, at, at + 1, config.search_locations)
     if not recs:
         raise CMSV6Error(f"No hay grabación de {v.channel_label(chn)} a las {fmt_hms(at)}.")
-    raw, beg, stream = await fetch(v, recs[0], chn, day, at, at + 2, status)
+    raw, beg, stream, _ = await fetch(v, recs[0], chn, day, at, at + 2, status)
     out = links.files_dir() / _name(v, chn, day, at, None, ".jpg")
     await video.extract_frame(raw, out, at - beg, stream)
     return out
@@ -302,67 +324,114 @@ async def _edit(status: Message, text: str) -> None:
 
 
 async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
-                    status: Message) -> Path:
-    await status.edit_text(f"🔎 Buscando grabaciones de {v.plate} {v.channel_label(chn)}…")
+                    status: Message, stats: dict | None = None) -> Path:
+    """Arma el clip de una cámara. En stats deja cuánto tardó cada etapa (para el mensaje)."""
+    stats = stats if stats is not None else {}
+    t0 = time.monotonic()
+    await _edit(status, f"🔎 Buscando grabaciones de {v.plate} {v.channel_label(chn)}…")
     recs = await cms.find_recordings(v, day, chn, start, stop, config.search_locations)
     if not recs:
         raise CMSV6Error(f"No hay grabaciones en ese horario ({fmt_hms(start)}–{fmt_hms(stop)}).")
+    stats["buscar"] = time.monotonic() - t0
     pieces = []
     work = _work_dir()
     for i, rec in enumerate(recs, 1):
         a, b = max(start, rec.beg), min(stop, rec.end)
-        raw, beg, stream = await fetch(v, rec, chn, day, a, b, status, f"({i}/{len(recs)}) ")
-        await status.edit_text(f"🗜️ Comprimiendo parte {i}/{len(recs)}…")
+        prefix = f"({i}/{len(recs)}) " if len(recs) > 1 else ""
+        t1 = time.monotonic()
+        raw, beg, stream, how = await fetch(v, rec, chn, day, a, b, status, prefix)
+        stats["bajar"] = stats.get("bajar", 0) + time.monotonic() - t1
+        stats["metodo"] = how
+        t2 = time.monotonic()
+        await _edit(status, f"🗜️ {prefix}Comprimiendo {v.channel_label(chn)}…")
         piece = work / f"{raw.stem}_{a}_{b}.mp4"
         await video.compress_piece(raw, piece, a - beg, b - a, stream)
+        stats["comprimir"] = stats.get("comprimir", 0) + time.monotonic() - t2
         pieces.append(piece)
     out = links.files_dir() / _name(v, chn, day, start, stop, ".mp4")
     await video.concat(pieces, out)
     out.chmod(0o644)
+    stats["total"] = time.monotonic() - t0
+    log.info("Clip %s cam%d %s: %s", v.plate, chn + 1, out.name,
+             {k: (round(x) if isinstance(x, float) else x) for k, x in stats.items()})
     return out
 
 
+def _mmss(sec: float) -> str:
+    sec = int(round(sec))
+    return f"{sec // 60}:{sec % 60:02d}"
+
+
+def _timing(stats: dict) -> str:
+    if "total" not in stats:
+        return ""
+    how = {"cache": "ya estaba descargado", "tramos": "solo los minutos pedidos",
+           "directa": "archivo completo"}.get(stats.get("metodo", ""), "")
+    return (f"\n⏱ {_mmss(stats['total'])} (bajada {_mmss(stats.get('bajar', 0))}"
+            f"{' · ' + how if how else ''}, compresión {_mmss(stats.get('comprimir', 0))})")
+
+
 async def fetch(v: Vehicle, rec: RecFile, chn: int, day: date, start: int, stop: int,
-                status: Message, prefix: str = "") -> tuple[Path, int, int]:
+                status: Message, prefix: str = "") -> tuple[Path, int, int, str]:
     """Consigue el video de [start, stop] (o lo reutiliza si ya está en caché).
 
-    Devuelve (archivo, segundo del día en que empieza, índice del video dentro del archivo).
-    Primero intenta la descarga directa del archivo completo; si la grabación está en el
-    vehículo y no se puede bajar directo, pide a CMSV6 una descarga por tramos."""
+    Devuelve (archivo, segundo del día en que empieza, índice del video dentro del archivo,
+    método). Si la grabación está en el bus y se pide una parte pequeña del archivo, se piden
+    solo esos minutos (descarga por tramos), que es mucho menos dato por 4G; si eso falla o
+    no avanza, se baja el archivo completo, y viceversa."""
     work = _work_dir()
     safe = re.sub(r"[^\w.-]", "_", f"{rec.dev_id}_{rec.chn}_{rec.path}")[-150:]
     stream = rec.chns.index(chn) if chn in rec.chns else 0
     dest = work / safe
     if dest.exists():
         dest.touch()
-        return dest, rec.beg, stream
+        return dest, rec.beg, stream, "cache"
     seg_dest = work / f"{safe}_{start}_{stop}.seg"
     if seg_dest.exists():
         seg_dest.touch()
-        return seg_dest, start, 0
+        return seg_dest, start, 0, "cache"
 
-    can_segment = rec.loc == 1 and bool(rec.task_url)
-    if not (can_segment and (rec.segment_only or not rec.down_url)):
-        mb = f" ({rec.size / 1e6:.0f} MB)" if rec.size else ""
-        await status.edit_text(f"⬇️ {prefix}Descargando grabación desde el "
-                               f"{LOC_NAMES.get(rec.loc, 'servidor')}{mb}…")
+    can_segment = rec.loc == 1 and bool(rec.task_url) and config.segment_mode != "nunca"
+    can_direct = bool(rec.down_url or rec.loc != 1) and not rec.segment_only
+    small_part = (stop - start) <= 0.5 * max(rec.end - rec.beg, 1)
+    prefer_segment = can_segment and (not can_direct or config.segment_mode == "siempre"
+                                      or small_part)
+
+    async def seg_progress(state: str) -> None:
+        await _edit(status, f"📡 {prefix}Pidiendo al bus solo {fmt_hms(start)}–{fmt_hms(stop)}: "
+                            f"{state}…")
+
+    async def dl_progress(done: int, total: int, speed: float) -> None:
+        pct = f" {done * 100 // total}%" if total else ""
+        await _edit(status, f"⬇️ {prefix}Bajando grabación{pct}: {done / 1e6:.0f}"
+                            f"{f'/{total / 1e6:.0f}' if total else ''} MB a {speed * 8 / 1e6:.1f} Mbps…")
+
+    async def by_segment(stall: int | None) -> tuple[Path, int, int, str]:
+        await seg_progress("enviando solicitud")
+        path, beg = await cms.segment_download(v, rec, day, start, stop, seg_dest,
+                                               seg_progress, stall_s=stall)
+        return path, beg, 0, "tramos"
+
+    async def direct() -> tuple[Path, int, int, str]:
+        await dl_progress(0, rec.size, 0)
+        return await cms.download(rec, dest, dl_progress), rec.beg, stream, "directa"
+
+    if prefer_segment:
         try:
-            return await cms.download(rec, dest), rec.beg, stream
+            # Si hay plan B, no se espera más de segment_stall_s a que el bus responda
+            return await by_segment(config.segment_stall_s if can_direct else None)
         except CMSV6Error as e:
-            if not can_segment:
+            if not can_direct:
                 raise
-            log.info("Descarga directa falló (%s); se intenta por tramos", e)
-
-    async def progress(state: str) -> None:
-        try:
-            await status.edit_text(f"📡 {prefix}Pidiendo al vehículo el tramo "
-                                   f"{fmt_hms(start)}–{fmt_hms(stop)}: {state}…")
-        except Exception:
-            pass  # Telegram rechaza ediciones con el mismo texto
-
-    await progress("enviando solicitud")
-    path, beg = await cms.segment_download(v, rec, day, start, stop, seg_dest, progress)
-    return path, beg, 0
+            log.info("Descarga por tramos falló (%s); se baja el archivo completo", e)
+            return await direct()
+    try:
+        return await direct()
+    except CMSV6Error as e:
+        if not can_segment:
+            raise
+        log.info("Descarga directa falló (%s); se intenta por tramos", e)
+        return await by_segment(None)
 
 
 async def deliver(msg: Message, status: Message, out: Path, caption: str) -> None:

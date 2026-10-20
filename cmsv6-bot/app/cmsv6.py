@@ -264,7 +264,8 @@ class CMSV6:
         return f"{base}?{urlencode(query)}"
 
     async def segment_download(self, v: Vehicle, f: RecFile, day: date, start: int, stop: int,
-                               dest: Path, progress=None, timeout_s: int = 1200) -> tuple[Path, int]:
+                               dest: Path, progress=None, timeout_s: int = 1200,
+                               stall_s: int | None = None) -> tuple[Path, int]:
         """Pide a CMSV6 que baje del equipo solo el tramo [start, stop] y luego lo descarga.
 
         Devuelve el archivo y el segundo del día en que empieza."""
@@ -282,10 +283,11 @@ class CMSV6:
         await self.call("StandardApiAction_addDownloadTask.action", query)
         log.info("Tarea de descarga por tramos %s creada (%s – %s)", tag, fmt(a), fmt(b))
 
-        deadline = time.monotonic() + timeout_s
+        started = time.monotonic()
+        deadline = started + timeout_s
         info: dict = {}
         while time.monotonic() < deadline:
-            await asyncio.sleep(10)
+            await asyncio.sleep(3)
             data = await self.call("StandardApiAction_downloadTasklist.action", {
                 "taskTag": tag, "begintime": fmt(0), "endtime": fmt(86399 + 86400)})
             infos = data.get("infos") or []
@@ -298,6 +300,15 @@ class CMSV6:
                 raise CMSV6Error(f"El vehículo no pudo enviar el video: {info.get('err') or 'sin detalle'}")
             if stu == 4:
                 break
+            # stu 1 = en espera: el vehículo aún no empieza a enviar
+            if stall_s is not None and stu in (None, 1) and time.monotonic() - started > stall_s:
+                # Se cancela la tarea para que no compita por el 4G del bus con el plan B
+                try:
+                    await self.call("StandardApiAction_delDownloadTasklist.action",
+                                    {"devIdno": f.dev_id, "taskTag": tag})
+                except CMSV6Error as e:
+                    log.info("No se pudo cancelar la tarea %s: %s", tag, e)
+                raise CMSV6Error(f"El vehículo no empezó a enviar el tramo en {stall_s} s.")
         else:
             raise CMSV6Error("El vehículo tardó demasiado en enviar el video "
                              "(¿está apagado o sin señal?). La tarea sigue en CMSV6; intenta más tarde.")
@@ -317,12 +328,12 @@ class CMSV6:
                 return dest, rec.beg
         raise CMSV6Error("La descarga terminó pero no encontré el archivo en el servidor.")
 
-    async def download(self, f: RecFile, dest: Path) -> Path:
+    async def download(self, f: RecFile, dest: Path, progress=None) -> Path:
         if not self.jsession:
             await self.login()
-        return await self._download_url(self.download_url(f), dest)
+        return await self._download_url(self.download_url(f), dest, progress, f.size)
 
-    async def _download_url(self, url: str, dest: Path) -> Path:
+    async def _download_url(self, url: str, dest: Path, progress=None, total: int = 0) -> Path:
         log.info("Descargando %s", url.split("jsession=")[0])
         http = await self._http()
         tmp = dest.with_suffix(dest.suffix + ".part")
@@ -330,9 +341,16 @@ class CMSV6:
         try:
             async with http.get(url, timeout=timeout) as r:
                 r.raise_for_status()
+                total = total or int(r.headers.get("Content-Length") or 0)
+                done, t0, last = 0, time.monotonic(), 0.0
                 with tmp.open("wb") as fh:
                     async for chunk in r.content.iter_chunked(1 << 16):
                         fh.write(chunk)
+                        done += len(chunk)
+                        now = time.monotonic()
+                        if progress and now - last >= 5:
+                            last = now
+                            await progress(done, total, done / max(now - t0, 0.001))
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             tmp.unlink(missing_ok=True)
             raise CMSV6Error(f"Falló la descarga del archivo de grabación: {e}") from e

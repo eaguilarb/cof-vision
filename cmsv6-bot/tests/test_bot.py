@@ -285,3 +285,80 @@ async def test_enlinea(monkeypatch):
     await main.cmd_enlinea(upd, MagicMock(args=["spb"]))
     text = msg.reply_text.call_args.args[0]
     assert "1 de 2" in text and "SPBS42" in text and "SPBS40" not in text
+
+
+@pytest.mark.asyncio
+async def test_prefers_partial_download_and_falls_back(tmp_path, monkeypatch):
+    """Bus con descarga directa y por tramos: pide solo los minutos; si el bus no responde,
+    baja el archivo completo."""
+    raw = tmp_path / "full.264"
+    _make_raw(raw, 60)
+    state = {"tasks": 0, "direct": 0, "stu": 4}
+
+    async def login(r):
+        return web.json_response({"result": 0, "jsession": "J1"})
+
+    async def search(r):
+        if r.query["LOC"] != "1":
+            return web.json_response({"result": 0, "files": []})
+        return web.json_response({"result": 0, "files": [{
+            "beg": 50400, "end": 54000, "chn": 0, "file": "/rec/h.264", "len": raw.stat().st_size,
+            "loc": 1, "stream": -1,
+            "DownUrl": f"http://10.0.0.5:{port}/3/5?DownType=3&jsession=&FPATH=/rec/h.264&SAVENAME=",
+            "DownTaskUrl": f"http://10.0.0.5:{port}/StandardApiAction_addDownloadTask.action?"
+                           "jsession=&did=D1&fph=/rec/h.264&chn=0&dtp=1"}]})
+
+    async def add_task(r):
+        state["tasks"] += 1
+        return web.json_response({"result": 0})
+
+    async def tasks(r):
+        return web.json_response({"result": 0, "infos": [{
+            "stu": state["stu"],
+            "downUrl": f"http://10.0.0.5:{port}/seg?FPATH=x.mp4&SAVENAME=x.mp4"}]})
+
+    async def seg(r):
+        return web.FileResponse(raw)
+
+    async def direct(r):
+        state["direct"] += 1
+        return web.FileResponse(raw)
+
+    app = web.Application()
+    for path, h in [("/StandardApiAction_login.action", login),
+                    ("/StandardApiAction_getVideoFileInfo.action", search),
+                    ("/StandardApiAction_addDownloadTask.action", add_task),
+                    ("/StandardApiAction_downloadTasklist.action", tasks),
+                    ("/StandardApiAction_delDownloadTasklist.action", login),
+                    ("/seg", seg), ("/3/5", direct)]:
+        app.router.add_get(path, h)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+
+    from app import cmsv6 as cmsv6_mod, main
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(cmsv6_mod.asyncio, "sleep", lambda s: real_sleep(0.01))
+    object.__setattr__(main.config, "data_dir", tmp_path / "data")
+    object.__setattr__(main.config, "search_locations", [2, 1])
+    object.__setattr__(main.config, "segment_stall_s", 0)
+    cms = CMSV6(f"http://127.0.0.1:{port}", "u", "p")
+    monkeypatch.setattr(main, "cms", cms)
+    status = MagicMock(edit_text=AsyncMock())
+    v = main.Vehicle(plate="ABC123", dev_id="D1", channels=1, channel_names=[])
+
+    # 1) Archivo de 1 hora, se piden 30 s → por tramos, sin bajar el archivo completo
+    stats = {}
+    await main.make_clip(v, 0, date(2026, 10, 19), 50410, 50440, status, stats)
+    assert stats["metodo"] == "tramos" and state["tasks"] == 1 and state["direct"] == 0
+    assert "solo los minutos pedidos" in main._timing(stats)
+
+    # 2) El bus no avanza (stu=1) → se usa la descarga directa
+    state["stu"] = 1
+    stats = {}
+    await main.make_clip(v, 0, date(2026, 10, 19), 50450, 50460, status, stats)
+    assert stats["metodo"] == "directa" and state["direct"] == 1
+    await cms.close()
+    await runner.cleanup()
