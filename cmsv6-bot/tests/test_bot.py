@@ -1042,6 +1042,10 @@ async def test_correo_register_and_email_links(tmp_path, monkeypatch):
     assert sent[-1][1] == "Video X" and "http://l/1" in sent[-1][2]
     await main.email_links(8, "otro", ["x"])           # sin correo registrado: nada
     assert len(sent) == 2
+    object.__setattr__(main.config, "email_to", ["jefe@empresa.cl"])
+    await main.email_links(8, "fijo", ["x"])           # EMAIL_TO recibe siempre
+    assert sent[-1][0] == "jefe@empresa.cl"
+    object.__setattr__(main.config, "email_to", [])
     await main.cmd_correo(upd, MagicMock(args=["no"]))
     assert mail.get(7) is None
     for k in ("smtp_host", "smtp_user", "smtp_password"):

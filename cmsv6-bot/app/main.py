@@ -228,14 +228,19 @@ async def cmd_correo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def email_links(user_id: int | None, subject: str, lines: list[str]) -> None:
     """Si la persona registró su correo, le envía los enlaces (sin frenar el pedido)."""
-    to = mail.get(user_id) if user_id and mail.enabled() else None
-    if not to:
+    if not mail.enabled():
+        return
+    # Destinatarios fijos (EMAIL_TO en .env) + el correo que la persona registró con /correo
+    dest = list(dict.fromkeys(config.email_to + ([mail.get(user_id)] if user_id and
+                                                  mail.get(user_id) else [])))
+    if not dest:
         return
     body = "\n".join(lines + ["", f"Los enlaces vencen en {config.link_hours} horas."])
-    try:
-        await mail.send(to, subject, body)
-    except Exception as e:
-        log.warning("No se pudo enviar el correo a %s: %s", to, e)
+    for to in dest:
+        try:
+            await mail.send(to, subject, body)
+        except Exception as e:
+            log.warning("No se pudo enviar el correo a %s: %s", to, e)
 
 
 @authorized

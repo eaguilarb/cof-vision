@@ -38,6 +38,8 @@ class Config:
     smtp_user: str = os.environ.get("SMTP_USER", "")
     smtp_password: str = os.environ.get("SMTP_PASSWORD", "")
     smtp_from: str = os.environ.get("SMTP_FROM", "")
+    # Correos que reciben SIEMPRE los enlaces de todos los videos (separados por coma)
+    email_to: list[str] = field(default_factory=lambda: _list("EMAIL_TO"))
 
     data_dir: Path = Path(os.environ.get("DATA_DIR", "/data"))
     public_url: str = os.environ.get("PUBLIC_URL", "").rstrip("/")
