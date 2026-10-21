@@ -24,7 +24,7 @@ Corre en el VPS (Ubuntu 24.04) con Docker.
 | `/video ABC123 1 hoy 14:00 14:10` | Clip de la cámara 1, comprimido |
 | `/video ABC123 todos 19/10 08:30 08:35` | Un clip por cada cámara (separadas) |
 | `/video ABC123 todos 19/10 08:30 08:35 juntas` | Todas las cámaras en un solo video (mosaico) |
-| `/video ABC123 1,3 hoy 08:30 08:35 juntas` | Cámaras 1 y 3 lado a lado; el bot pregunta de qué cámara va el audio y respondes con el número |
+| `/video ABC123 1,3 hoy 08:30 08:35 juntas` | Cámaras 1 y 3 lado a lado; el bot pregunta con botones de qué cámara va el audio |
 | `/video ABC123 1,2,3 hoy 08:30 08:35 juntas audio2` | Mosaico con el sonido de la cámara 2 (`sinaudio` lo quita) |
 | `/video ABC123 1 hoy 08:30 08:35 rapido` | Usa la grabación liviana del bus: menos calidad, llega mucho antes |
 | `/foto ABC123` o `/foto ABC123 1,3` | Foto de **ahora mismo** (en vivo, en segundos) |

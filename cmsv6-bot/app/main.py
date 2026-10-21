@@ -12,9 +12,9 @@ import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 
-from telegram import Message, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from . import links, video
 from .cmsv6 import CMSV6, CMSV6Error, LOC_NAMES, RecFile, Vehicle
@@ -59,8 +59,7 @@ AYUDA = """\
 Fecha: hoy, ayer, 19/10 o 19/10/2026. Canal: 1, 2, 1,3 o todos.
 Con varias cámaras: sin nada al final llegan separadas; con «juntas», en mosaico.
 En el mosaico: «audio2» usa el sonido de la cámara 2, «sinaudio» lo quita; si no pones
-nada, el bot te pregunta y respondes con el número de la cámara. Un video solo
-conserva su audio.
+nada, el bot te pregunta con botones. Un video solo conserva su audio.
 «rapido» al final usa la grabación liviana del bus (menos calidad, llega mucho antes).
 Máximo {max} minutos por video."""
 
@@ -479,46 +478,44 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await asyncio.gather(*(one(c) for c in chans))
 
 
-# Elección de audio del mosaico: el bot pregunta y el usuario responde con el número de la
-# cámara. Pedidos esperando respuesta por chat: [(futuro, cámaras, placa), ...]
-_audio_wait: dict[int, list[tuple[asyncio.Future, list[int], str]]] = {}
+# Elección de audio del mosaico con botones: id del pedido → futuro con la cámara elegida
+_audio_choice: dict[str, asyncio.Future] = {}
 
 
 async def _ask_audio(msg: Message, v: Vehicle, chans: list[int]) -> asyncio.Future:
     """Pregunta de qué cámara va el sonido del mosaico (mientras las cámaras se suben)."""
+    req = f"{msg.chat_id}{msg.message_id}"[-12:]
     fut = asyncio.get_running_loop().create_future()
-    _audio_wait.setdefault(msg.chat_id, []).append((fut, chans, v.plate))
-    cams = ", ".join(str(c + 1) for c in chans)
-    await msg.reply_text(
-        f"🎧 {v.plate}: ¿de qué cámara quieres el audio del mosaico?\n"
-        f"Responde con el número de la cámara ({cams}) o 0 para sin audio.\n"
-        "(Mientras respondes, las cámaras ya se están subiendo al FTP)")
+    _audio_choice[req] = fut
+    rows = [[InlineKeyboardButton(f"🔊 {v.channel_label(c)}", callback_data=f"aud:{req}:{c}")
+             for c in chans[i:i + 3]] for i in range(0, len(chans), 3)]
+    rows.append([InlineKeyboardButton("🔇 Sin audio", callback_data=f"aud:{req}:-1")])
+    await msg.reply_text("🎧 ¿De qué cámara quieres el audio del mosaico?\n"
+                         "(Mientras eliges, las cámaras ya se están subiendo al FTP)",
+                         reply_markup=InlineKeyboardMarkup(rows))
     return fut
 
 
-def _forget_audio(chat_id: int, fut: asyncio.Future) -> None:
-    waiting = _audio_wait.get(chat_id, [])
-    _audio_wait[chat_id] = [w for w in waiting if w[0] is not fut]
-
-
-async def on_audio_reply(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Respuesta con un número a la pregunta del audio."""
-    msg = update.effective_message
+async def on_audio_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
     user = update.effective_user
-    waiting = [w for w in _audio_wait.get(msg.chat_id, []) if not w[0].done()]
-    if not waiting or not user or user.id not in config.allowed_users:
+    if not user or user.id not in config.allowed_users:
+        await q.answer("No tienes permiso.")
         return
-    fut, chans, plate = waiting[0]  # se responde al pedido más antiguo que espera
-    n = int(msg.text.strip())
-    if n == 0:
-        fut.set_result(-1)
-        await msg.reply_text(f"🔇 {plate}: mosaico sin audio.")
-    elif n - 1 in chans:
-        fut.set_result(n - 1)
-        await msg.reply_text(f"🔊 {plate}: audio de la cámara {n}.")
-    else:
-        await msg.reply_text(f"Esa cámara no está en el mosaico. Responde "
-                             f"{', '.join(str(c + 1) for c in chans)} o 0 para sin audio.")
+    try:
+        _, req, val = q.data.split(":")
+        choice = int(val)
+    except ValueError:
+        await q.answer()
+        return
+    fut = _audio_choice.get(req)
+    if fut is None or fut.done():
+        await q.answer("Ese pedido ya terminó.")
+        return
+    fut.set_result(choice)
+    await q.answer("Listo")
+    await q.edit_message_text("🔇 Mosaico sin audio" if choice < 0
+                              else f"🔊 Audio del mosaico: cámara {choice + 1}")
 
 
 async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
@@ -554,16 +551,15 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
         str(c + 1) for c in ok))
     if choice_fut is not None:
         if not choice_fut.done():
-            await _edit(status, f"{title}\n{_bar(96)} 96% · 🎧 Cámaras listas: responde con el "
-                                "número de la cámara para el audio (si no respondes en 60 s, "
-                                "uso la primera con sonido)")
+            await _edit(status, f"{title}\n{_bar(96)} 96% · 🎧 Cámaras listas: elige el audio "
+                                "arriba (si no eliges en 60 s, uso la primera con sonido)")
             try:
                 audio = await asyncio.wait_for(asyncio.shield(choice_fut), 60)
             except asyncio.TimeoutError:
                 audio = None
         else:
             audio = choice_fut.result()
-        _forget_audio(msg.chat_id, choice_fut)
+        _audio_choice.pop(next((k for k, f in _audio_choice.items() if f is choice_fut), ""), None)
     # Audio: la cámara elegida (si llegó), o la primera que tenga sonido
     audio_idx = ok.index(audio) if audio is not None and audio in ok else (
         -1 if audio == -1 else None)
@@ -1388,8 +1384,7 @@ def main() -> None:
     app.add_handler(CommandHandler(["vivo", "envivo"], cmd_vivo))
     app.add_handler(CommandHandler(["cancelar", "detener", "parar"], cmd_cancelar))
     app.add_handler(CommandHandler("probar", cmd_probar))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND
-                                   & filters.Regex(r"^\s*\d\s*$"), on_audio_reply))
+    app.add_handler(CallbackQueryHandler(on_audio_button, pattern=r"^aud:"))
     app.add_handler(CommandHandler("video", cmd_video))
     app.add_handler(CommandHandler("foto", cmd_foto))
     log.info("Bot iniciado (Bot API: %s)", config.bot_api_url or "nube de Telegram")
