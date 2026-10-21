@@ -959,12 +959,10 @@ async def test_juntas_ftp_asks_audio_and_builds_mosaic(tmp_path, monkeypatch):
     monkeypatch.setattr(main.cms, "ftp_download", ftp)
     sent = {}
     status = MagicMock(edit_text=AsyncMock(), delete=AsyncMock(), chat_id=1)
-    buttons = MagicMock(chat_id=1)
 
     async def reply_text(text, **kw):
-        if kw.get("reply_markup"):
-            sent["markup"] = kw["reply_markup"]
-            return buttons
+        if "audio del mosaico" in text:
+            sent["question"] = text
         return status
 
     async def reply_video(video, caption, **kw):
@@ -976,12 +974,13 @@ async def test_juntas_ftp_asks_audio_and_builds_mosaic(tmp_path, monkeypatch):
                                                    27600, 27606, "21/10/2026"))
     for _ in range(100):
         await asyncio.sleep(0.02)
-        if "markup" in sent:
+        if "question" in sent:
             break
-    data = sent["markup"].inline_keyboard[0][1].callback_data  # botón «cam3»
-    q = MagicMock(data=data, answer=AsyncMock(), edit_message_text=AsyncMock())
-    upd = MagicMock(callback_query=q, effective_user=MagicMock(id=7))
-    await main.on_audio_button(upd, MagicMock())
+    assert "Responde con el número de la cámara (1, 3)" in sent["question"]
+    answer = MagicMock(chat_id=1, text="3", reply_text=AsyncMock())
+    await main.on_audio_reply(MagicMock(effective_message=answer,
+                                        effective_user=MagicMock(id=7)), MagicMock())
+    assert "audio de la cámara 3" in answer.reply_text.call_args.args[0]
     await job
     assert active["max"] == 1                        # el bus sube una cámara a la vez
     assert "audio de la cámara 3" in sent["caption"]
