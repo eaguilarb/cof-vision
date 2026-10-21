@@ -66,8 +66,10 @@ class Config:
     download_method: str = os.environ.get("DOWNLOAD_METHOD", "ftp").lower()
     # Transmisiones de reproducción a la vez por bus (una por cámara)
     bus_streams: int = int(os.environ.get("BUS_STREAMS", "4"))
-    # Subidas FTP a la vez por bus: el equipo atiende una orden de subida a la vez
-    ftp_parallel: int = int(os.environ.get("FTP_PARALLEL", "1"))
+    # Subidas FTP a la vez por bus (el aplicativo permite hasta 3). Las órdenes se envían
+    # separadas por unos segundos: dos órdenes en el mismo instante el bus no las contesta
+    ftp_parallel: int = int(os.environ.get("FTP_PARALLEL", "3"))
+    ftp_order_gap: float = float(os.environ.get("FTP_ORDER_GAP", "2"))
 
     @property
     def telegram_max_mb(self) -> int:

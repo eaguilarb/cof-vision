@@ -851,7 +851,8 @@ async def test_ftp_only_no_search_no_other_methods(tmp_path, monkeypatch):
                     "ultrafast", str(avi)], check=True)
     texts = []
 
-    async def ftp(dev, chn, day, a, b, dest, progress, dl_progress, stream, on_uploaded=None):
+    async def ftp(dev, chn, day, a, b, dest, progress, dl_progress, stream, on_uploaded=None,
+                  order_lock=None, order_gap=0):
         await progress("el bus está subiendo por FTP", 1, 20, None)
         if on_uploaded:
             on_uploaded()
@@ -947,7 +948,8 @@ async def test_juntas_ftp_asks_audio_and_builds_mosaic(tmp_path, monkeypatch):
         srcs[c] = p
     active = {"n": 0, "max": 0}
 
-    async def ftp(dev, chn, day, a, b, dest, progress, dl_progress, stream, on_uploaded=None):
+    async def ftp(dev, chn, day, a, b, dest, progress, dl_progress, stream, on_uploaded=None,
+                  order_lock=None, order_gap=0):
         active["n"] += 1
         active["max"] = max(active["max"], active["n"])
         await asyncio.sleep(0.05)
@@ -983,9 +985,40 @@ async def test_juntas_ftp_asks_audio_and_builds_mosaic(tmp_path, monkeypatch):
     upd = MagicMock(callback_query=q, effective_user=MagicMock(id=7))
     await main.on_audio_button(upd, MagicMock())
     await job
-    assert active["max"] == 1                        # el bus sube una cámara a la vez
+    assert active["max"] == 2                        # hasta 3 subidas a la vez (aquí 2 cámaras)
     assert "audio de la cámara 3" in sent["caption"]
     dims = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
                            "stream=width,height", "-of", "csv=p=0", str(sent["video"])],
                           capture_output=True, text=True).stdout.strip()
     assert dims == "1280,360"                        # mosaico de 2 cámaras
+
+
+@pytest.mark.asyncio
+async def test_ftp_orders_are_spaced(monkeypatch, tmp_path):
+    """Varias subidas a la vez, pero las órdenes al bus salen de a una y separadas."""
+    import time as _t
+    from app import cmsv6 as m
+    cms = CMSV6("http://x:8088", "u", "p")
+    cms.jsession = "J"
+    sent = []
+
+    async def call(action, params=None):
+        if "ftpUpload" in action:
+            sent.append(_t.monotonic())
+            return {"result": "0", "SEQUENCE": len(sent)}
+        return {"result": 0, "info": {"status": 4, "downloadUrl": "http://x:6611/3/5?FPATH=a"}}
+
+    async def dl(url, dest, progress=None, total=0):
+        dest.write_bytes(b"x" * 2048)
+        return dest
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(m.asyncio, "sleep", lambda s: real_sleep(min(s, 0.2)))
+    monkeypatch.setattr(cms, "call", call)
+    monkeypatch.setattr(cms, "_download_url", dl)
+    lock = asyncio.Lock()
+    await asyncio.gather(*(cms.ftp_download("D", c, date(2026, 10, 21), 27600, 27780,
+                                            tmp_path / f"{c}.avi", order_lock=lock, order_gap=1)
+                           for c in range(3)))
+    assert len(sent) == 3
+    assert all(b - a >= 0.15 for a, b in zip(sent, sent[1:]))  # órdenes separadas

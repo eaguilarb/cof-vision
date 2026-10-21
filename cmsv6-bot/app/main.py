@@ -814,6 +814,15 @@ def _ftp_first(recs: list[RecFile]) -> bool:
     return _method_vel("ftp") >= rest
 
 
+_order_locks: dict[str, asyncio.Lock] = {}
+
+
+def _bus_order_lock(dev_id: str) -> asyncio.Lock:
+    if dev_id not in _order_locks:
+        _order_locks[dev_id] = asyncio.Lock()
+    return _order_locks[dev_id]
+
+
 def _bus_ftp_slot(dev_id: str) -> asyncio.Semaphore:
     key = "ftp:" + dev_id
     if key not in _bus_slots:
@@ -1050,7 +1059,8 @@ async def fetch_ftp(v: Vehicle, chn: int, day: date, start: int, stop: int, stat
     t = time.monotonic()
     slot = _bus_ftp_slot(v.dev_id)
     if slot.locked():
-        await _edit(status, "⏳ En fila: el bus sube una cámara a la vez al FTP", 1, exp * 2)
+        await _edit(status, f"⏳ En fila: el bus sube hasta {config.ftp_parallel} cámaras a la vez "
+                            "al FTP", 1, exp * 2)
     await slot.acquire()
     held = True
 
@@ -1067,7 +1077,9 @@ async def fetch_ftp(v: Vehicle, chn: int, day: date, start: int, stop: int, stat
         for i, stream in enumerate(streams):
             try:
                 path = await cms.ftp_download(v.dev_id, chn, day, start, stop, dest, progress,
-                                              dl_progress, stream, on_uploaded=release)
+                                              dl_progress, stream, on_uploaded=release,
+                                              order_lock=_bus_order_lock(v.dev_id),
+                                              order_gap=config.ftp_order_gap)
                 break
             except CMSV6Error as e:
                 if i == len(streams) - 1:

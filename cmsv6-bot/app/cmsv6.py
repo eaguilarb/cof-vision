@@ -391,7 +391,8 @@ class CMSV6:
 
     async def ftp_download(self, dev_id: str, chn: int, day: date, start: int, stop: int,
                            dest: Path, progress=None, dl_progress=None, stream: int = 0,
-                           timeout_s: int | None = None, on_uploaded=None) -> Path:
+                           timeout_s: int | None = None, on_uploaded=None,
+                           order_lock: asyncio.Lock | None = None, order_gap: float = 0) -> Path:
         """Método FTP (como en el aplicativo): el bus sube el horario pedido directo al FTP de
         CMSV7 en un solo archivo (AVI) y luego se descarga del servidor.
 
@@ -406,9 +407,19 @@ class CMSV6:
                   "NETMASK": 7}  # WiFi + LAN + 4G
         # 22 = «device no response»: el bus no contestó la orden (ocupado o señal débil);
         # se reintenta unas veces antes de rendirse
+        async def send_order() -> dict:
+            if order_lock is None:
+                return await self.call("StandardApiAction_ftpUpload.action", params)
+            # Una orden a la vez hacia el bus, con una pausa antes de la siguiente
+            async with order_lock:
+                try:
+                    return await self.call("StandardApiAction_ftpUpload.action", params)
+                finally:
+                    await asyncio.sleep(order_gap)
+
         for attempt in range(4):
             try:
-                data = await self.call("StandardApiAction_ftpUpload.action", params)
+                data = await send_order()
                 break
             except CMSV6Error as e:
                 if e.code not in (22, 26) or attempt == 3:
