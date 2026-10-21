@@ -97,7 +97,7 @@ class CMSV6:
                     return
             data = await self._raw("StandardApiAction_login.action",
                                    {"account": self.account, "password": self.password})
-            result = data.get("result")
+            result = _as_int(data.get("result"))
             if result == 34:
                 raise CMSV6Error(
                     f"El usuario «{self.account}» tiene «inicio de sesión único» y ya está "
@@ -129,7 +129,7 @@ class CMSV6:
             await self.login()
         for attempt in (1, 2):
             data = await self._raw(action, {**(params or {}), "jsession": self.jsession})
-            result = data.get("result")
+            result = _as_int(data.get("result"))
             if result == 0:
                 return data
             # 5 = la sesión no existe (vence a las 4 h sin uso)
@@ -418,7 +418,7 @@ class CMSV6:
                 info = data.get("info") or {}
                 if isinstance(info, list):
                     info = info[0] if info else {}
-                st = info.get("status", info.get("taskStatus"))
+                st = _as_int(info.get("status", info.get("taskStatus")))
                 if not logged and st == 1:
                     logged = True
                     log.info("Tarea FTP en curso (campos de CMSV7): %s", info)
@@ -528,6 +528,14 @@ class CMSV6:
             raise CMSV6Error(f"CMSV6 devolvió un archivo vacío o un error: {body!r}")
         tmp.rename(dest)
         return dest
+
+
+def _as_int(v):
+    """Algunas acciones de CMSV7 devuelven «result» como texto ("0") en vez de número."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return v
 
 
 def _pick_stream(files: list[RecFile], prefer_sub: bool) -> list[RecFile]:

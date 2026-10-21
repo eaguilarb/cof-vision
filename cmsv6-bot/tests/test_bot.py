@@ -878,3 +878,13 @@ async def test_ftp_only_no_search_no_other_methods(tmp_path, monkeypatch):
     with pytest.raises(CMSV6Error, match="FTP"):
         await main._clip_fn()(v, 1, date(2026, 10, 21), 27600, 27610, MagicMock(edit_text=AsyncMock()))
     search.assert_not_called()  # no hubo plan B con otros métodos
+
+
+@pytest.mark.asyncio
+async def test_result_as_text_is_success(monkeypatch):
+    """ftpUpload responde {"result":"0"} (texto): debe tomarse como éxito."""
+    cms = CMSV6("http://x:8088", "u", "p")
+    cms.jsession = "J"
+    monkeypatch.setattr(cms, "_raw", AsyncMock(return_value={"result": "0", "SEQUENCE": "12"}))
+    data = await cms.call("StandardApiAction_ftpUpload.action", {})
+    assert data["SEQUENCE"] == "12"
