@@ -575,6 +575,7 @@ async def test_cancelar_stops_request_and_bus_task(monkeypatch, tmp_path):
     from app import cmsv6 as m
     object.__setattr__(main.config, "allowed_users", [7])
     object.__setattr__(main.config, "data_dir", tmp_path)
+    object.__setattr__(main.config, "download_method", "tramos")
     deleted = []
 
     async def call(action, params=None):
@@ -834,3 +835,46 @@ async def test_mosaic_audio_choice(tmp_path):
     single = tmp_path / "one.mp4"
     await video.compress_piece(clips[1], single, 0, 3)
     assert await video.has_audio(single)              # un solo video conserva su audio
+
+
+@pytest.mark.asyncio
+async def test_ftp_only_no_search_no_other_methods(tmp_path, monkeypatch):
+    """Modo FTP: no busca grabaciones ni usa otros métodos; si el FTP falla, lo dice."""
+    from app import main
+    object.__setattr__(main.config, "download_method", "ftp")
+    object.__setattr__(main.config, "data_dir", tmp_path)
+    search = AsyncMock()
+    monkeypatch.setattr(main.cms, "find_recordings", search)
+    avi = tmp_path / "x.avi"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "testsrc=size=640x360:rate=15:duration=10", "-c:v", "libx264", "-preset",
+                    "ultrafast", str(avi)], check=True)
+    texts = []
+
+    async def ftp(dev, chn, day, a, b, dest, progress, dl_progress, stream):
+        await progress("el bus está subiendo por FTP", 1, 20, None)
+        await dl_progress(5_000_000, 10_000_000, 1_000_000)
+        dest.write_bytes(avi.read_bytes())
+        return dest
+
+    monkeypatch.setattr(main.cms, "ftp_download", ftp)
+    status = MagicMock(edit_text=AsyncMock(side_effect=lambda t: texts.append(t)))
+    tracker = main.Tracker(status, "🎥 prueba")
+    cam = tracker.cam(0, "cam1")
+    stats = {}
+    v = main.Vehicle("SVDD59", "D1", 5, [])
+    out = await main._clip_fn()(v, 0, date(2026, 10, 21), 27600, 27610, cam, stats)
+    await tracker.render(force=True)
+    tracker.stop()
+    search.assert_not_called()
+    assert stats["metodo"] == "ftp" and stats["avi"].suffix == ".avi"
+    assert 9 <= await video.probe_duration(out) <= 11
+    joined = "\n".join(texts)
+    assert "Descargando del FTP" in joined or "Subiendo al FTP" in joined or "listo" in joined
+
+    async def ftp_fail(*a, **k):
+        raise CMSV6Error("El bus no pudo subir el video por FTP")
+    monkeypatch.setattr(main.cms, "ftp_download", ftp_fail)
+    with pytest.raises(CMSV6Error, match="FTP"):
+        await main._clip_fn()(v, 1, date(2026, 10, 21), 27600, 27610, MagicMock(edit_text=AsyncMock()))
+    search.assert_not_called()  # no hubo plan B con otros métodos

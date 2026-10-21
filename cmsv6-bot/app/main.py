@@ -4,6 +4,7 @@ import asyncio
 import functools
 import json
 import logging
+import os
 import re
 import shutil
 import time
@@ -421,7 +422,7 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     msg = update.effective_message
     total_video = (stop - start) * len(chans)
-    if total_video >= 6 * 60:
+    if total_video >= 6 * 60 and config.download_method != "ftp":
         sp = _speed()
         eta = (sp["base"] * len(chans) + sp["ratio"] * total_video) / max(1, config.bus_parallel)
         await msg.reply_text(
@@ -440,7 +441,7 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         tracker = Tracker(status, title)
         stats: dict = {}
         try:
-            out = await make_clip(v, chn, day, start, stop, tracker.cam(chn, v.channel_label(chn)),
+            out = await _clip_fn()(v, chn, day, start, stop, tracker.cam(chn, v.channel_label(chn)),
                                   stats, fast)
         except (CMSV6Error, video.FFmpegError) as e:
             tracker.stop()
@@ -448,8 +449,13 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         tracker.stop()
         sound = "" if await video.has_audio(out) else "\n🔇 esta grabación no trae audio"
+        avi = ""
+        if stats.get("avi"):
+            link = links.make_link(stats["avi"])
+            if link:
+                avi = f"\n📼 AVI original del FTP: {link}"
         await deliver(msg, status, out,
-                      f"🎥 {v.plate} {v.channel_label(chn)} · {when}{sound}{_timing(stats)}")
+                      f"🎥 {v.plate} {v.channel_label(chn)} · {when}{sound}{_timing(stats)}{avi}")
 
     # Las cámaras se piden todas a la vez; cada una llega cuando está lista
     await asyncio.gather(*(one(c) for c in chans))
@@ -466,7 +472,7 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
 
     async def one(chn: int) -> tuple[int, Path | None, str]:
         try:
-            clip = await make_clip(v, chn, day, start, stop, cam_status[chn], None, fast,
+            clip = await _clip_fn()(v, chn, day, start, stop, cam_status[chn], None, fast,
                                    intermediate=True)
             return chn, clip, ""
         except (CMSV6Error, video.FFmpegError) as e:
@@ -938,31 +944,92 @@ def _timing(stats: dict) -> str:
 
 async def fetch_ftp(v: Vehicle, chn: int, day: date, start: int, stop: int, status,
                     fast: bool = False) -> Path:
-    """El bus sube [start, stop] por FTP a CMSV7 (un archivo) y se descarga."""
+    """Paso 1: el bus sube [start, stop] al FTP de CMSV7 (un AVI).
+    Paso 2: se descarga ese AVI del FTP. Nada más."""
     dest = _work_dir() / f"{v.dev_id}_{chn}_{day:%Y%m%d}_{start}_{stop}{'_l' if fast else ''}.avi"
     if dest.exists():
         dest.touch()
+        await _edit(status, "✅ ya estaba descargado", 95, 2)
         return dest
     want = stop - start
     exp = want / max(_method_vel("ftp"), 0.1) + 20
 
     async def progress(state: str, st=None, elapsed: float = 0, task_pct=None) -> None:
+        # Paso 1 = del 0 % al 70 %
         frac = task_pct / 100 if task_pct is not None else min(0.95, elapsed / exp)
-        await _edit(status, f"📤 {state}", 5 + 75 * frac, max(10.0, exp - elapsed) + 10)
+        pct_txt = f"{task_pct}%" if task_pct is not None else f"~{frac * 100:.0f}%"
+        await _edit(status, f"📤 Paso 1/2 · Subiendo al FTP: {state} ({pct_txt} · {_mmss(elapsed)})",
+                    70 * frac, max(10.0, exp - elapsed) + 15)
 
     async def dl_progress(done: int, total: int, speed: float) -> None:
+        # Paso 2 = del 70 % al 95 %
         frac = done / total if total else 0
-        left = ((total - done) / speed if speed and total else 20) + 10
-        await _edit(status, f"⬇️ bajando del servidor {done / 1e6:.0f}"
-                            f"{f'/{total / 1e6:.0f}' if total else ''} MB", 80 + 10 * frac, left)
+        left = ((total - done) / speed if speed and total else 15) + 5
+        mb = f"{done / 1e6:.1f}{f'/{total / 1e6:.1f}' if total else ''} MB"
+        pct_txt = f"{frac * 100:.0f}% · " if total else ""
+        await _edit(status, f"⬇️ Paso 2/2 · Descargando del FTP: {pct_txt}{mb} · "
+                            f"{speed * 8 / 1e6:.1f} Mbps", 70 + 25 * frac, left)
 
     t = time.monotonic()
     async with _bus_slot(v.dev_id):
-        await progress("pidiendo al bus que suba el video por FTP")
-        path = await cms.ftp_download(v.dev_id, chn, day, start, stop, dest, progress,
-                                      dl_progress, 1 if fast else 0)
+        await progress("enviando la orden al bus", None, 0, 0)
+        streams = [1, 0] if fast else [0]  # «rapido»: calidad liviana si el bus la tiene
+        for i, stream in enumerate(streams):
+            try:
+                path = await cms.ftp_download(v.dev_id, chn, day, start, stop, dest, progress,
+                                              dl_progress, stream)
+                break
+            except CMSV6Error as e:
+                if i == len(streams) - 1:
+                    raise
+                log.info("FTP en calidad liviana falló (%s); se usa la principal", e)
     _learn_method("ftp", want, time.monotonic() - t)
     return path
+
+
+async def make_clip_ftp(v: Vehicle, chn: int, day: date, start: int, stop: int, status,
+                        stats: dict | None = None, fast: bool = False,
+                        intermediate: bool = False) -> Path:
+    """Solo FTP: el bus sube los minutos pedidos al FTP de CMSV7, se descarga el AVI y se
+    entrega (sin recomprimir si ya es H.264). Sin búsquedas ni otros métodos."""
+    stats = stats if stats is not None else {}
+    t0 = time.monotonic()
+    raw = await fetch_ftp(v, chn, day, start, stop, status, fast)
+    log.info("Archivo FTP %s: %s", raw.name, await video.describe(raw))
+    stats["bajar"] = time.monotonic() - t0
+    stats["metodo"] = "ftp"
+    out = links.files_dir() / _name(v, chn, day, start, stop, ".mp4")
+    # El AVI original también queda disponible por enlace
+    avi = links.files_dir() / _name(v, chn, day, start, stop, ".avi")
+    try:
+        if not avi.exists():
+            os.link(raw, avi)
+        avi.chmod(0o644)
+        stats["avi"] = avi
+    except OSError:
+        pass
+    async with cpu:
+        t2 = time.monotonic()
+        done = False
+        if config.ftp_remux and not intermediate:
+            await _edit(status, "⚡ Preparando el video para Telegram (sin recomprimir)…", 96, 3)
+            done = await video.remux(raw, out, stop - start)
+        if not done:
+            await _edit(status, "⚡ Preparando el video para Telegram…", 96, 10)
+            await video.compress_piece(raw, out, 0, stop - start, 0, intermediate)
+        stats["comprimir"] = time.monotonic() - t2
+    out.chmod(0o644)
+    await _edit(status, "✅ listo", 100, 0)
+    stats["total"] = time.monotonic() - t0
+    log.info("Clip %s cam%d %s (FTP): %s", v.plate, chn + 1, out.name,
+             {k: (round(x) if isinstance(x, float) else x) for k, x in stats.items()
+              if k != "avi"})
+    return out
+
+
+def _clip_fn():
+    """Con DOWNLOAD_METHOD=ftp (por defecto) se usa solo el FTP."""
+    return make_clip_ftp if config.download_method == "ftp" else make_clip
 
 
 async def fetch(v: Vehicle, rec: RecFile, chn: int, day: date, start: int, stop: int,
@@ -1097,7 +1164,7 @@ async def deliver(msg: Message, status: Message, out: Path, caption: str) -> Non
     if link:
         caption += f"\n⬇️ Descarga ({config.link_hours} h): {link}"
     if size_mb <= config.telegram_max_mb:
-        await status.edit_text(f"📤 Enviando video ({size_mb:.1f} MB)…")
+        await status.edit_text(f"📨 Enviando a Telegram ({size_mb:.1f} MB)…")
         try:
             await msg.reply_video(video=out, caption=caption, supports_streaming=True)
             await status.delete()
