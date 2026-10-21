@@ -16,7 +16,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
-from . import links, video
+from . import links, mail, video
 from .cmsv6 import CMSV6, CMSV6Error, LOC_NAMES, RecFile, Vehicle
 from .config import config
 from .parsing import (ParseError, fmt_hms, parse_channels, parse_date, parse_time,
@@ -42,6 +42,7 @@ AYUDA = """\
 /video <i>placa canal fecha inicio fin</i> [juntas] [rapido] — clip comprimido
 /foto <i>placa</i> [<i>cámaras</i>] — foto de ahora mismo (rápida, en vivo)
 /foto <i>placa canal fecha hora</i> [juntas] — imagen de un momento pasado (más lenta)
+/correo <i>tu@correo</i> — recibir también los enlaces de descarga por email
 /cancelar — detiene los pedidos en curso de este chat
 /miid — tu ID de Telegram
 
@@ -189,6 +190,52 @@ async def cmd_probar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     lines.append(f"✅ Desde ahora el bot usará primero: {names[best[0]] if best else '—'}")
     log.info("Prueba de métodos: %s", " | ".join(lines))
     await _edit(status, "\n".join(lines))
+
+
+@authorized
+async def cmd_correo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """/correo tu@correo.com → recibir también los enlaces por email; /correo no → dejar de."""
+    uid = update.effective_user.id
+    arg = " ".join(ctx.args).strip()
+    msg = update.effective_message
+    if not mail.enabled():
+        await msg.reply_text("El envío por correo no está configurado en el servidor todavía "
+                             "(faltan los datos SMTP en .env).")
+        return
+    if not arg:
+        cur = mail.get(uid)
+        await msg.reply_text(f"📧 Tu correo: {cur}\nPara quitarlo: /correo no" if cur else
+                             "No tienes correo registrado. Ejemplo: /correo nombre@empresa.cl")
+        return
+    if arg.lower() in ("no", "quitar", "borrar", "off"):
+        mail.set_(uid, None)
+        await msg.reply_text("📧 Listo, ya no te enviaré los enlaces por correo.")
+        return
+    if not mail.EMAIL_RE.fullmatch(arg):
+        raise ParseError("Ese correo no parece válido. Ejemplo: /correo nombre@empresa.cl")
+    mail.set_(uid, arg)
+    try:
+        await mail.send(arg, "Bot de grabaciones: correo registrado",
+                        "Desde ahora recibirás aquí los enlaces de descarga de los videos que "
+                        "pidas al bot de Telegram.")
+    except Exception as e:
+        log.warning("No se pudo enviar el correo de prueba: %s", e)
+        await msg.reply_text(f"⚠️ Guardé {arg}, pero el correo de prueba falló: {e}")
+        return
+    await msg.reply_text(f"📧 Listo: te envié un correo de prueba a {arg}. Desde ahora te "
+                         "llegarán ahí los enlaces de cada video.")
+
+
+async def email_links(user_id: int | None, subject: str, lines: list[str]) -> None:
+    """Si la persona registró su correo, le envía los enlaces (sin frenar el pedido)."""
+    to = mail.get(user_id) if user_id and mail.enabled() else None
+    if not to:
+        return
+    body = "\n".join(lines + ["", f"Los enlaces vencen en {config.link_hours} horas."])
+    try:
+        await mail.send(to, subject, body)
+    except Exception as e:
+        log.warning("No se pudo enviar el correo a %s: %s", to, e)
 
 
 @authorized
@@ -438,6 +485,7 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     when = f"{day:%d/%m/%Y} {fmt_hms(start)}–{fmt_hms(stop)}"
 
     msg = update.effective_message
+    uid = update.effective_user.id if update.effective_user else None
     total_video = (stop - start) * len(chans)
     if total_video >= 6 * 60 and config.download_method != "ftp":
         sp = _speed()
@@ -450,7 +498,7 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if audio is not None and audio >= 0 and audio not in chans:
             raise ParseError(f"El audio debe ser de una de las cámaras pedidas "
                              f"({', '.join(str(c + 1) for c in chans)}).")
-        await _video_together(msg, v, chans, day, start, stop, when, fast, audio)
+        await _video_together(msg, v, chans, day, start, stop, when, fast, audio, uid)
         return
     async def one(chn: int) -> None:
         title = f"🎥 {v.plate} {v.channel_label(chn)} · {day:%d/%m} {fmt_hms(start)}–{fmt_hms(stop)}"
@@ -473,6 +521,11 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 avi = f"\n📼 AVI original del FTP: {link}"
         await deliver(msg, status, out,
                       f"🎥 {v.plate} {v.channel_label(chn)} · {when}{sound}{_timing(stats)}{avi}")
+        mp4_link = links.make_link(out)
+        avi_link = links.make_link(stats["avi"]) if stats.get("avi") else None
+        await email_links(uid, f"Video {v.plate} {v.channel_label(chn)} · {when}",
+                          [f"Video {v.plate} {v.channel_label(chn)} · {when}", "",
+                           f"MP4: {mp4_link}"] + ([f"AVI original: {avi_link}"] if avi_link else []))
 
     # Las cámaras se piden todas a la vez; cada una llega cuando está lista
     await asyncio.gather(*(one(c) for c in chans))
@@ -520,7 +573,7 @@ async def on_audio_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
                           start: int, stop: int, when: str, fast: bool = False,
-                          audio: int | None = None) -> None:
+                          audio: int | None = None, uid: int | None = None) -> None:
     title = f"🎥 {v.plate} · cámaras {', '.join(str(c + 1) for c in chans)} juntas · {when}"
     status = await msg.reply_text(f"{title}\n{_bar(0)} 0% · en cola…")
     tracker = Tracker(status, title)
@@ -586,6 +639,10 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
     if failed:
         caption += "\n⚠️ Sin video: " + "; ".join(failed)
     await deliver(msg, status, out, caption)
+    cams_txt = ", ".join(str(c + 1) for c in ok)
+    await email_links(uid, f"Video {v.plate} cámaras {cams_txt} juntas · {when}",
+                      [f"Video {v.plate} · cámaras {cams_txt} juntas · {when}", sound, "",
+                       f"MP4: {links.make_link(out)}"])
 
 
 @authorized
@@ -1396,6 +1453,7 @@ def main() -> None:
     app.add_handler(CommandHandler(["vivo", "envivo"], cmd_vivo))
     app.add_handler(CommandHandler(["cancelar", "detener", "parar"], cmd_cancelar))
     app.add_handler(CommandHandler("probar", cmd_probar))
+    app.add_handler(CommandHandler(["correo", "email", "mail"], cmd_correo))
     app.add_handler(CallbackQueryHandler(on_audio_button, pattern=r"^aud:"))
     app.add_handler(CommandHandler("video", cmd_video))
     app.add_handler(CommandHandler("foto", cmd_foto))

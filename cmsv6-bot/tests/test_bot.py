@@ -1022,3 +1022,27 @@ async def test_ftp_orders_are_spaced(monkeypatch, tmp_path):
                            for c in range(3)))
     assert len(sent) == 3
     assert all(b - a >= 0.15 for a, b in zip(sent, sent[1:]))  # órdenes separadas
+
+
+@pytest.mark.asyncio
+async def test_correo_register_and_email_links(tmp_path, monkeypatch):
+    from app import main, mail
+    object.__setattr__(main.config, "data_dir", tmp_path)
+    object.__setattr__(main.config, "allowed_users", [7])
+    for k, val in (("smtp_host", "smtp.x"), ("smtp_user", "bot@x.cl"), ("smtp_password", "p")):
+        object.__setattr__(main.config, k, val)
+    sent = []
+    monkeypatch.setattr(mail, "_send_sync", lambda to, subj, body: sent.append((to, subj, body)))
+    msg = MagicMock(reply_text=AsyncMock())
+    upd = MagicMock(effective_user=MagicMock(id=7), effective_message=msg,
+                    effective_chat=MagicMock(id=1))
+    await main.cmd_correo(upd, MagicMock(args=["ops@empresa.cl"]))
+    assert mail.get(7) == "ops@empresa.cl" and sent[0][0] == "ops@empresa.cl"
+    await main.email_links(7, "Video X", ["MP4: http://l/1"])
+    assert sent[-1][1] == "Video X" and "http://l/1" in sent[-1][2]
+    await main.email_links(8, "otro", ["x"])           # sin correo registrado: nada
+    assert len(sent) == 2
+    await main.cmd_correo(upd, MagicMock(args=["no"]))
+    assert mail.get(7) is None
+    for k in ("smtp_host", "smtp_user", "smtp_password"):
+        object.__setattr__(main.config, k, "")

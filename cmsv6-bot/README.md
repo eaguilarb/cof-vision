@@ -30,6 +30,7 @@ Corre en el VPS (Ubuntu 24.04) con Docker.
 | `/foto ABC123` o `/foto ABC123 1,3` | Foto de **ahora mismo** (en vivo, en segundos) |
 | `/foto ABC123 2 hoy 14:05:30` | Imagen de ese instante |
 | `/foto ABC123 todos hoy 14:05:30 juntas` | Una imagen con todas las cámaras |
+| `/correo nombre@empresa.cl` | Recibir también por email los enlaces de cada video (`/correo no` para dejar de) |
 | `/cancelar` | Detiene los pedidos en curso de ese chat (y la descarga en el bus) |
 | `/miid` | Tu ID de Telegram (para autorizarte) |
 
@@ -165,6 +166,15 @@ cd ~/cof-vision/cmsv6-bot && git pull && sudo bash autoupdate.sh --instalar
 
 Ver qué actualizaciones se aplicaron: `cat /var/log/cmsv6-bot-update.log`.
 Desactivarla: `sudo rm /etc/cron.d/cmsv6-bot-update`.
+
+## Enlaces por correo
+
+Completa en `.env` los datos SMTP de la cuenta que enviará los correos y reinicia
+(`sudo docker compose up -d`). Con Gmail: `SMTP_HOST=smtp.gmail.com`,
+`SMTP_PORT=587`, `SMTP_USER=cuenta@gmail.com` y en `SMTP_PASSWORD` una
+**contraseña de aplicación** (Cuenta de Google → Seguridad → Verificación en 2
+pasos → Contraseñas de aplicaciones). Cada persona registra su correo con
+`/correo nombre@empresa.cl`.
 
 ## Mantenimiento
 

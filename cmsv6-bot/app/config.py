@@ -32,6 +32,13 @@ class Config:
     live_seconds: int = int(os.environ.get("LIVE_SECONDS", "15"))
     live_link_minutes: int = int(os.environ.get("LIVE_LINK_MINUTES", "120"))
 
+    # Correo (SMTP) para enviar los enlaces de descarga; vacío = desactivado
+    smtp_host: str = os.environ.get("SMTP_HOST", "")
+    smtp_port: int = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_user: str = os.environ.get("SMTP_USER", "")
+    smtp_password: str = os.environ.get("SMTP_PASSWORD", "")
+    smtp_from: str = os.environ.get("SMTP_FROM", "")
+
     data_dir: Path = Path(os.environ.get("DATA_DIR", "/data"))
     public_url: str = os.environ.get("PUBLIC_URL", "").rstrip("/")
     link_secret: str = os.environ.get("LINK_SECRET", "")
