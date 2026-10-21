@@ -391,7 +391,7 @@ class CMSV6:
 
     async def ftp_download(self, dev_id: str, chn: int, day: date, start: int, stop: int,
                            dest: Path, progress=None, dl_progress=None, stream: int = 0,
-                           timeout_s: int | None = None) -> Path:
+                           timeout_s: int | None = None, on_uploaded=None) -> Path:
         """Método FTP (como en el aplicativo): el bus sube el horario pedido directo al FTP de
         CMSV7 en un solo archivo (AVI) y luego se descarga del servidor.
 
@@ -457,6 +457,10 @@ class CMSV6:
         except asyncio.CancelledError:
             await asyncio.shield(self._ftp_cancel(dev_id, seq))
             raise
+        # Subida terminada: el bus queda libre para la siguiente cámara; la descarga es
+        # del servidor de CMSV7 al VPS y no usa el 4G del bus
+        if on_uploaded:
+            on_uploaded()
         base, q = self._fix_url(str(info["downloadUrl"]))
         q["jsession"] = self.jsession or ""
         for attempt in range(4):

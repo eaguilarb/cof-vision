@@ -12,9 +12,9 @@ import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 
-from telegram import Message, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
 from . import links, video
 from .cmsv6 import CMSV6, CMSV6Error, LOC_NAMES, RecFile, Vehicle
@@ -58,8 +58,8 @@ AYUDA = """\
 
 Fecha: hoy, ayer, 19/10 o 19/10/2026. Canal: 1, 2, 1,3 o todos.
 Con varias cámaras: sin nada al final llegan separadas; con «juntas», en mosaico.
-En el mosaico: «audio2» usa el sonido de la cámara 2, «sinaudio» lo quita (si no pones
-nada, usa la primera cámara que tenga sonido). Un video solo conserva su audio.
+En el mosaico: «audio2» usa el sonido de la cámara 2, «sinaudio» lo quita; si no pones
+nada, el bot te pregunta con botones. Un video solo conserva su audio.
 «rapido» al final usa la grabación liviana del bus (menos calidad, llega mucho antes).
 Máximo {max} minutos por video."""
 
@@ -366,7 +366,7 @@ async def cmd_grabaciones(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await _send_long(update.effective_message, "\n".join(out))
 
 
-JUNTAS = ("juntas", "juntos", "junta", "mosaico", "unidas")
+JUNTAS = ("juntas", "juntos", "junta", "junto", "juntar", "mosaico", "unidas", "unidos")
 SEPARADAS = ("separadas", "separados", "separada")
 RAPIDO = ("rapido", "rápido", "rapida", "rápida", "liviano")
 
@@ -478,6 +478,46 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await asyncio.gather(*(one(c) for c in chans))
 
 
+# Elección de audio del mosaico con botones: id del pedido → futuro con la cámara elegida
+_audio_choice: dict[str, asyncio.Future] = {}
+
+
+async def _ask_audio(msg: Message, v: Vehicle, chans: list[int]) -> asyncio.Future:
+    """Pregunta de qué cámara va el sonido del mosaico (mientras las cámaras se suben)."""
+    req = f"{msg.chat_id}{msg.message_id}"[-12:]
+    fut = asyncio.get_running_loop().create_future()
+    _audio_choice[req] = fut
+    rows = [[InlineKeyboardButton(f"🔊 {v.channel_label(c)}", callback_data=f"aud:{req}:{c}")
+             for c in chans[i:i + 3]] for i in range(0, len(chans), 3)]
+    rows.append([InlineKeyboardButton("🔇 Sin audio", callback_data=f"aud:{req}:-1")])
+    await msg.reply_text("🎧 ¿De qué cámara quieres el audio del mosaico?\n"
+                         "(Mientras eliges, las cámaras ya se están subiendo al FTP)",
+                         reply_markup=InlineKeyboardMarkup(rows))
+    return fut
+
+
+async def on_audio_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    user = update.effective_user
+    if not user or user.id not in config.allowed_users:
+        await q.answer("No tienes permiso.")
+        return
+    try:
+        _, req, val = q.data.split(":")
+        choice = int(val)
+    except ValueError:
+        await q.answer()
+        return
+    fut = _audio_choice.get(req)
+    if fut is None or fut.done():
+        await q.answer("Ese pedido ya terminó.")
+        return
+    fut.set_result(choice)
+    await q.answer("Listo")
+    await q.edit_message_text("🔇 Mosaico sin audio" if choice < 0
+                              else f"🔊 Audio del mosaico: cámara {choice + 1}")
+
+
 async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
                           start: int, stop: int, when: str, fast: bool = False,
                           audio: int | None = None) -> None:
@@ -486,6 +526,8 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
     tracker = Tracker(status, title)
     t0 = time.monotonic()
     cam_status = {c: tracker.cam(c, v.channel_label(c)) for c in chans}
+    # Si no se indicó «audioN»/«sinaudio», se pregunta con botones
+    choice_fut = await _ask_audio(msg, v, chans) if audio is None else None
 
     async def one(chn: int) -> tuple[int, Path | None, str]:
         try:
@@ -507,6 +549,17 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
     await _edit(status, f"{title}\n{_bar(97)} 97% · 🧩 armando el mosaico…")
     out = links.files_dir() / _name(v, -1, day, start, stop, ".mp4", "camaras" + "-".join(
         str(c + 1) for c in ok))
+    if choice_fut is not None:
+        if not choice_fut.done():
+            await _edit(status, f"{title}\n{_bar(96)} 96% · 🎧 Cámaras listas: elige el audio "
+                                "arriba (si no eliges en 60 s, uso la primera con sonido)")
+            try:
+                audio = await asyncio.wait_for(asyncio.shield(choice_fut), 60)
+            except asyncio.TimeoutError:
+                audio = None
+        else:
+            audio = choice_fut.result()
+        _audio_choice.pop(next((k for k, f in _audio_choice.items() if f is choice_fut), ""), None)
     # Audio: la cámara elegida (si llegó), o la primera que tenga sonido
     audio_idx = ok.index(audio) if audio is not None and audio in ok else (
         -1 if audio == -1 else None)
@@ -998,19 +1051,30 @@ async def fetch_ftp(v: Vehicle, chn: int, day: date, start: int, stop: int, stat
     slot = _bus_ftp_slot(v.dev_id)
     if slot.locked():
         await _edit(status, "⏳ En fila: el bus sube una cámara a la vez al FTP", 1, exp * 2)
-    async with slot:
+    await slot.acquire()
+    held = True
+
+    def release() -> None:
+        nonlocal held
+        if held:
+            held = False
+            slot.release()
+
+    try:
         t = time.monotonic()
         await progress("enviando la orden al bus", None, 0, 0)
         streams = [1, 0] if fast else [0]  # «rapido»: calidad liviana si el bus la tiene
         for i, stream in enumerate(streams):
             try:
                 path = await cms.ftp_download(v.dev_id, chn, day, start, stop, dest, progress,
-                                              dl_progress, stream)
+                                              dl_progress, stream, on_uploaded=release)
                 break
             except CMSV6Error as e:
                 if i == len(streams) - 1:
                     raise
                 log.info("FTP en calidad liviana falló (%s); se usa la principal", e)
+    finally:
+        release()
     _learn_method("ftp", want, time.monotonic() - t)
     return path
 
@@ -1320,6 +1384,7 @@ def main() -> None:
     app.add_handler(CommandHandler(["vivo", "envivo"], cmd_vivo))
     app.add_handler(CommandHandler(["cancelar", "detener", "parar"], cmd_cancelar))
     app.add_handler(CommandHandler("probar", cmd_probar))
+    app.add_handler(CallbackQueryHandler(on_audio_button, pattern=r"^aud:"))
     app.add_handler(CommandHandler("video", cmd_video))
     app.add_handler(CommandHandler("foto", cmd_foto))
     log.info("Bot iniciado (Bot API: %s)", config.bot_api_url or "nube de Telegram")

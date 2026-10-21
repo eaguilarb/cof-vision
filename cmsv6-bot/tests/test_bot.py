@@ -851,8 +851,10 @@ async def test_ftp_only_no_search_no_other_methods(tmp_path, monkeypatch):
                     "ultrafast", str(avi)], check=True)
     texts = []
 
-    async def ftp(dev, chn, day, a, b, dest, progress, dl_progress, stream):
+    async def ftp(dev, chn, day, a, b, dest, progress, dl_progress, stream, on_uploaded=None):
         await progress("el bus está subiendo por FTP", 1, 20, None)
+        if on_uploaded:
+            on_uploaded()
         await dl_progress(5_000_000, 10_000_000, 1_000_000)
         dest.write_bytes(avi.read_bytes())
         return dest
@@ -925,3 +927,65 @@ async def test_ftp_retries_when_bus_does_not_answer(monkeypatch, tmp_path):
     monkeypatch.setattr(cms, "_download_url", dl)
     await cms.ftp_download("D", 0, date(2026, 10, 21), 27600, 27780, tmp_path / "a.avi")
     assert calls["up"] == 3
+
+
+@pytest.mark.asyncio
+async def test_juntas_ftp_asks_audio_and_builds_mosaic(tmp_path, monkeypatch):
+    """juntas: sube cada cámara por FTP (una a la vez), descarga, pregunta el audio con
+    botones y arma el mosaico con el sonido elegido."""
+    from app import main
+    object.__setattr__(main.config, "download_method", "ftp")
+    object.__setattr__(main.config, "data_dir", tmp_path)
+    object.__setattr__(main.config, "allowed_users", [7])
+    srcs = {}
+    for c, freq in ((0, 300), (2, 1200)):
+        p = tmp_path / f"src{c}.avi"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                        "testsrc=size=640x360:rate=15:duration=6", "-f", "lavfi", "-i",
+                        f"sine=frequency={freq}:duration=6", "-c:v", "libx264", "-preset",
+                        "ultrafast", "-c:a", "pcm_s16le", "-shortest", str(p)], check=True)
+        srcs[c] = p
+    active = {"n": 0, "max": 0}
+
+    async def ftp(dev, chn, day, a, b, dest, progress, dl_progress, stream, on_uploaded=None):
+        active["n"] += 1
+        active["max"] = max(active["max"], active["n"])
+        await asyncio.sleep(0.05)
+        active["n"] -= 1
+        on_uploaded()
+        dest.write_bytes(srcs[chn].read_bytes())
+        return dest
+
+    monkeypatch.setattr(main.cms, "ftp_download", ftp)
+    sent = {}
+    status = MagicMock(edit_text=AsyncMock(), delete=AsyncMock(), chat_id=1)
+    buttons = MagicMock(chat_id=1)
+
+    async def reply_text(text, **kw):
+        if kw.get("reply_markup"):
+            sent["markup"] = kw["reply_markup"]
+            return buttons
+        return status
+
+    async def reply_video(video, caption, **kw):
+        sent["video"], sent["caption"] = video, caption
+
+    msg = MagicMock(chat_id=1, message_id=99, reply_text=reply_text, reply_video=reply_video)
+    v = main.Vehicle("SVDC74", "D1", 5, [])
+    job = asyncio.create_task(main._video_together(msg, v, [0, 2], date(2026, 10, 21),
+                                                   27600, 27606, "21/10/2026"))
+    for _ in range(100):
+        await asyncio.sleep(0.02)
+        if "markup" in sent:
+            break
+    data = sent["markup"].inline_keyboard[0][1].callback_data  # botón «cam3»
+    q = MagicMock(data=data, answer=AsyncMock(), edit_message_text=AsyncMock())
+    upd = MagicMock(callback_query=q, effective_user=MagicMock(id=7))
+    await main.on_audio_button(upd, MagicMock())
+    await job
+    assert active["max"] == 1                        # el bus sube una cámara a la vez
+    assert "audio de la cámara 3" in sent["caption"]
+    dims = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                           "stream=width,height", "-of", "csv=p=0", str(sent["video"])],
+                          capture_output=True, text=True).stdout.strip()
+    assert dims == "1280,360"                        # mosaico de 2 cámaras
