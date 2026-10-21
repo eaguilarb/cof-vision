@@ -391,12 +391,14 @@ class CMSV6:
 
     async def ftp_download(self, dev_id: str, chn: int, day: date, start: int, stop: int,
                            dest: Path, progress=None, dl_progress=None, stream: int = 0,
-                           timeout_s: int = 1800) -> Path:
+                           timeout_s: int | None = None) -> Path:
         """Método FTP (como en el aplicativo): el bus sube el horario pedido directo al FTP de
         CMSV7 en un solo archivo (AVI) y luego se descarga del servidor.
 
         Una sola tarea por cámara para todo el horario (no una por archivo de grabación)."""
         end = min(stop, 86399)
+        # Espera máxima de la subida: al menos 30 min, o el doble de lo pedido (1 h → 2 h)
+        timeout_s = timeout_s or max(1800, 2 * (end - start))
         params = {"DevIDNO": dev_id, "CHN": chn,
                   "BEGYEAR": day.year, "BEGMON": day.month, "BEGDAY": day.day, "BEGSEC": start,
                   "ENDYEAR": day.year, "ENDMON": day.month, "ENDDAY": day.day, "ENDSEC": end,

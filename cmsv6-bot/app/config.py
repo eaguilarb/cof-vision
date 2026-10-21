@@ -47,7 +47,10 @@ class Config:
         os.environ.get("VIDEO_PRESET", "ultrafast"))
     # Si el AVI del FTP ya viene en H.264, se entrega sin recomprimir (instantáneo)
     ftp_remux: bool = os.environ.get("FTP_REMUX", "1") != "0"
-    max_clip_minutes: int = int(os.environ.get("MAX_CLIP_MINUTES", "30"))
+    # Hasta 1 hora por video (con el FTP baja rápido). El valor antiguo (30, que quedó en
+    # los .env viejos) se toma también como 60.
+    max_clip_minutes: int = (lambda m: 60 if m == 30 else m)(
+        int(os.environ.get("MAX_CLIP_MINUTES", "60")))
     max_parallel_jobs: int = int(os.environ.get("MAX_PARALLEL_JOBS", "3"))
     # Grabaciones en el bus: «auto» pide solo los minutos necesarios (descarga por tramos) cuando
     # son menos de la mitad del archivo; «siempre» / «nunca» fuerzan un método
