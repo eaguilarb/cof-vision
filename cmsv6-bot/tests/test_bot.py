@@ -888,3 +888,40 @@ async def test_result_as_text_is_success(monkeypatch):
     monkeypatch.setattr(cms, "_raw", AsyncMock(return_value={"result": "0", "SEQUENCE": "12"}))
     data = await cms.call("StandardApiAction_ftpUpload.action", {})
     assert data["SEQUENCE"] == "12"
+
+
+def test_normalize_handwritten_channels():
+    from app.main import _split_mode
+    for raw in (["svdc74", "1,3,hoy", "07:40", "07:43", "juntas"],
+                ["svdc74", "1,3,", "hoy", "07:40", "07:43", "juntas"],
+                ["svdc74", "1,", "3", "hoy", "07:40", "07:43", "juntas"]):
+        assert _split_mode(list(raw))[:2] == (["svdc74", "1,3", "hoy", "07:40", "07:43"], True)
+
+
+@pytest.mark.asyncio
+async def test_ftp_retries_when_bus_does_not_answer(monkeypatch, tmp_path):
+    from app import cmsv6 as m
+    cms = CMSV6("http://x:8088", "u", "p")
+    cms.jsession = "J"
+    calls = {"up": 0}
+
+    async def call(action, params=None):
+        if "ftpUpload" in action:
+            calls["up"] += 1
+            if calls["up"] < 3:
+                raise CMSV6Error("device no response", 22)
+            return {"result": 0, "SEQUENCE": 5}
+        if "queryFtpStatus" in action:
+            return {"result": 0, "info": {"status": 4, "downloadUrl": "http://x:6611/3/5?FPATH=a"}}
+        raise AssertionError(action)
+
+    async def dl(url, dest, progress=None, total=0):
+        dest.write_bytes(b"x" * 2048)
+        return dest
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(m.asyncio, "sleep", lambda s: real_sleep(0))
+    monkeypatch.setattr(cms, "call", call)
+    monkeypatch.setattr(cms, "_download_url", dl)
+    await cms.ftp_download("D", 0, date(2026, 10, 21), 27600, 27780, tmp_path / "a.avi")
+    assert calls["up"] == 3

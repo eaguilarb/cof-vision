@@ -375,12 +375,29 @@ _AUDIO_RE = re.compile(r"(?:audio|sonido|aud)[:=]?(\d)")
 SIN_AUDIO = ("sinaudio", "sin_audio", "mudo", "silencio")
 
 
+def _normalize_args(args: list[str]) -> list[str]:
+    """Acepta formas escritas a mano: «1,3,hoy» → «1,3 hoy»; «1,3, hoy» y «1, 3» → «1,3»."""
+    text = re.sub(r"\s*,\s*", ",", " ".join(args)).strip(", ")
+    out: list[str] = []
+    for tok in text.split():
+        parts = [p for p in tok.split(",") if p]
+        if len(parts) > 1 and parts[0].isdigit() and not all(p.isdigit() for p in parts):
+            nums = [p for p in parts if p.isdigit() and len(p) <= 2]
+            rest = [p for p in parts if p not in nums]
+            out.append(",".join(nums))
+            out.extend(rest)
+        else:
+            out.append(",".join(parts) if parts else tok)
+    return out
+
+
 def _split_mode(args: list[str]) -> tuple[list[str], bool, bool, int | None]:
     """Quita las palabras finales «juntas»/«separadas»/«rapido»/«audioN»/«sinaudio»
     (en cualquier orden).
 
     Devuelve (resto, juntas, rápido, audio): audio = cámara (base 0) cuyo sonido va en el
     mosaico, -1 sin audio, None automático (la primera cámara que tenga sonido)."""
+    args = _normalize_args(args)
     together = fast = False
     audio: int | None = None
     while args:
@@ -744,6 +761,13 @@ def _ftp_first(recs: list[RecFile]) -> bool:
     return _method_vel("ftp") >= rest
 
 
+def _bus_ftp_slot(dev_id: str) -> asyncio.Semaphore:
+    key = "ftp:" + dev_id
+    if key not in _bus_slots:
+        _bus_slots[key] = asyncio.Semaphore(max(1, config.ftp_parallel))
+    return _bus_slots[key]
+
+
 def _bus_stream_slot(dev_id: str) -> asyncio.Semaphore:
     key = "stream:" + dev_id
     if key not in _bus_slots:
@@ -971,7 +995,11 @@ async def fetch_ftp(v: Vehicle, chn: int, day: date, start: int, stop: int, stat
                             f"{speed * 8 / 1e6:.1f} Mbps", 70 + 25 * frac, left)
 
     t = time.monotonic()
-    async with _bus_slot(v.dev_id):
+    slot = _bus_ftp_slot(v.dev_id)
+    if slot.locked():
+        await _edit(status, "⏳ En fila: el bus sube una cámara a la vez al FTP", 1, exp * 2)
+    async with slot:
+        t = time.monotonic()
         await progress("enviando la orden al bus", None, 0, 0)
         streams = [1, 0] if fast else [0]  # «rapido»: calidad liviana si el bus la tiene
         for i, stream in enumerate(streams):

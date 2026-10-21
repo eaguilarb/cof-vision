@@ -404,7 +404,24 @@ class CMSV6:
                   "ENDYEAR": day.year, "ENDMON": day.month, "ENDDAY": day.day, "ENDSEC": end,
                   "ARM1": 0, "ARM2": 0, "RES": 0, "STREAM": stream, "STORE": 0,
                   "NETMASK": 7}  # WiFi + LAN + 4G
-        data = await self.call("StandardApiAction_ftpUpload.action", params)
+        # 22 = «device no response»: el bus no contestó la orden (ocupado o señal débil);
+        # se reintenta unas veces antes de rendirse
+        for attempt in range(4):
+            try:
+                data = await self.call("StandardApiAction_ftpUpload.action", params)
+                break
+            except CMSV6Error as e:
+                if e.code not in (22, 26) or attempt == 3:
+                    if e.code in (22, 26):
+                        raise CMSV6Error("El bus no respondió la orden de subir al FTP "
+                                         "(¿apagado, sin señal u ocupado?). Intenta en unos "
+                                         "minutos.", e.code) from e
+                    raise
+                log.info("El bus no respondió la orden FTP (intento %d); se reintenta", attempt + 1)
+                if progress:
+                    await progress(f"el bus no respondió, reintentando ({attempt + 2}/4)", None,
+                                   0, 0)
+                await asyncio.sleep(5 * (attempt + 1))
         seq = data.get("SEQUENCE", data.get("sequence"))
         if seq is None:
             raise CMSV6Error(f"CMSV7 no devolvió número de tarea FTP: {data}")
