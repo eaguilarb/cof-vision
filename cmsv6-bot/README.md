@@ -62,6 +62,12 @@ cámara fecha hora` mide los tres con un bus real y entrena la elección.
 
 ## Compresión
 
+Al final del comando: `normal` (por defecto en el mosaico), `720` o `ultra`.
+Ejemplo: `/video SPBS42 1,3 hoy 07:40 07:50 juntas ultra`. Peso aproximado de
+10 minutos de mosaico: normal hasta ~110 MB, 720 hasta ~70 MB, ultra hasta ~30 MB
+(normalmente bastante menos). En un video solo, sin palabra se entrega tal cual
+(sin recomprimir); con `720` o `ultra` se comprime.
+
 Las grabaciones se recortan exactamente al horario pedido y se recomprimen en
 H.264 (MP4), a 720p como máximo. Un video de 10 minutos de MDVR suele bajar a
 una fracción de su tamaño original. Se ajusta en `.env`:

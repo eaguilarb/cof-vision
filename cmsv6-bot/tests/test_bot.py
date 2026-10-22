@@ -1050,3 +1050,37 @@ async def test_correo_register_and_email_links(tmp_path, monkeypatch):
     assert mail.get(7) is None
     for k in ("smtp_host", "smtp_user", "smtp_password"):
         object.__setattr__(main.config, k, "")
+
+
+def test_split_level():
+    from app.main import _split_level, _split_mode
+    for tail, lvl in ((["juntas", "ultra"], "ultra"), (["720", "juntas", "audio3"], "720"),
+                      (["juntas"], None), (["normal"], "normal")):
+        rest, level = _split_level(["SPB", "1,3", "hoy", "07:40", "07:43"] + tail)
+        assert level == lvl
+        assert _split_mode(rest)[0] == ["SPB", "1,3", "hoy", "07:40", "07:43"]
+
+
+@pytest.mark.asyncio
+async def test_compression_levels_shrink(tmp_path):
+    """normal > 720 > ultra en peso; medidas del mosaico según el nivel."""
+    clips = []
+    for i in range(3):
+        p = tmp_path / f"c{i}.mp4"
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                        "testsrc2=size=1280x720:rate=15:duration=6", "-vf", "noise=alls=25:allf=t",
+                        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18", str(p)], check=True)
+        clips.append(p)
+    sizes, dims = {}, {}
+    for lvl in ("normal", "720", "ultra"):
+        out = await video.mosaic(clips, tmp_path / f"m_{lvl}.mp4", level=lvl)
+        sizes[lvl] = out.stat().st_size
+        dims[lvl] = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                                    "-show_entries", "stream=width,height", "-of", "csv=p=0",
+                                    str(out)], capture_output=True, text=True).stdout.strip()
+    assert sizes["normal"] > sizes["720"] > sizes["ultra"]
+    assert dims["normal"] == "1280,720" and dims["720"] == "1280,720" or dims["720"] == "1280,720"
+    w, h = map(int, dims["ultra"].split(","))
+    assert w <= 854 and h <= 480
+    single = await video.compress_level(clips[0], tmp_path / "s.mp4", 6, "ultra")
+    assert single.stat().st_size < clips[0].stat().st_size / 5

@@ -226,6 +226,49 @@ async def snapshot_live(url: str, dest: Path) -> Path:
 
 TILE_W, TILE_H = 640, 360
 
+# Niveles de compresión. maxrate pone un techo al peso: MB ≈ (maxrate + audio) × segundos / 8
+#   normal: mosaico de celdas 640×360, buena calidad
+#   720:    todo el mosaico cabe en 1280×720
+#   ultra:  todo el mosaico cabe en 854×480, 10 cuadros/s; lo más liviano
+LEVELS = {
+    "normal": {"canvas": None, "crf": 28, "maxrate": "1500k", "fps": 15, "height": 720,
+               "abr": "64k", "preset": "superfast"},
+    "720": {"canvas": (1280, 720), "crf": 30, "maxrate": "900k", "fps": 15, "height": 720,
+            "abr": "48k", "preset": "veryfast"},
+    "ultra": {"canvas": (854, 480), "crf": 34, "maxrate": "350k", "fps": 10, "height": 480,
+              "abr": "32k", "preset": "veryfast"},
+}
+
+
+def _enc(level: str) -> list[str]:
+    lv = LEVELS[level]
+    rate = int(lv["maxrate"].rstrip("k"))
+    return ["-c:v", "libx264", "-preset", lv["preset"], "-crf", str(lv["crf"]),
+            "-maxrate", lv["maxrate"], "-bufsize", f"{rate * 2}k",
+            "-c:a", "aac", "-b:a", lv["abr"], "-ac", "1", "-movflags", "+faststart"]
+
+
+async def compress_level(src: Path, dest: Path, duration: float, level: str) -> Path:
+    """Un solo video comprimido al nivel pedido (normal, 720 o ultra)."""
+    lv = LEVELS[level]
+    await _run(*PROBE, "-fflags", "+genpts", "-i", str(src), "-t", f"{duration:.3f}",
+               "-map", "0:v:0", "-map", "0:a:0?", "-threads", "0",
+               "-vf", f"scale=-2:'min({lv['height']},ih)':flags=bicubic,fps={lv['fps']},"
+                      "format=yuv420p",
+               *_enc(level), str(dest))
+    return dest
+
+
+def _tile_size(cols: int, rows: int, level: str) -> tuple[int, int]:
+    canvas = LEVELS[level]["canvas"]
+    if not canvas:
+        return TILE_W, TILE_H
+    w, h = canvas[0] // cols, canvas[1] // rows
+    # Celdas 16:9 que quepan en el lienzo, con medidas pares (requisito de H.264)
+    w = min(w, h * 16 // 9)
+    h = w * 9 // 16
+    return w - w % 2, h - h % 2
+
 
 def _grid(n: int) -> tuple[int, int]:
     """Columnas y filas del mosaico: 2 → 2x1, 3-4 → 2x2, 5-6 → 3x2, 7-9 → 3x3."""
@@ -234,23 +277,25 @@ def _grid(n: int) -> tuple[int, int]:
 
 
 async def mosaic(inputs: list[Path], dest: Path, image: bool = False,
-                 audio_from: int | None = None) -> Path:
+                 audio_from: int | None = None, level: str = "normal") -> Path:
     """Une varios videos (o fotos) de distintas cámaras en una sola pantalla dividida.
 
     audio_from: índice de la entrada cuyo audio se usa; None = la primera que tenga
-    audio; -1 = sin audio."""
+    audio; -1 = sin audio. level: compresión (normal, 720 o ultra)."""
     n = len(inputs)
     cols, rows = _grid(n)
     cells = cols * rows
-    tile = (f"scale={TILE_W}:{TILE_H}:force_original_aspect_ratio=decrease,"
-            f"pad={TILE_W}:{TILE_H}:(ow-iw)/2:(oh-ih)/2,setsar=1")
+    tw, th = (TILE_W, TILE_H) if image else _tile_size(cols, rows, level)
+    fps = LEVELS[level]["fps"]
+    tile = (f"scale={tw}:{th}:force_original_aspect_ratio=decrease,"
+            f"pad={tw}:{th}:(ow-iw)/2:(oh-ih)/2,setsar=1")
     if not image:
-        tile += ",fps=15"
+        tile += f",fps={fps}"
     parts = [f"[{i}:v]{tile}[t{i}]" for i in range(n)]
     # Las celdas sobrantes quedan en negro
     for i in range(n, cells):
-        parts.append(f"color=c=black:s={TILE_W}x{TILE_H}:r=15[t{i}]")
-    layout = "|".join(f"{(i % cols) * TILE_W}_{(i // cols) * TILE_H}" for i in range(cells))
+        parts.append(f"color=c=black:s={tw}x{th}:r={fps}[t{i}]")
+    layout = "|".join(f"{(i % cols) * tw}_{(i // cols) * th}" for i in range(cells))
     parts.append("".join(f"[t{i}]" for i in range(cells))
                  + f"xstack=inputs={cells}:layout={layout}:shortest=1,format=yuv420p[v]")
     args = [a for p in inputs for a in ("-i", str(p))]
@@ -266,9 +311,7 @@ async def mosaic(inputs: list[Path], dest: Path, image: bool = False,
                     break
         if 0 <= audio_from < n:
             args += ["-map", f"{audio_from}:a:0?"]
-        args += ["-c:v", "libx264", "-preset", config.video_preset,
-                 "-crf", str(config.video_crf), "-c:a", "aac", "-b:a", "64k",
-                 "-movflags", "+faststart"]
+        args += ["-threads", "0", *_enc(level)]
     await _run(*args, str(dest))
     return dest
 

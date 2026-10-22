@@ -62,6 +62,7 @@ Con varias cámaras: sin nada al final llegan separadas; con «juntas», en mosa
 En el mosaico: «audio2» usa el sonido de la cámara 2, «sinaudio» lo quita; si no pones
 nada, el bot te pregunta con botones. Un video solo conserva su audio.
 «rapido» al final usa la grabación liviana del bus (menos calidad, llega mucho antes).
+Compresión al final: «normal» (por defecto en mosaico), «720» o «ultra» (lo más liviano).
 Máximo {max} minutos por video."""
 
 
@@ -427,6 +428,29 @@ _AUDIO_RE = re.compile(r"(?:audio|sonido|aud)[:=]?(\d)")
 SIN_AUDIO = ("sinaudio", "sin_audio", "mudo", "silencio")
 
 
+LEVEL_NAMES = {"normal": "normal", "720": "720p", "ultra": "ultra"}
+LEVEL_WORDS = {"normal": "normal", "720": "720", "720p": "720", "hd": "720",
+               "ultra": "ultra", "ultracompresion": "ultra", "ultracompresión": "ultra",
+               "ultracomprimido": "ultra", "maxima": "ultra", "máxima": "ultra"}
+
+
+def _split_level(args: list[str]) -> tuple[list[str], str | None]:
+    """Saca de las palabras finales el nivel de compresión («normal», «720», «ultra»)."""
+    level = None
+    tail_words = JUNTAS + SEPARADAS + RAPIDO + SIN_AUDIO
+    out = list(args)
+    i = len(out) - 1
+    while i >= 0:
+        w = out[i].lower()
+        if w in LEVEL_WORDS:
+            level = LEVEL_WORDS[w]
+            out.pop(i)
+        elif not (w in tail_words or _AUDIO_RE.fullmatch(w)):
+            break
+        i -= 1
+    return out, level
+
+
 def _normalize_args(args: list[str]) -> list[str]:
     """Acepta formas escritas a mano: «1,3,hoy» → «1,3 hoy»; «1,3, hoy» y «1, 3» → «1,3»."""
     text = re.sub(r"\s*,\s*", ",", " ".join(args)).strip(", ")
@@ -470,7 +494,8 @@ def _split_mode(args: list[str]) -> tuple[list[str], bool, bool, int | None]:
 
 @authorized
 async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    args, together, fast, audio = _split_mode(list(ctx.args))
+    raw_args, level = _split_level(_normalize_args(list(ctx.args)))
+    args, together, fast, audio = _split_mode(raw_args)
     if len(args) == 4 and not re.fullmatch(r"\d{1,2}(:\d{2}){0,2}h?", args[2]):
         raise ParseError(f"Falta la hora de fin. Ejemplo: /video {args[0]} {args[1]} {args[2]} "
                          f"{args[3]} HH:MM")
@@ -503,7 +528,8 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if audio is not None and audio >= 0 and audio not in chans:
             raise ParseError(f"El audio debe ser de una de las cámaras pedidas "
                              f"({', '.join(str(c + 1) for c in chans)}).")
-        await _video_together(msg, v, chans, day, start, stop, when, fast, audio, uid)
+        await _video_together(msg, v, chans, day, start, stop, when, fast, audio, uid,
+                              level or "normal")
         return
     async def one(chn: int) -> None:
         title = f"🎥 {v.plate} {v.channel_label(chn)} · {day:%d/%m} {fmt_hms(start)}–{fmt_hms(stop)}"
@@ -512,7 +538,7 @@ async def cmd_video(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         stats: dict = {}
         try:
             out = await _clip_fn()(v, chn, day, start, stop, tracker.cam(chn, v.channel_label(chn)),
-                                  stats, fast)
+                                  stats, fast, level=level)
         except (CMSV6Error, video.FFmpegError) as e:
             tracker.stop()
             await status.edit_text(f"⚠️ {v.plate} {v.channel_label(chn)}: {e}")
@@ -578,7 +604,8 @@ async def on_audio_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
                           start: int, stop: int, when: str, fast: bool = False,
-                          audio: int | None = None, uid: int | None = None) -> None:
+                          audio: int | None = None, uid: int | None = None,
+                          level: str = "normal") -> None:
     title = f"🎥 {v.plate} · cámaras {', '.join(str(c + 1) for c in chans)} juntas · {when}"
     status = await msg.reply_text(f"{title}\n{_bar(0)} 0% · en cola…")
     tracker = Tracker(status, title)
@@ -604,7 +631,8 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
     if not clips:
         await status.edit_text("⚠️ No se pudo obtener ninguna cámara.\n" + "\n".join(failed))
         return
-    await _edit(status, f"{title}\n{_bar(97)} 97% · 🧩 armando el mosaico…")
+    await _edit(status, f"{title}\n{_bar(97)} 97% · 🧩 armando el mosaico "
+                        f"(compresión {LEVEL_NAMES[level]})…")
     out = links.files_dir() / _name(v, -1, day, start, stop, ".mp4", "camaras" + "-".join(
         str(c + 1) for c in ok))
     if choice_fut is not None:
@@ -628,7 +656,8 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
                 break
     try:
         async with cpu:
-            await video.mosaic(clips, out, audio_from=audio_idx if audio_idx is not None else -1)
+            await video.mosaic(clips, out, audio_from=audio_idx if audio_idx is not None else -1,
+                               level=level)
     finally:
         for c in clips:
             c.unlink(missing_ok=True)
@@ -640,7 +669,8 @@ async def _video_together(msg: Message, v: Vehicle, chans: list[int], day: date,
     else:
         sound = "🔇 las grabaciones no traen audio"
     caption = (f"🎥 {v.plate} · cámaras {', '.join(str(c + 1) for c in ok)} juntas · {when}"
-               f"\n{sound}\n⏱ {_mmss(time.monotonic() - t0)}")
+               f"\n{sound} · 🗜️ compresión {LEVEL_NAMES[level]}"
+               f"\n⏱ {_mmss(time.monotonic() - t0)}")
     if failed:
         caption += "\n⚠️ Sin video: " + "; ".join(failed)
     await deliver(msg, status, out, caption)
@@ -997,7 +1027,7 @@ class CamStatus:
 
 async def make_clip(v: Vehicle, chn: int, day: date, start: int, stop: int,
                     status, stats: dict | None = None, fast: bool = False,
-                    intermediate: bool = False) -> Path:
+                    intermediate: bool = False, level: str | None = None) -> Path:
     """Arma el clip de una cámara. En stats deja cuánto tardó cada etapa (para el mensaje).
 
     Las partes (archivos de grabación) se piden todas a la vez al bus y se comprimen a
@@ -1155,7 +1185,7 @@ async def fetch_ftp(v: Vehicle, chn: int, day: date, start: int, stop: int, stat
 
 async def make_clip_ftp(v: Vehicle, chn: int, day: date, start: int, stop: int, status,
                         stats: dict | None = None, fast: bool = False,
-                        intermediate: bool = False) -> Path:
+                        intermediate: bool = False, level: str | None = None) -> Path:
     """Solo FTP: el bus sube los minutos pedidos al FTP de CMSV7, se descarga el AVI y se
     entrega (sin recomprimir si ya es H.264). Sin búsquedas ni otros métodos."""
     stats = stats if stats is not None else {}
@@ -1177,7 +1207,11 @@ async def make_clip_ftp(v: Vehicle, chn: int, day: date, start: int, stop: int, 
     async with cpu:
         t2 = time.monotonic()
         done = False
-        if config.ftp_remux and not intermediate:
+        if level and not intermediate:
+            await _edit(status, f"🗜️ Comprimiendo ({LEVEL_NAMES[level]})…", 93, 30)
+            await video.compress_level(raw, out, stop - start, level)
+            done = True
+        if not done and config.ftp_remux and not intermediate:
             await _edit(status, "⚡ Preparando el video para Telegram (sin recomprimir)…", 96, 3)
             done = await video.remux(raw, out, stop - start)
         if not done:
